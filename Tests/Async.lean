@@ -312,6 +312,29 @@ def mmaAfterCommit (f : Failures) : Failures := Id.run do
   | .error e => f := check f false s!"mma after commit: {e}"
   return f
 
+/-- A wgmma group whose completion is known but later than a next commit stays pending to
+`WARPGROUP.DEPBAR` until then: `wait_group 1` after the second commit waits for the first group's
+writeback (cycle 1000), and at 1000 only the second is pending. -/
+def wgmmaGroupKnownLater (f : Failures) : Failures := Id.run do
+  let mut f := f
+  let key := (0, 0, NV.Async.Group.wgmma.index)
+  let agent : NV.Core.AsyncUnit.Agent :=
+    { origin := { sm := 0, smsp := 0, slot := 0, cta := 0 }, body := .mma default, wb := fun _ w => w,
+      group := some .wgmma }
+  let first : NV.Core.AsyncUnit.GroupRec :=
+    { sm := 0, slot := 0, kind := .wgmma, bar := none, remaining := 0, doneAt := some 1000, released := true }
+  let u := NV.Core.AsyncUnit.init 1 4
+  let u := { u with agents := #[agent], groups := #[first], open_ := ({} : Std.HashMap _ _).insert key #[0],
+                    wgmma := ({} : Std.HashMap _ _).insert (0, 0) #[0],
+                    lastGroup := ({} : Std.HashMap _ _).insert key 0,
+                    groupCount := ({} : Std.HashMap _ _).insert key 1 }
+  let (u, _, _) := NV.Core.AsyncUnit.commit u 200 0 0 .wgmma none
+  f := check f (NV.Core.AsyncUnit.wgmmaPending u 0 0 200 == #[some 1000, none])
+    s!"wgmma groups pending at 200: {repr (NV.Core.AsyncUnit.wgmmaPending u 0 0 200)}"
+  f := check f (NV.Core.AsyncUnit.wgmmaPending u 0 0 1000 == #[none])
+    s!"wgmma groups pending at 1000: {repr (NV.Core.AsyncUnit.wgmmaPending u 0 0 1000)}"
+  return f
+
 /-- A pseudo-random word. -/
 def rword (seed x : Nat) : UInt32 :=
   let h := (x * 2654435761 + seed * 40503 + 12345) % 2 ^ 32
@@ -380,7 +403,8 @@ def tmemQuarters (f : Failures) : Failures := Id.run do
 
 def main : IO UInt32 := do
   let f := ({} : Failures) |> swizzles |> descs |> fragments |> mbarriers |> tma |> tmaNarrow
-    |> fastWgmma |> tmemQuarters |> allocClaims |> mmaAfterCommit |> tmaPairSignals |> tmaPairInstruction
+    |> fastWgmma |> tmemQuarters |> allocClaims |> mmaAfterCommit |> wgmmaGroupKnownLater |> tmaPairSignals
+    |> tmaPairInstruction
   for m in f.msgs do IO.eprintln m
   IO.println s!"async-tests: {f.n} failures"
   return if f.n == 0 then 0 else 1

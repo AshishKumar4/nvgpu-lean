@@ -890,7 +890,7 @@ private def pass (kit : Kit) (focus : Nat) (stop : Nat) (st : St) :
         mem := m'; memWbs := mw'; c := c'
         sm := { sm with slots := sm.slots.set! d.slot s.settle }
     | .commit g bar onRead =>
-      let (u, released, done) := AsyncUnit.commit asyncU d.sm d.slot g bar onRead
+      let (u, released, done) := AsyncUnit.commit asyncU t d.sm d.slot g bar onRead
       asyncU := u
       mem := mem.raceAgentsDone d.sm d.slot done
       if let some b := bar then
@@ -1340,7 +1340,7 @@ private def pass (kit : Kit) (focus : Nat) (stop : Nat) (st : St) :
           wbs := wbs.push s.lastMem { sm := si, slot := pick, ev := .commit g bar onRead }
           if let some b := bar then commitBar := some (b, pendingAt)
         else
-          let (u, released, done) := AsyncUnit.commit asyncU si pick g bar onRead
+          let (u, released, done) := AsyncUnit.commit asyncU t si pick g bar onRead
           asyncU := u
           mem := mem.raceAgentsDone si pick done
           if let some b := bar then commitBar := some (b, match released with | some r => max (t + 1) r | none => pendingAt)

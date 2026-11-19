@@ -601,13 +601,13 @@ def startAll (p : Params) (st : State) (mem : MemSys) (t : Nat) (as : Array Nat)
   return (st, mem, outs)
 
 /-- Close warp `(sm, slot)`'s open operations of kind `g` into a group, whose completion (with
-`onRead`, its operations' having read their sources) releases a pending entry of `bar`. Returns
+`onRead`, its operations' having read their sources) releases a pending entry of `bar`, at `t`. Returns
 when the entry is released if that is known now (the group is already complete, or read), or
 `none` when the group's completion will release it; and, released now, the operations already
 complete, whose accesses the issuer acquires (the race check: `MemSys.raceAgentsDone`). A pending
 group keeps its completed operations among its `ops` (not its `remaining`), so its completion
 acquires them. -/
-def commit (st : State) (sm slot : Nat) (g : Group) (bar : Option (Fin 6)) (onRead := false) :
+def commit (st : State) (t sm slot : Nat) (g : Group) (bar : Option (Fin 6)) (onRead := false) :
     State × Option Nat × Array Nat :=
   let key := (sm, slot, g.index)
   let all := st.open_.getD key #[]
@@ -631,7 +631,11 @@ def commit (st : State) (sm slot : Nat) (g : Group) (bar : Option (Fin 6)) (onRe
     let st := match prev with
       | some p => { st with groups := st.groups.modify p ({ · with next := some gi }) }
       | none => st
-    let live := (st.wgmma.getD (sm, slot) #[]).filter (st.groups[·]!.doneAt.isNone)
+    -- The warp's wgmma groups not complete by `t`: one whose completion is known but later is
+    -- still pending to `WARPGROUP.DEPBAR` (`wgmmaPending`) until then.
+    let live := (st.wgmma.getD (sm, slot) #[]).filter fun gi => match st.groups[gi]!.doneAt with
+      | some d => d > t
+      | none => true
     let st := if g == .wgmma then { st with wgmma := st.wgmma.insert (sm, slot) (live.push gi) } else st
     (st, none, #[])
 
@@ -716,7 +720,7 @@ def start (p : Params) (st : State) (mem : MemSys) (t : Nat) (o : Origin) (op : 
   else st := { st with waiting := st.waiting.push a }
   if let .mma m := op then
     if m.commit then
-      let (st', _, done) := commit st o.sm o.slot .wgmma none
+      let (st', _, done) := commit st t o.sm o.slot .wgmma none
       st := st'; mem := mem.raceAgentsDone o.sm o.slot done
   return (st, mem, outs)
 
