@@ -72,9 +72,9 @@ The role column says who reads a fact (`NV/Core/Roles.lean`): only `engine` fact
 | `FFMA` | fmalite, every 1, latency 4 | documented | engine | `cuda-guide-12.6` §5.4.1 Table 4: 128 results per clock per SM |  |
 | `FADD` | fmalite, every 1, latency 4 | documented | engine | `cuda-guide-12.6` §5.4.1 Table 4: 128 results per clock per SM |  |
 | `FMUL` | fmalite, every 1, latency 4 | documented | engine | `cuda-guide-12.6` §5.4.1 Table 4: 128 results per clock per SM |  |
-| `IMAD.HI` | fmaheavy, every 4, latency 2 | inferred | engine | `fixtures`  |  |
-| `IMAD.WIDE` | fmaheavy, every 4, latency 2, reads its sources at 2 | inferred | engine | `analogy`  |  |
-| `IMAD` | fmaheavy, every 2, latency 2 | inferred | engine | `cuda-guide-12.6` §5.4.1 Table 4: 64 results per clock per SM |  |
+| `IMAD.HI` | fmaheavy, every 4, latency 3 | inferred | engine | `fixtures`  |  |
+| `IMAD.WIDE` | fmaheavy, every 4, latency 3, reads its sources at 2 | inferred | engine | `analogy`  |  |
+| `IMAD` | fmaheavy, every 2, latency 3 | inferred | engine | `cuda-guide-12.6` §5.4.1 Table 4: 64 results per clock per SM |  |
 | `VIADD` | fmaheavy, every 2, latency 4 | inferred (H200) | engine | `meas-h200`  |  |
 | `IADD3` | alu, every 2, latency 4 | documented | engine | `cuda-guide-12.6` §5.4.1 Table 4: 64 results per clock per SM |  |
 | `LOP3` | alu, every 2, latency 4 | documented | engine | `cuda-guide-12.6` §5.4.1 Table 4: 64 results per clock per SM |  |
@@ -83,9 +83,9 @@ The role column says who reads a fact (`NV/Core/Roles.lean`): only `engine` fact
 | `LEA` | alu, every 2, latency 4 | encoded | engine | `fixtures`  |  |
 | `ISETP` | alu, every 2, latency 4 | documented | engine | `cuda-guide-12.6` §5.4.1 Table 4: 64 results per clock per SM |  |
 | `FMNMX` | alu, every 2, latency 4 | documented | engine | `cuda-guide-12.6` §5.4.1 Table 4: 64 results per clock per SM |  |
-| `MOV` | alu, every 2, latency 3 | inferred | engine | `fixtures`  |  |
+| `MOV` | alu, every 2, latency 4 | encoded | engine | `fixtures`  |  |
 | `F2FP` | alu, every 2, latency 4 | measured (H200) | engine | `meas-h200`  |  |
-| `HFMA2.MMA` | tensor, every 2, latency 5 | inferred | engine | `fixtures`  |  |
+| `HFMA2.MMA` | tensor, every 2, latency 10 | encoded | engine | `fixtures`  |  |
 | `HFMA2` | fp16, every 2, latency 5 | encoded | engine | `fixtures`  |  |
 | `HMUL2` | fp16, every 2, latency 5 | encoded | engine | `fixtures`  |  |
 | `HADD2` | fp16, every 2, latency 5 | encoded | engine | `fixtures`  |  |
@@ -119,7 +119,7 @@ The role column says who reads a fact (`NV/Core/Roles.lean`): only `engine` fact
 | `ULOP3` | uniform, every 2, latency 4 | inferred (H200) | engine | `meas-h200`  |  |
 | `USHF` | uniform, every 2, latency 4 | inferred (H200) | engine | `meas-h200`  |  |
 | `ULEA` | uniform, every 2, latency 4 | encoded | engine | `fixtures`  |  |
-| `UMOV` | uniform, every 2, latency 1 | inferred | engine | `fixtures`  |  |
+| `UMOV` | uniform, every 2, latency 2 | encoded | engine | `fixtures`  |  |
 | `UISETP` | uniform, every 2, latency 4 | encoded | engine | `fixtures`  |  |
 | `UPRMT` | uniform, every 2, latency 4 | inferred (H200) | engine | `meas-h200`  |  |
 | `ULDC` | uniform, every 1, latency 2 | encoded | engine | `fixtures`  |  |
@@ -154,7 +154,7 @@ The role column says who reads a fact (`NV/Core/Roles.lean`): only `engine` fact
 | `VOTE` | alu, every 2, latency 4 | documented | engine | `cuda-guide-12.6` §5.4.1 Table 4: 64 results per clock per SM |  |
 | `VOTEU` | uniform, every 2, latency 1 | inferred | engine | `cuda-guide-12.6` §5.4.1 Table 4: 64 results per clock per SM |  |
 | `ELECT` | uniform, every 2, latency 2 | inferred | engine | `fixtures`  |  |
-| `R2UR` | uniform, every 2, latency 6 | inferred | engine | `fixtures`  |  |
+| `R2UR` | uniform, every 2, latency 8 | encoded | engine | `fixtures`  |  |
 | `UTMALDG` | uniform, every 1 | inferred | engine | `analogy`  |  |
 | `UTMASTG` | uniform, every 1 | inferred | engine | `analogy`  |  |
 | `UBLKCP` | uniform, every 1 | inferred | engine | `analogy`  |  |
