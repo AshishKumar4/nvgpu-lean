@@ -1,0 +1,47 @@
+// Packed binary16 and bfloat16 pairs; compared word by word between the PTX
+// interpreter and the SASS simulator (Tests/SassDiff.lean).
+// in[3t..3t+2] = a, b, c; out[8t + k]:
+//   0 add.rn.f16x2  1 mul.rn.f16x2  2 fma.rn.f16x2  3 add.rn.bf16x2  4 fma.rn.bf16x2
+//   5 cvt.f32.f16 of a's low half  6 min.f16x2  7 ex2.approx.f16x2
+.version 9.0
+.target sm_90a
+.address_size 64
+
+.visible .entry packed(.param .u64 out, .param .u64 in)
+{
+  .reg .b32 a, b, c, r, t;
+  .reg .b16 h;
+  .reg .f32 f;
+  .reg .b64 o, x, rd;
+  ld.param.u64 o, [out];
+  ld.param.u64 x, [in];
+  cvta.to.global.u64 o, o;
+  cvta.to.global.u64 x, x;
+  mov.u32 t, %tid.x;
+  mul.wide.u32 rd, t, 12;
+  add.s64 x, x, rd;
+  ld.global.b32 a, [x];
+  ld.global.b32 b, [x+4];
+  ld.global.b32 c, [x+8];
+  mul.wide.u32 rd, t, 32;
+  add.s64 o, o, rd;
+  add.rn.f16x2 r, a, b;
+  st.global.b32 [o], r;
+  mul.rn.f16x2 r, a, b;
+  st.global.b32 [o+4], r;
+  fma.rn.f16x2 r, a, b, c;
+  st.global.b32 [o+8], r;
+  add.rn.bf16x2 r, a, b;
+  st.global.b32 [o+12], r;
+  fma.rn.bf16x2 r, a, b, c;
+  st.global.b32 [o+16], r;
+  mov.b32 {h, _}, a;
+  cvt.f32.f16 f, h;
+  st.global.f32 [o+20], f;
+  min.f16x2 r, a, b;
+  st.global.b32 [o+24], r;
+  ex2.approx.f16x2 r, a;
+  st.global.b32 [o+28], r;
+  ret;
+}
+

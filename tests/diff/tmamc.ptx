@@ -1,0 +1,118 @@
+// A TMA load multicast to both CTAs of a cluster of two, as CUTLASS's cluster GEMMs load A,
+// compared between the PTX interpreter and the SASS simulator (Tests/SassDiff.lean). The tensor
+// is 16 x 16 f32 (buffer 1, map parameter 2); CTA c loads rows 8c..8c+7 (one 16 x 8 box) into
+// both CTAs' tiles at offset 512c, each CTA's mbarrier expecting both halves; then thread t of
+// CTA c writes its tile's words t, t + 32, ..., to out[256c + ...].
+.version 9.0
+.target sm_90a
+.address_size 64
+
+.visible .entry tmamc(.param .u64 out, .param .u64 in, .param .align 64 .b8 map[128])
+{
+  .shared .align 8 .b64 bar;
+  .shared .align 128 .b32 tile[256];
+  .reg .pred p, q;
+  .reg .b16 mask;
+  .reg .b32 t, c, ma, ta, y, o, x, k;
+  .reg .b64 d, rd, ob, mp, st;
+  ld.param.u64 ob, [out];
+  cvta.to.global.u64 ob, ob;
+  mov.u64 mp, map;
+  cvta.param.u64 mp, mp;
+  mov.u32 t, %tid.x;
+  mov.u32 c, %cluster_ctarank;
+  mov.u32 ma, bar;
+  setp.eq.u32 p, t, 0;
+  @p mbarrier.init.shared::cta.b64 [ma], 1;
+  @p mbarrier.arrive.expect_tx.shared::cta.b64 st, [ma], 1024;
+  fence.mbarrier_init.release.cluster;
+  barrier.cluster.arrive;
+  barrier.cluster.wait;
+  mov.u32 ta, tile;
+  shl.b32 o, c, 9;
+  add.u32 ta, ta, o;
+  shl.b32 y, c, 3;
+  mov.u16 mask, 3;
+  @p cp.async.bulk.tensor.2d.shared::cluster.global.mbarrier::complete_tx::bytes.multicast::cluster [ta], [mp, {0, y}], [ma], mask;
+wait:
+  mbarrier.try_wait.parity.acquire.cluster.shared::cta.b64 q, [ma], 0;
+  @!q bra wait;
+  mov.u32 k, 0;
+loop:
+  shl.b32 o, k, 5;
+  add.u32 o, o, t;
+  shl.b32 o, o, 2;
+  mov.u32 ta, tile;
+  add.u32 ta, ta, o;
+  ld.shared.u32 x, [ta];
+  shl.b32 o, c, 8;
+  shl.b32 y, k, 5;
+  add.u32 o, o, y;
+  add.u32 o, o, t;
+  mul.wide.u32 d, o, 4;
+  add.s64 rd, ob, d;
+  st.global.u32 [rd], x;
+  add.u32 k, k, 1;
+  setp.lt.u32 q, k, 8;
+  @q bra loop;
+  barrier.cluster.arrive;
+  barrier.cluster.wait;
+  ret;
+}
+
+// The same without multicast: each CTA loads both halves itself.
+.visible .entry tmaplain(.param .u64 out, .param .u64 in, .param .align 64 .b8 map[128])
+{
+  .shared .align 8 .b64 bar;
+  .shared .align 128 .b32 tile[256];
+  .reg .pred p, q;
+  .reg .b16 mask;
+  .reg .b32 t, c, ma, ta, y, o, x, k;
+  .reg .b64 d, rd, ob, mp, st;
+  ld.param.u64 ob, [out];
+  cvta.to.global.u64 ob, ob;
+  mov.u64 mp, map;
+  cvta.param.u64 mp, mp;
+  mov.u32 t, %tid.x;
+  mov.u32 c, %cluster_ctarank;
+  mov.u32 ma, bar;
+  setp.eq.u32 p, t, 0;
+  @p mbarrier.init.shared::cta.b64 [ma], 1;
+  @p mbarrier.arrive.expect_tx.shared::cta.b64 st, [ma], 1024;
+  fence.mbarrier_init.release.cluster;
+  barrier.cluster.arrive;
+  barrier.cluster.wait;
+  mov.u32 ta, tile;
+  shl.b32 o, c, 9;
+  add.u32 ta, ta, o;
+  shl.b32 y, c, 3;
+  mov.u16 mask, 3;
+  mov.u32 ta, tile;
+  @p cp.async.bulk.tensor.2d.shared::cluster.global.mbarrier::complete_tx::bytes [ta], [mp, {0, 0}], [ma];
+  add.u32 ta, ta, 512;
+  @p cp.async.bulk.tensor.2d.shared::cluster.global.mbarrier::complete_tx::bytes [ta], [mp, {0, 8}], [ma];
+wait:
+  mbarrier.try_wait.parity.acquire.cluster.shared::cta.b64 q, [ma], 0;
+  @!q bra wait;
+  mov.u32 k, 0;
+loop:
+  shl.b32 o, k, 5;
+  add.u32 o, o, t;
+  shl.b32 o, o, 2;
+  mov.u32 ta, tile;
+  add.u32 ta, ta, o;
+  ld.shared.u32 x, [ta];
+  shl.b32 o, c, 8;
+  shl.b32 y, k, 5;
+  add.u32 o, o, y;
+  add.u32 o, o, t;
+  mul.wide.u32 d, o, 4;
+  add.s64 rd, ob, d;
+  st.global.u32 [rd], x;
+  add.u32 k, k, 1;
+  setp.lt.u32 q, k, 8;
+  @q bra loop;
+  barrier.cluster.arrive;
+  barrier.cluster.wait;
+  ret;
+}

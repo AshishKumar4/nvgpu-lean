@@ -1,0 +1,114 @@
+// Texture and surface instructions on the launch's objects (NV.Tex), compared word by word between
+// the PTX interpreter and the SASS simulator (Tests/SassDiff.lean): the object is parameter tex
+// (handle 1) over buffer in.
+.version 9.0
+.target sm_90a
+.address_size 64
+
+// Thread t: x = (t % 8) * 1.375 - 2.25, y = (t / 8) * 0.8125 - 1.0 (texel units; normalized
+// textures divide by the size); four results per fetch.
+.visible .entry tex2d(.param .u64 out, .param .u64 in, .param .u64 tex)
+{
+  .reg .b32 t, a, b, r0, r1, r2, r3;
+  .reg .f32 x, y, fa, fb;
+  .reg .b64 o, h, d;
+  ld.param.u64 o, [out];
+  ld.param.u64 h, [tex];
+  cvta.to.global.u64 o, o;
+  mov.u32 t, %tid.x;
+  rem.u32 a, t, 8;
+  div.u32 b, t, 8;
+  cvt.rn.f32.u32 fa, a;
+  cvt.rn.f32.u32 fb, b;
+  fma.rn.f32 x, fa, 0f3FB00000, 0fC0100000;
+  fma.rn.f32 y, fb, 0f3F500000, 0fBF800000;
+  tex.2d.v4.f32.f32 {r0, r1, r2, r3}, [h, {x, y}];
+  mul.wide.u32 d, t, 16;
+  add.s64 o, o, d;
+  st.global.v4.b32 [o], {r0, r1, r2, r3};
+  ret;
+}
+
+.visible .entry tex1di(.param .u64 out, .param .u64 in, .param .u64 tex)
+{
+  .reg .b32 t, c, r0, r1, r2, r3;
+  .reg .b64 o, h, d;
+  ld.param.u64 o, [out];
+  ld.param.u64 h, [tex];
+  cvta.to.global.u64 o, o;
+  mov.u32 t, %tid.x;
+  sub.s32 c, t, 3;
+  tex.1d.v4.u32.s32 {r0, r1, r2, r3}, [h, {c}];
+  mul.wide.u32 d, t, 16;
+  add.s64 o, o, d;
+  st.global.v4.b32 [o], {r0, r1, r2, r3};
+  ret;
+}
+
+.visible .entry gather(.param .u64 out, .param .u64 in, .param .u64 tex)
+{
+  .reg .b32 t, a, b, r0, r1, r2, r3;
+  .reg .f32 x, y, fa, fb;
+  .reg .b64 o, h, d;
+  ld.param.u64 o, [out];
+  ld.param.u64 h, [tex];
+  cvta.to.global.u64 o, o;
+  mov.u32 t, %tid.x;
+  rem.u32 a, t, 8;
+  div.u32 b, t, 8;
+  cvt.rn.f32.u32 fa, a;
+  cvt.rn.f32.u32 fb, b;
+  fma.rn.f32 x, fa, 0f3FB00000, 0fC0100000;
+  fma.rn.f32 y, fb, 0f3F500000, 0fBF800000;
+  tld4.g.2d.v4.f32.f32 {r0, r1, r2, r3}, [h, {x, y}];
+  mul.wide.u32 d, t, 16;
+  add.s64 o, o, d;
+  st.global.v4.b32 [o], {r0, r1, r2, r3};
+  ret;
+}
+
+.visible .entry query(.param .u64 out, .param .u64 in, .param .u64 tex)
+{
+  .reg .b32 w, hh, n, f, m;
+  .reg .b64 o, h;
+  ld.param.u64 o, [out];
+  ld.param.u64 h, [tex];
+  cvta.to.global.u64 o, o;
+  // The sampler queries (normalized_coords, filter_mode, addr_mode_N) are not modelled: the
+  // dimensions only.
+  txq.width.b32 w, [h];
+  txq.height.b32 hh, [h];
+  txq.depth.b32 n, [h];
+  mov.u32 f, 0;
+  mov.u32 m, 0;
+  st.global.v4.b32 [o], {w, hh, n, f};
+  st.global.b32 [o+16], m;
+  ret;
+}
+
+// Surface: thread t loads the 8-byte texel at byte (8 * (t % 16) - 16, t / 16 - 1) with .zero,
+// stores it back, swapped, at (8 * (t % 16), t / 16) with .trap, and adds 1 to word 0 of row 2.
+.visible .entry surf(.param .u64 out, .param .u64 in, .param .u64 surf)
+{
+  .reg .b32 t, x, y, x2, y2, v0, v1;
+  .reg .b64 o, h, d;
+  ld.param.u64 o, [out];
+  ld.param.u64 h, [surf];
+  cvta.to.global.u64 o, o;
+  mov.u32 t, %tid.x;
+  rem.u32 x2, t, 16;
+  shl.b32 x2, x2, 3;
+  div.u32 y2, t, 16;
+  sub.s32 x, x2, 16;
+  sub.s32 y, y2, 1;
+  suld.b.2d.v2.b32.zero {v0, v1}, [h, {x, y}];
+  mul.wide.u32 d, t, 8;
+  add.s64 d, o, d;
+  st.global.v2.b32 [d], {v0, v1};
+  bar.sync 0;
+  sust.b.2d.v2.b32.trap [h, {x2, y2}], {v1, v0};
+  bar.sync 0;
+  sured.b.add.2d.u32.trap [h, {0, 2}], 1;
+  ret;
+}
+

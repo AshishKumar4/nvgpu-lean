@@ -1,0 +1,19 @@
+// Observation through a third thread's relaxed RMW: the release sequence of §8.9.2.
+.global data;
+.global flag;
+
+d0.b0.t0 {
+  st.weak [data], 1;
+  st.release.gpu [flag], 1;
+}
+
+d0.b1.t0 {
+  atom.add.relaxed.gpu r2, [flag], 1;
+}
+
+d0.b2.t0 {
+  ld.acquire.gpu r0, [flag];
+  ld.weak r1, [data];
+}
+
+assert (r0 != 2 || r2 != 1 || r1 == 1) as mp_via_rmw;

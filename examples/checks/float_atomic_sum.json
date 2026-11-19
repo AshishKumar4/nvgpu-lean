@@ -1,0 +1,3 @@
+{ "code": "checks.cu", "function": "float_atomic_sum", "grid": [4], "block": [32],
+  "buffers": [ { "name": "out", "bytes": 4 } ],
+  "params": [ { "ordinal": 0, "ptr": "out" } ] }

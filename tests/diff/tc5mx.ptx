@@ -1,0 +1,161 @@
+// Block-scaled and FP6/FP4 tcgen05.mma, compared between the PTX interpreter and the SASS
+// simulator (Tests/SassDiff.lean), sm_100a. The 128 threads copy in[0..1024) into A's 4 KB of
+// shared memory (128 rows of 32 bytes, K-major without swizzling: LBO 128, SBO 256) and
+// in[1024..1536) into B's 2 KB (64 columns), and fill columns 0-383 of their lane of tensor memory
+// from in[1536 + 384 t ..]: scale factors in 320-327 made UE8M0 bytes of 123-130, in 328-335 UE4M3
+// bytes of 0x30-0x37. Thread 0 then issues, in order, with N = 64 and M = 128:
+//   mxf8f6f4.block_scale.scale_vec::1X, E4M3 x E4M3, into D at column 0, factors at 320 and 324;
+//   f8f6f4, E2M1 x E3M2, into 64;
+//   mxf4nvf4.block_scale.scale_vec::4X, UE4M3 factors at 328 and 332, into 128;
+//   mxf4.block_scale.scale_vec::2X, factor IDs 2 and 2, into 192;
+//   mxf8f6f4.block_scale.scale_vec::1X, A (E2M3) from tensor memory at column 336, B E4M3, factor
+//   IDs 1 and 3, into 256;
+// commits them to an mbarrier, and each thread stores its lane's columns 0-383 to out[384 t ..].
+.version 9.0
+.target sm_100a
+.address_size 64
+
+.visible .entry tc5mx(.param .u64 out, .param .u64 in)
+{
+  .shared .align 1024 .b8 sa[4096];
+  .shared .align 1024 .b8 sb[2048];
+  .shared .align 8 .b64 bar;
+  .shared .align 4 .b32 taddr;
+  .reg .pred p, w0, q, en, sf8, sf4;
+  .reg .b32 t, wp, k, v, a, b, ma, mt, d, row, col, at, s1, s2, idesc, x<64>;
+  .reg .b64 ob, ib, rd, e, da, db;
+  ld.param.u64 ob, [out];
+  ld.param.u64 ib, [in];
+  cvta.to.global.u64 ob, ob;
+  cvta.to.global.u64 ib, ib;
+  mov.u32 t, %tid.x;
+  shr.u32 wp, t, 5;
+  mov.u32 a, sa;
+  mov.u32 b, sb;
+  mov.u32 ma, bar;
+  mov.u32 mt, taddr;
+  // Shared memory: thread t copies words t, t + 128, ... of in[0..1536) (A, then B).
+  mov.u32 k, t;
+fill:
+  mul.wide.u32 e, k, 4;
+  add.s64 rd, ib, e;
+  ld.global.u32 v, [rd];
+  shl.b32 d, k, 2;
+  setp.ge.u32 q, k, 1024;
+  @q sub.u32 d, d, 4096;
+  @q add.u32 d, d, b;
+  @!q add.u32 d, d, a;
+  st.shared.u32 [d], v;
+  add.u32 k, k, 128;
+  setp.lt.u32 q, k, 1536;
+  @q bra fill;
+  setp.eq.u32 w0, wp, 0;
+  @w0 tcgen05.alloc.cta_group::1.sync.aligned.shared::cta.b32 [mt], 512;
+  @w0 tcgen05.relinquish_alloc_permit.cta_group::1.sync.aligned;
+  setp.eq.u32 p, t, 0;
+  @p mbarrier.init.shared::cta.b64 [ma], 1;
+  fence.proxy.async.shared::cta;
+  tcgen05.fence::before_thread_sync;
+  bar.sync 0;
+  tcgen05.fence::after_thread_sync;
+  ld.shared.u32 d, [mt];
+  shl.b32 row, wp, 21;
+  add.u32 row, row, d;
+  // Tensor memory: column k of the thread's lane from in[1536 + 384 t + k].
+  mov.u32 k, 0;
+init:
+  mad.lo.u32 v, t, 384, k;
+  add.u32 v, v, 1536;
+  mul.wide.u32 e, v, 4;
+  add.s64 rd, ib, e;
+  ld.global.u32 v, [rd];
+  setp.ge.u32 sf8, k, 320;
+  setp.lt.and.u32 sf8, k, 328, sf8;
+  setp.ge.u32 sf4, k, 328;
+  setp.lt.and.u32 sf4, k, 336, sf4;
+  and.b32 s1, v, 0x07070707;
+  @sf8 add.u32 v, s1, 0x7B7B7B7B;
+  @sf4 add.u32 v, s1, 0x30303030;
+  add.u32 col, row, k;
+  tcgen05.st.sync.aligned.32x32b.x1.b32 [col], {v};
+  add.u32 k, k, 1;
+  setp.lt.u32 q, k, 384;
+  @q bra init;
+  tcgen05.wait::st.sync.aligned;
+  tcgen05.fence::before_thread_sync;
+  bar.sync 0;
+  tcgen05.fence::after_thread_sync;
+  @!p bra waitd;
+  // Descriptors: start >> 4, LBO 128 >> 4 at bit 16, SBO 256 >> 4 at bit 32, version 1 at bit 46.
+  cvt.u64.u32 da, a;
+  shr.u64 da, da, 4;
+  or.b64 da, da, 0x0000401000080000;
+  cvt.u64.u32 db, b;
+  shr.u64 db, db, 4;
+  or.b64 db, db, 0x0000401000080000;
+  setp.ne.u32 en, 1, 0;
+  add.u32 s1, d, 320;
+  add.u32 s2, d, 324;
+  // UE8M0 (bit 23), N = 64 (8 << 17), M = 128 (1 << 27); E4M3 x E4M3.
+  mov.u32 idesc, 0x08900000;
+  tcgen05.mma.cta_group::1.kind::mxf8f6f4.block_scale.scale_vec::1X [d], da, db, idesc, [s1], [s2], en;
+  // F32 D (bit 4), E2M1 (5 << 7) x E3M2 (4 << 10), N = 64, M = 128 (8 << 24).
+  mov.u32 idesc, 0x08101290;
+  add.u32 col, d, 64;
+  tcgen05.mma.cta_group::1.kind::f8f6f4 [col], da, db, idesc, en;
+  // UE4M3 (0 at bit 23), E2M1 (1 << 7, 1 << 10), N = 64, M = 128.
+  mov.u32 idesc, 0x08100480;
+  add.u32 col, d, 128;
+  add.u32 at, d, 328;
+  add.u32 s2, d, 332;
+  tcgen05.mma.cta_group::1.kind::mxf4nvf4.block_scale.scale_vec::4X [col], da, db, idesc, [at], [s2], en;
+  // UE8M0, E2M1, factor IDs 2 (2 << 29, 2 << 4).
+  mov.u32 idesc, 0x489004A0;
+  add.u32 col, d, 192;
+  add.u32 s2, d, 324;
+  tcgen05.mma.cta_group::1.kind::mxf4.block_scale.scale_vec::2X [col], da, db, idesc, [s1], [s2], en;
+  // UE8M0, E2M3 (3 << 7) x E4M3, factor IDs 1 (1 << 29) and 3 (3 << 4), A from tensor memory.
+  mov.u32 idesc, 0x289001B0;
+  add.u32 col, d, 256;
+  add.u32 at, d, 336;
+  tcgen05.mma.cta_group::1.kind::mxf8f6f4.block_scale.scale_vec::1X [col], [at], db, idesc, [s1], [s2], en;
+  tcgen05.commit.cta_group::1.mbarrier::arrive::one.shared::cluster.b64 [ma];
+waitd:
+  mbarrier.try_wait.parity.shared::cta.b64 q, [ma], 0;
+  @!q bra waitd;
+  tcgen05.fence::after_thread_sync;
+  mul.wide.u32 e, t, 1536;
+  add.s64 rd, ob, e;
+  mov.u32 k, 0;
+dump:
+  add.u32 col, row, k;
+  tcgen05.ld.sync.aligned.32x32b.x64.b32 {x0, x1, x2, x3, x4, x5, x6, x7, x8, x9, x10, x11, x12, x13, x14, x15, x16, x17, x18, x19, x20, x21, x22, x23, x24, x25, x26, x27, x28, x29, x30, x31, x32, x33, x34, x35, x36, x37, x38, x39, x40, x41, x42, x43, x44, x45, x46, x47, x48, x49, x50, x51, x52, x53, x54, x55, x56, x57, x58, x59, x60, x61, x62, x63}, [col];
+  tcgen05.wait::ld.sync.aligned;
+  st.global.v4.b32 [rd+0], {x0, x1, x2, x3};
+  st.global.v4.b32 [rd+16], {x4, x5, x6, x7};
+  st.global.v4.b32 [rd+32], {x8, x9, x10, x11};
+  st.global.v4.b32 [rd+48], {x12, x13, x14, x15};
+  st.global.v4.b32 [rd+64], {x16, x17, x18, x19};
+  st.global.v4.b32 [rd+80], {x20, x21, x22, x23};
+  st.global.v4.b32 [rd+96], {x24, x25, x26, x27};
+  st.global.v4.b32 [rd+112], {x28, x29, x30, x31};
+  st.global.v4.b32 [rd+128], {x32, x33, x34, x35};
+  st.global.v4.b32 [rd+144], {x36, x37, x38, x39};
+  st.global.v4.b32 [rd+160], {x40, x41, x42, x43};
+  st.global.v4.b32 [rd+176], {x44, x45, x46, x47};
+  st.global.v4.b32 [rd+192], {x48, x49, x50, x51};
+  st.global.v4.b32 [rd+208], {x52, x53, x54, x55};
+  st.global.v4.b32 [rd+224], {x56, x57, x58, x59};
+  st.global.v4.b32 [rd+240], {x60, x61, x62, x63};
+  add.s64 rd, rd, 256;
+  add.u32 k, k, 64;
+  setp.lt.u32 q, k, 384;
+  @q bra dump;
+  tcgen05.fence::before_thread_sync;
+  bar.sync 0;
+  @!w0 bra done;
+  tcgen05.fence::after_thread_sync;
+  tcgen05.dealloc.cta_group::1.sync.aligned.b32 d, 512;
+done:
+  ret;
+}

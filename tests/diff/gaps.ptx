@@ -1,0 +1,84 @@
+// SASS forms the other tests do not reach (the opcode gaps of docs/sass-coverage.md), compared
+// between the PTX interpreter and the SASS simulator (Tests/SassDiff.lean). Thread t reads four
+// words of in[4t ...] and writes out[16t + k]:
+//   0     cvt.pack.sat.s8.s32.b32 (I2IP)          1     cvt.pack.sat.u8.s32.b32 into a third word
+//   2-3   cvt.rni.sat.{s8,u8}.f32 as bytes (F2I / F2IP)
+//   4     set.lt.u32.f16x2 (HSET2)                5     set.ge.ftz.f16x2.f16x2 (1.0 or 0 a half)
+//   6-8   isspacep.{global,shared,local} of a global pointer (QSPC)
+//   9-11  isspacep.{global,shared,local} of a shared pointer
+//   12    dp4a.u32.s32                            13    dp2a.hi.s32.u32
+//   14    cvt.rzi.sat.u16.f32 into the high half of a word (F2IP)
+//   15    the bulk prefetch's and discard's side effects: none (the input word)
+.version 9.0
+.target sm_90a
+.address_size 64
+
+.visible .entry gaps(.param .u64 out, .param .u64 in)
+{
+  .shared .align 16 .b32 sm[32];
+  .reg .pred p;
+  .reg .b16 h0, h1;
+  .reg .b32 t, a, b, c, d, r, s, sa;
+  .reg .f32 fa, fb;
+  .reg .b64 o, x, rd, gp, spp;
+  ld.param.u64 o, [out];
+  ld.param.u64 x, [in];
+  cvta.to.global.u64 o, o;
+  cvta.to.global.u64 x, x;
+  mov.u32 t, %tid.x;
+  mul.wide.u32 rd, t, 16;
+  add.s64 x, x, rd;
+  mul.wide.u32 rd, t, 64;
+  add.s64 o, o, rd;
+  ld.global.v4.b32 {a, b, c, d}, [x];
+  cvt.pack.sat.s8.s32.b32 r, a, b, c;
+  st.global.b32 [o], r;
+  cvt.pack.sat.u8.s32.b32 r, c, d, a;
+  st.global.b32 [o+4], r;
+  mov.b32 fa, a;
+  mov.b32 fb, b;
+  cvt.rni.sat.s8.f32 h0, fa;
+  cvt.rni.sat.u8.f32 h1, fb;
+  cvt.u32.u16 r, h0;
+  st.global.b32 [o+8], r;
+  cvt.u32.u16 r, h1;
+  st.global.b32 [o+12], r;
+  set.lt.u32.f16x2 r, a, b;
+  st.global.b32 [o+16], r;
+  set.ge.ftz.f16x2.f16x2 r, c, d;
+  st.global.b32 [o+20], r;
+  cvta.global.u64 gp, x;
+  isspacep.global p, gp;
+  selp.u32 r, 1, 0, p;
+  st.global.b32 [o+24], r;
+  isspacep.shared p, gp;
+  selp.u32 r, 1, 0, p;
+  st.global.b32 [o+28], r;
+  isspacep.local p, gp;
+  selp.u32 r, 1, 0, p;
+  st.global.b32 [o+32], r;
+  mov.u32 sa, sm;
+  cvt.u64.u32 spp, sa;
+  cvta.shared.u64 spp, spp;
+  isspacep.global p, spp;
+  selp.u32 r, 1, 0, p;
+  st.global.b32 [o+36], r;
+  isspacep.shared p, spp;
+  selp.u32 r, 1, 0, p;
+  st.global.b32 [o+40], r;
+  isspacep.local p, spp;
+  selp.u32 r, 1, 0, p;
+  st.global.b32 [o+44], r;
+  dp4a.u32.s32 r, a, b, c;
+  st.global.b32 [o+48], r;
+  dp2a.hi.s32.u32 r, c, d, a;
+  st.global.b32 [o+52], r;
+  mov.b32 fa, c;
+  cvt.rzi.sat.u16.f32 h0, fa;
+  mov.b32 r, {h1, h0};
+  st.global.b32 [o+56], r;
+  cp.async.bulk.prefetch.L2.global [x], 16;
+  discard.global.L2 [o+128], 128;
+  st.global.b32 [o+60], d;
+  ret;
+}

@@ -1,0 +1,31 @@
+// A kernel that steers a CUDA graph's conditional node, as XLA's command buffers do: thread `who`
+// sets the condition behind handle `h` to the word at `p[who]` through the device runtime's
+// cudaGraphSetConditional.
+.version 8.7
+.target sm_90a
+.address_size 64
+.extern .func cudaGraphSetConditional
+(
+	.param .b64 cudaGraphSetConditional_param_0,
+	.param .b32 cudaGraphSetConditional_param_1
+)
+;
+.visible .entry setc(.param .u64 h_, .param .u64 p_, .param .u32 who_)
+{
+  .reg .b64 h, p, o; .reg .b32 v, t, who; .reg .pred q;
+  ld.param.u64 h, [h_]; ld.param.u64 p, [p_]; ld.param.u32 who, [who_];
+  mov.u32 t, %tid.x;
+  setp.ne.u32 q, t, who;
+  @q bra done;
+  cvta.to.global.u64 p, p;
+  mul.wide.u32 o, t, 4;
+  add.s64 p, p, o;
+  ld.global.u32 v, [p];
+  {
+    .param .b64 a0; st.param.b64 [a0], h;
+    .param .b32 a1; st.param.b32 [a1], v;
+    call.uni cudaGraphSetConditional, (a0, a1);
+  }
+done:
+  ret;
+}

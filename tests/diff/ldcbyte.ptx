@@ -1,0 +1,29 @@
+// A byte table among the kernel's parameters read by a register index (ld.param.{u8,s8,u16,s16},
+// LDC.U8/S8/U16/S16 c[0x0][R+off]): compared between the PTX interpreter and the SASS simulator
+// (Tests/SassDiff.lean). out[4t + k]: 0 u8 at t, 1 s8 at t, 2 u16 at t & ~1, 3 s16 at t & ~1.
+.version 9.0
+.target sm_90a
+.address_size 64
+
+.visible .entry ldcbyte(.param .u64 out, .param .align 4 .b8 tbl[64])
+{
+  .reg .b32 t, u, s, h, hs;
+  .reg .b64 o, rd, p, q;
+  ld.param.u64 o, [out];
+  cvta.to.global.u64 o, o;
+  mov.u32 t, %tid.x;
+  mov.u64 p, tbl;
+  cvt.u64.u32 rd, t;
+  add.s64 q, p, rd;
+  ld.param.u8 u, [q];
+  ld.param.s8 s, [q];
+  and.b64 rd, rd, 0x3e;
+  add.s64 q, p, rd;
+  ld.param.u16 h, [q];
+  ld.param.s16 hs, [q];
+  cvt.u64.u32 rd, t;
+  shl.b64 rd, rd, 4;
+  add.s64 o, o, rd;
+  st.global.v4.b32 [o], {u, s, h, hs};
+  ret;
+}

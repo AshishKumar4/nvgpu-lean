@@ -1,0 +1,158 @@
+// WMMA (wmma.load/mma/store) on every multiplicand type and shape family, compared word by word
+// between the PTX interpreter and the SASS simulator (Tests/SassDiff.lean): kernel wmmaN loads
+// A, B, C from in (A, then B, then C, each in its load's layout), and stores D = A*B + C
+// column-major to out. The WMMA fragment layout: NV.PTX.Sem.Matrix.wfrag.
+.version 9.0
+.target sm_90a
+.address_size 64
+
+.visible .entry wmma0(.param .u64 out, .param .u64 in) {
+  .reg .b32 %a<8>, %b<8>;
+  .reg .b32 %c<8>, %d<8>;
+  .reg .b64 %o, %p;
+  ld.param.u64 %o, [out]; ld.param.u64 %p, [in];
+  cvta.to.global.u64 %o, %o; cvta.to.global.u64 %p, %p;
+  wmma.load.a.sync.aligned.row.m16n16k16.global.f16 {%a0, %a1, %a2, %a3, %a4, %a5, %a6, %a7}, [%p+0];
+  wmma.load.b.sync.aligned.col.m16n16k16.global.f16 {%b0, %b1, %b2, %b3, %b4, %b5, %b6, %b7}, [%p+512];
+  wmma.load.c.sync.aligned.row.m16n16k16.global.f32 {%c0, %c1, %c2, %c3, %c4, %c5, %c6, %c7}, [%p+1024];
+  wmma.mma.sync.aligned.row.col.m16n16k16.f32.f32 {%d0, %d1, %d2, %d3, %d4, %d5, %d6, %d7}, {%a0, %a1, %a2, %a3, %a4, %a5, %a6, %a7}, {%b0, %b1, %b2, %b3, %b4, %b5, %b6, %b7}, {%c0, %c1, %c2, %c3, %c4, %c5, %c6, %c7};
+  wmma.store.d.sync.aligned.col.m16n16k16.global.f32 [%o], {%d0, %d1, %d2, %d3, %d4, %d5, %d6, %d7}, 16;
+  ret;
+}
+
+.visible .entry wmma1(.param .u64 out, .param .u64 in) {
+  .reg .b32 %a<8>, %b<8>;
+  .reg .b32 %c<4>, %d<4>;
+  .reg .b64 %o, %p;
+  ld.param.u64 %o, [out]; ld.param.u64 %p, [in];
+  cvta.to.global.u64 %o, %o; cvta.to.global.u64 %p, %p;
+  wmma.load.a.sync.aligned.col.m16n16k16.global.f16 {%a0, %a1, %a2, %a3, %a4, %a5, %a6, %a7}, [%p+0];
+  wmma.load.b.sync.aligned.row.m16n16k16.global.f16 {%b0, %b1, %b2, %b3, %b4, %b5, %b6, %b7}, [%p+512];
+  wmma.load.c.sync.aligned.row.m16n16k16.global.f16 {%c0, %c1, %c2, %c3}, [%p+1024];
+  wmma.mma.sync.aligned.col.row.m16n16k16.f16.f16 {%d0, %d1, %d2, %d3}, {%a0, %a1, %a2, %a3, %a4, %a5, %a6, %a7}, {%b0, %b1, %b2, %b3, %b4, %b5, %b6, %b7}, {%c0, %c1, %c2, %c3};
+  wmma.store.d.sync.aligned.col.m16n16k16.global.f16 [%o], {%d0, %d1, %d2, %d3}, 16;
+  ret;
+}
+
+.visible .entry wmma2(.param .u64 out, .param .u64 in) {
+  .reg .b32 %a<8>, %b<8>;
+  .reg .b32 %c<8>, %d<8>;
+  .reg .b64 %o, %p;
+  ld.param.u64 %o, [out]; ld.param.u64 %p, [in];
+  cvta.to.global.u64 %o, %o; cvta.to.global.u64 %p, %p;
+  wmma.load.a.sync.aligned.row.m32n8k16.global.f16 {%a0, %a1, %a2, %a3, %a4, %a5, %a6, %a7}, [%p+0];
+  wmma.load.b.sync.aligned.row.m32n8k16.global.f16 {%b0, %b1, %b2, %b3, %b4, %b5, %b6, %b7}, [%p+1024];
+  wmma.load.c.sync.aligned.row.m32n8k16.global.f32 {%c0, %c1, %c2, %c3, %c4, %c5, %c6, %c7}, [%p+1280];
+  wmma.mma.sync.aligned.row.row.m32n8k16.f32.f32 {%d0, %d1, %d2, %d3, %d4, %d5, %d6, %d7}, {%a0, %a1, %a2, %a3, %a4, %a5, %a6, %a7}, {%b0, %b1, %b2, %b3, %b4, %b5, %b6, %b7}, {%c0, %c1, %c2, %c3, %c4, %c5, %c6, %c7};
+  wmma.store.d.sync.aligned.col.m32n8k16.global.f32 [%o], {%d0, %d1, %d2, %d3, %d4, %d5, %d6, %d7}, 32;
+  ret;
+}
+
+.visible .entry wmma3(.param .u64 out, .param .u64 in) {
+  .reg .b32 %a<8>, %b<8>;
+  .reg .b32 %c<8>, %d<8>;
+  .reg .b64 %o, %p;
+  ld.param.u64 %o, [out]; ld.param.u64 %p, [in];
+  cvta.to.global.u64 %o, %o; cvta.to.global.u64 %p, %p;
+  wmma.load.a.sync.aligned.col.m8n32k16.global.f16 {%a0, %a1, %a2, %a3, %a4, %a5, %a6, %a7}, [%p+0];
+  wmma.load.b.sync.aligned.col.m8n32k16.global.f16 {%b0, %b1, %b2, %b3, %b4, %b5, %b6, %b7}, [%p+256];
+  wmma.load.c.sync.aligned.row.m8n32k16.global.f32 {%c0, %c1, %c2, %c3, %c4, %c5, %c6, %c7}, [%p+1280];
+  wmma.mma.sync.aligned.col.col.m8n32k16.f32.f32 {%d0, %d1, %d2, %d3, %d4, %d5, %d6, %d7}, {%a0, %a1, %a2, %a3, %a4, %a5, %a6, %a7}, {%b0, %b1, %b2, %b3, %b4, %b5, %b6, %b7}, {%c0, %c1, %c2, %c3, %c4, %c5, %c6, %c7};
+  wmma.store.d.sync.aligned.col.m8n32k16.global.f32 [%o], {%d0, %d1, %d2, %d3, %d4, %d5, %d6, %d7}, 8;
+  ret;
+}
+
+.visible .entry wmma4(.param .u64 out, .param .u64 in) {
+  .reg .b32 %a<4>, %b<4>;
+  .reg .b32 %c<8>, %d<8>;
+  .reg .b64 %o, %p;
+  ld.param.u64 %o, [out]; ld.param.u64 %p, [in];
+  cvta.to.global.u64 %o, %o; cvta.to.global.u64 %p, %p;
+  wmma.load.a.sync.aligned.row.m16n16k16.global.bf16 {%a0, %a1, %a2, %a3}, [%p+0];
+  wmma.load.b.sync.aligned.col.m16n16k16.global.bf16 {%b0, %b1, %b2, %b3}, [%p+512];
+  wmma.load.c.sync.aligned.row.m16n16k16.global.f32 {%c0, %c1, %c2, %c3, %c4, %c5, %c6, %c7}, [%p+1024];
+  wmma.mma.sync.aligned.row.col.m16n16k16.f32.bf16.bf16.f32 {%d0, %d1, %d2, %d3, %d4, %d5, %d6, %d7}, {%a0, %a1, %a2, %a3}, {%b0, %b1, %b2, %b3}, {%c0, %c1, %c2, %c3, %c4, %c5, %c6, %c7};
+  wmma.store.d.sync.aligned.col.m16n16k16.global.f32 [%o], {%d0, %d1, %d2, %d3, %d4, %d5, %d6, %d7}, 16;
+  ret;
+}
+
+.visible .entry wmma5(.param .u64 out, .param .u64 in) {
+  .reg .b32 %a<4>, %b<4>;
+  .reg .b32 %c<8>, %d<8>;
+  .reg .b64 %o, %p;
+  ld.param.u64 %o, [out]; ld.param.u64 %p, [in];
+  cvta.to.global.u64 %o, %o; cvta.to.global.u64 %p, %p;
+  wmma.load.a.sync.aligned.row.m16n16k8.global.tf32 {%a0, %a1, %a2, %a3}, [%p+0];
+  wmma.load.b.sync.aligned.col.m16n16k8.global.tf32 {%b0, %b1, %b2, %b3}, [%p+512];
+  wmma.load.c.sync.aligned.row.m16n16k8.global.f32 {%c0, %c1, %c2, %c3, %c4, %c5, %c6, %c7}, [%p+1024];
+  wmma.mma.sync.aligned.row.col.m16n16k8.f32.tf32.tf32.f32 {%d0, %d1, %d2, %d3, %d4, %d5, %d6, %d7}, {%a0, %a1, %a2, %a3}, {%b0, %b1, %b2, %b3}, {%c0, %c1, %c2, %c3, %c4, %c5, %c6, %c7};
+  wmma.store.d.sync.aligned.col.m16n16k8.global.f32 [%o], {%d0, %d1, %d2, %d3, %d4, %d5, %d6, %d7}, 16;
+  ret;
+}
+
+.visible .entry wmma6(.param .u64 out, .param .u64 in) {
+  .reg .b32 %a<2>, %b<2>;
+  .reg .b32 %c<8>, %d<8>;
+  .reg .b64 %o, %p;
+  ld.param.u64 %o, [out]; ld.param.u64 %p, [in];
+  cvta.to.global.u64 %o, %o; cvta.to.global.u64 %p, %p;
+  wmma.load.a.sync.aligned.row.m16n16k16.global.s8 {%a0, %a1}, [%p+0];
+  wmma.load.b.sync.aligned.col.m16n16k16.global.s8 {%b0, %b1}, [%p+256];
+  wmma.load.c.sync.aligned.row.m16n16k16.global.s32 {%c0, %c1, %c2, %c3, %c4, %c5, %c6, %c7}, [%p+512];
+  wmma.mma.sync.aligned.row.col.m16n16k16.s32.s8.s8.s32.satfinite {%d0, %d1, %d2, %d3, %d4, %d5, %d6, %d7}, {%a0, %a1}, {%b0, %b1}, {%c0, %c1, %c2, %c3, %c4, %c5, %c6, %c7};
+  wmma.store.d.sync.aligned.col.m16n16k16.global.s32 [%o], {%d0, %d1, %d2, %d3, %d4, %d5, %d6, %d7}, 16;
+  ret;
+}
+
+.visible .entry wmma7(.param .u64 out, .param .u64 in) {
+  .reg .b32 %a<4>, %b<1>;
+  .reg .b32 %c<8>, %d<8>;
+  .reg .b64 %o, %p;
+  ld.param.u64 %o, [out]; ld.param.u64 %p, [in];
+  cvta.to.global.u64 %o, %o; cvta.to.global.u64 %p, %p;
+  wmma.load.a.sync.aligned.col.m32n8k16.global.u8 {%a0, %a1, %a2, %a3}, [%p+0];
+  wmma.load.b.sync.aligned.row.m32n8k16.global.u8 {%b0}, [%p+512];
+  wmma.load.c.sync.aligned.row.m32n8k16.global.s32 {%c0, %c1, %c2, %c3, %c4, %c5, %c6, %c7}, [%p+640];
+  wmma.mma.sync.aligned.col.row.m32n8k16.s32.u8.u8.s32.satfinite {%d0, %d1, %d2, %d3, %d4, %d5, %d6, %d7}, {%a0, %a1, %a2, %a3}, {%b0}, {%c0, %c1, %c2, %c3, %c4, %c5, %c6, %c7};
+  wmma.store.d.sync.aligned.col.m32n8k16.global.s32 [%o], {%d0, %d1, %d2, %d3, %d4, %d5, %d6, %d7}, 32;
+  ret;
+}
+
+.visible .entry wmma8(.param .u64 out, .param .u64 in) {
+  .reg .f64 %a<1>, %b<1>;
+  .reg .f64 %c<2>, %d<2>;
+  .reg .b64 %o, %p;
+  ld.param.u64 %o, [out]; ld.param.u64 %p, [in];
+  cvta.to.global.u64 %o, %o; cvta.to.global.u64 %p, %p;
+  wmma.load.a.sync.aligned.row.m8n8k4.global.f64 {%a0}, [%p+0];
+  wmma.load.b.sync.aligned.col.m8n8k4.global.f64 {%b0}, [%p+256];
+  wmma.load.c.sync.aligned.row.m8n8k4.global.f64 {%c0, %c1}, [%p+512];
+  wmma.mma.sync.aligned.row.col.m8n8k4.rn.f64.f64.f64.f64 {%d0, %d1}, {%a0}, {%b0}, {%c0, %c1};
+  wmma.store.d.sync.aligned.col.m8n8k4.global.f64 [%o], {%d0, %d1}, 8;
+  ret;
+}
+
+// Sub-byte and single-bit WMMA (IMMA.8832, BMMA.88128): A row-major, B column-major,
+// C and D row-major with strides.
+.visible .entry wmma9(.param .u64 out, .param .u64 in) {
+  .reg .b32 %a<1>, %b<1>, %c<2>, %d<2>;
+  .reg .b64 %o, %p;
+  ld.param.u64 %o, [out]; ld.param.u64 %p, [in];
+  cvta.to.global.u64 %o, %o; cvta.to.global.u64 %p, %p;
+  wmma.load.a.sync.aligned.row.m8n8k32.global.s4 {%a0}, [%p+0], 64;
+  wmma.load.b.sync.aligned.col.m8n8k32.global.s4 {%b0}, [%p+256], 32;
+  wmma.load.c.sync.aligned.row.m8n8k32.global.s32 {%c0, %c1}, [%p+512], 8;
+  wmma.mma.sync.aligned.row.col.m8n8k32.s32.s4.s4.s32 {%d0, %d1}, {%a0}, {%b0}, {%c0, %c1};
+  wmma.store.d.sync.aligned.row.m8n8k32.global.s32 [%o], {%d0, %d1}, 8;
+  wmma.load.a.sync.aligned.row.m8n8k32.global.u4 {%a0}, [%p+0], 32;
+  wmma.load.b.sync.aligned.col.m8n8k32.global.u4 {%b0}, [%p+256], 64;
+  wmma.mma.sync.aligned.row.col.m8n8k32.satfinite.s32.u4.u4.s32 {%d0, %d1}, {%a0}, {%b0}, {%c0, %c1};
+  wmma.store.d.sync.aligned.col.m8n8k32.global.s32 [%o+256], {%d0, %d1}, 8;
+  wmma.load.a.sync.aligned.row.m8n8k128.global.b1 {%a0}, [%p+0], 128;
+  wmma.load.b.sync.aligned.col.m8n8k128.global.b1 {%b0}, [%p+256], 256;
+  wmma.mma.xor.popc.sync.aligned.row.col.m8n8k128.s32.b1.b1.s32 {%d0, %d1}, {%a0}, {%b0}, {%c0, %c1};
+  wmma.store.d.sync.aligned.row.m8n8k128.global.s32 [%o+512], {%d0, %d1}, 8;
+  wmma.mma.and.popc.sync.aligned.row.col.m8n8k128.s32.b1.b1.s32 {%d0, %d1}, {%a0}, {%b0}, {%c0, %c1};
+  wmma.store.d.sync.aligned.row.m8n8k128.global.s32 [%o+768], {%d0, %d1}, 8;
+  ret;
+}

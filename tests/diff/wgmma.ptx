@@ -1,0 +1,95 @@
+// wgmma with A in registers (.m64n16k16.f32.bf16.bf16), compared between the PTX interpreter and
+// the SASS simulator (Tests/SassDiff.lean). Thread t loads its A fragment from in[4t..4t+3] and
+// word in[512 + t] of B, which the warpgroup stores to shared memory as 2 x 2 core matrices of
+// 8 x 16 bytes (no swizzle, leading offset 128, stride offset 256); two wgmmas (the second
+// accumulating, A negated, B transposed) write D, thread t's eight words to out[8t ...].
+.version 9.0
+.target sm_90a
+.address_size 64
+
+.visible .entry wgrs(.param .u64 out, .param .u64 in)
+{
+  .shared .align 128 .b32 sm[128];
+  .reg .pred p;
+  .reg .f32 d<8>;
+  .reg .b32 t, a<4>, x, sa, o;
+  .reg .b64 ob, ib, rd, dsc, hi;
+  ld.param.u64 ob, [out];
+  ld.param.u64 ib, [in];
+  cvta.to.global.u64 ob, ob;
+  cvta.to.global.u64 ib, ib;
+  mov.u32 t, %tid.x;
+  mul.wide.u32 rd, t, 16;
+  add.s64 rd, ib, rd;
+  ld.global.v4.b32 {a0, a1, a2, a3}, [rd];
+  mul.wide.u32 rd, t, 4;
+  add.s64 rd, ib, rd;
+  ld.global.b32 x, [rd+2048];
+  mov.u32 sa, sm;
+  shl.b32 o, t, 2;
+  add.u32 o, sa, o;
+  st.shared.b32 [o], x;
+  bar.sync 0;
+  fence.proxy.async.shared::cta;
+  // Descriptor: start address >> 4, leading byte offset 128 >> 4, stride byte offset 256 >> 4.
+  shr.u32 o, sa, 4;
+  cvt.u64.u32 dsc, o;
+  or.b64 dsc, dsc, 0x80000;
+  mov.b64 hi, 0x1000000000;
+  or.b64 dsc, dsc, hi;
+  setp.ne.u32 p, t, 1000;
+  wgmma.fence.sync.aligned;
+  wgmma.mma_async.sync.aligned.m64n16k16.f32.bf16.bf16 {d0, d1, d2, d3, d4, d5, d6, d7}, {a0, a1, a2, a3}, dsc, 0, 1, 1, 0;
+  wgmma.mma_async.sync.aligned.m64n16k16.f32.bf16.bf16 {d0, d1, d2, d3, d4, d5, d6, d7}, {a1, a2, a3, a0}, dsc, p, -1, 1, 1;
+  wgmma.commit_group.sync.aligned;
+  wgmma.wait_group.sync.aligned 0;
+  mul.wide.u32 rd, t, 32;
+  add.s64 rd, ob, rd;
+  st.global.v4.f32 [rd], {d0, d1, d2, d3};
+  st.global.v4.f32 [rd+16], {d4, d5, d6, d7};
+  ret;
+}
+
+// The same with single-bit operands (wgmma .b1 .and.popc: BGMMA).
+.visible .entry wgb1(.param .u64 out, .param .u64 in)
+{
+  .shared .align 128 .b32 sm[128];
+  .reg .pred p;
+  .reg .b32 d<8>;
+  .reg .b32 t, a<4>, x, sa, o;
+  .reg .b64 ob, ib, rd, dsc, hi;
+  ld.param.u64 ob, [out];
+  ld.param.u64 ib, [in];
+  cvta.to.global.u64 ob, ob;
+  cvta.to.global.u64 ib, ib;
+  mov.u32 t, %tid.x;
+  mul.wide.u32 rd, t, 16;
+  add.s64 rd, ib, rd;
+  ld.global.v4.b32 {a0, a1, a2, a3}, [rd];
+  mul.wide.u32 rd, t, 4;
+  add.s64 rd, ib, rd;
+  ld.global.b32 x, [rd+2048];
+  mov.u32 sa, sm;
+  shl.b32 o, t, 2;
+  add.u32 o, sa, o;
+  st.shared.b32 [o], x;
+  bar.sync 0;
+  fence.proxy.async.shared::cta;
+  // Descriptor: start address >> 4, leading byte offset 128 >> 4, stride byte offset 256 >> 4.
+  shr.u32 o, sa, 4;
+  cvt.u64.u32 dsc, o;
+  or.b64 dsc, dsc, 0x80000;
+  mov.b64 hi, 0x1000000000;
+  or.b64 dsc, dsc, hi;
+  setp.ne.u32 p, t, 1000;
+  wgmma.fence.sync.aligned;
+  wgmma.mma_async.sync.aligned.m64n16k256.s32.b1.b1.and.popc {d0, d1, d2, d3, d4, d5, d6, d7}, {a0, a1, a2, a3}, dsc, 0;
+  wgmma.mma_async.sync.aligned.m64n16k256.s32.b1.b1.and.popc {d0, d1, d2, d3, d4, d5, d6, d7}, {a1, a2, a3, a0}, dsc, p;
+  wgmma.commit_group.sync.aligned;
+  wgmma.wait_group.sync.aligned 0;
+  mul.wide.u32 rd, t, 32;
+  add.s64 rd, ob, rd;
+  st.global.v4.b32 [rd], {d0, d1, d2, d3};
+  st.global.v4.b32 [rd+16], {d4, d5, d6, d7};
+  ret;
+}

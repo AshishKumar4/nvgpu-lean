@@ -1,0 +1,9 @@
+{ "code": "reduce.cu", "function": "grid_sum", "grid": [64], "block": [256],
+  "buffers": [
+    { "name": "in", "bytes": 65536, "init": { "gen": "iota", "dtype": "s32", "start": 0, "step": 1 } },
+    { "name": "partial", "bytes": 256 },
+    { "name": "counter", "bytes": 4 },
+    { "name": "total", "bytes": 4 } ],
+  "params": [ { "ordinal": 0, "ptr": "in" }, { "ordinal": 1, "ptr": "partial" },
+              { "ordinal": 2, "ptr": "counter" }, { "ordinal": 3, "ptr": "total" } ],
+  "expect": [ { "buffer": "total", "file": "reduce_grid.expected.bin" } ] }

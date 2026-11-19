@@ -1,0 +1,63 @@
+// cp.async completion through an mbarrier, compared between the PTX interpreter and the SASS
+// simulator (Tests/SassDiff.lean): thread t copies in[t] to a shared word with cp.async and
+// arrives on bar0 through cp.async.mbarrier.arrive (counted in advance) and mbarrier.arrive, waits
+// for the phase, and writes its neighbour's word to out[t]; then the same with .noinc on bar1
+// for in[32 + t] and out[32 + t].
+.version 9.0
+.target sm_90a
+.address_size 64
+
+.visible .entry cparrive(.param .u64 out, .param .u64 in)
+{
+  .shared .align 8 .b64 bar0;
+  .shared .align 8 .b64 bar1;
+  .shared .align 16 .b32 sm[64];
+  .reg .pred p, q;
+  .reg .b32 t, n, a, b0, b1, x, o;
+  .reg .b64 d, rd, ob, ib, st;
+  ld.param.u64 ob, [out];
+  ld.param.u64 ib, [in];
+  cvta.to.global.u64 ob, ob;
+  cvta.to.global.u64 ib, ib;
+  mov.u32 t, %tid.x;
+  mov.u32 b0, bar0;
+  mov.u32 b1, bar1;
+  setp.eq.u32 p, t, 0;
+  @p mbarrier.init.shared::cta.b64 [b0], 32;
+  @p mbarrier.init.shared::cta.b64 [b1], 32;
+  bar.sync 0;
+  mov.u32 a, sm;
+  shl.b32 o, t, 2;
+  add.u32 a, a, o;
+  mul.wide.u32 d, t, 4;
+  add.s64 rd, ib, d;
+  cp.async.ca.shared.global [a], [rd], 4;
+  cp.async.mbarrier.arrive.shared::cta.b64 [b0];
+  mbarrier.arrive.shared::cta.b64 st, [b0];
+w0:
+  mbarrier.try_wait.parity.shared::cta.b64 q, [b0], 0;
+  @!q bra w0;
+  xor.b32 n, t, 1;
+  shl.b32 n, n, 2;
+  mov.u32 a, sm;
+  add.u32 a, a, n;
+  ld.shared.u32 x, [a];
+  add.s64 rd, ob, d;
+  st.global.u32 [rd], x;
+  mov.u32 a, sm;
+  add.u32 a, a, 128;
+  add.u32 a, a, o;
+  add.s64 rd, ib, d;
+  cp.async.ca.shared.global [a], [rd+128], 4;
+  cp.async.mbarrier.arrive.noinc.shared::cta.b64 [b1];
+w1:
+  mbarrier.try_wait.parity.shared::cta.b64 q, [b1], 0;
+  @!q bra w1;
+  mov.u32 a, sm;
+  add.u32 a, a, 128;
+  add.u32 a, a, n;
+  ld.shared.u32 x, [a];
+  add.s64 rd, ob, d;
+  st.global.u32 [rd+128], x;
+  ret;
+}

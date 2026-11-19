@@ -1,0 +1,22 @@
+{
+ "code": "checks_tc.cu",
+ "function": "tc_restage_race",
+ "grid": [
+  1
+ ],
+ "block": [
+  128
+ ],
+ "buffers": [
+  {
+   "name": "out",
+   "bytes": 512
+  }
+ ],
+ "params": [
+  {
+   "ordinal": 0,
+   "ptr": "out"
+  }
+ ]
+}

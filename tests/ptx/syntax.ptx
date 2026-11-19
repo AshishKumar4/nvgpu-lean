@@ -1,0 +1,82 @@
+// Syntax forms of PTX ISA 9.4 chapters 4, 5, 6 and 11, one or more of each.
+.version 9.4
+.target sm_90a
+.address_size 64
+
+.file 1 "syntax.cu"
+.extern .shared .align 16 .b8 smem[];
+.global .align 4 .u32 bar_[] = { 2, 3, 5 };
+.global .u64 p2 = generic(bar_)+8;
+.const .f32 bias[2] = {-1.0, 1.0e0};
+.global .s32 offs[][2] = { {-1, 0}, {0, -1} };
+.global .u8 masks[2] = { 0xFF(bar_), 0xFF00(generic(bar_)+4) };
+.global .attribute(.managed) .s32 g;
+.const .f32 blur[3] = {.05, 0.1, 5e-2};
+
+.func (.param .b32 ret) add1 (.param .b32 x) .noreturn;
+
+.visible .func (.param .b32 r) add2 (.param .b32 x, .reg .u32 y)
+{
+	.reg .b32 %t<2>;
+	ld.param.b32 %t0, [x];
+	add.s32 %t1, %t0, y;
+	st.param.b32 [r], %t1;
+	ret;
+}
+
+.visible .entry k(
+	.param .u64 .ptr .global .align 16 k_param_0,
+	.param .align 8 .b8 k_param_1[288]
+)
+.maxntid 128, 1, 1
+.minnctapersm 1
+.reqnctapercluster 2, 1, 1
+.pragma "nounroll";
+{
+	.reg .pred 	%p<4>;
+	.reg .b16 	%rs<3>;
+	.reg .f32 	%f<8>;
+	.reg .b32 	%r<20>;
+	.reg .b64 	%rd<10>;
+	.reg .f64 	%fd<2>;
+	.shared .align 8 .b64 mbar[2];
+	.local .align 4 .b8 __local_depot0[16];
+	.reg .v4 .f32 %v;
+
+	ld.param.u64 	%rd1, [k_param_0];
+	cvta.to.global.u64 	%rd2, %rd1;
+	mov.u32 	%r1, %tid.x;
+	mov.u32 	%r2, %ctaid.x;
+	mad.lo.s32 	%r3, %r2, 128, %r1;
+	mul.wide.s32 	%rd3, %r3, 4;
+	add.s64 	%rd4, %rd2, %rd3;
+	ld.global.nc.v4.f32 	{%f1, %f2, %f3, %f4}, [%rd4+-16];
+	setp.lt.s32 	%p1|%p2, %r3, 1000;
+	@!%p1 bra 	$L__BB0_2;
+	fma.rn.f32 	%f5, %f1, 0f3F800000, %f2;
+	add.f64 	%fd1, 0d3FF0000000000000, 0d0000000000000000;
+	mov.b32 	%r4, (1 << 4) + (WARP_SZ - 1) * 2;
+	mov.u64 	%rd5, bar_+8;
+	selp.b32 	%r5, 1, 0, !%p2;
+$L__BB0_2:
+	{
+	.reg .b32 inner;
+	mov.b32 inner, -1;
+	}
+	shfl.sync.bfly.b32 	%r6|%p3, %r5, 16, 31, -1;
+	vote.sync.ballot.b32 	%r7, %p1, 0xffffffff;
+	mbarrier.arrive.expect_tx.shared::cta.b64 	_, [mbar], 1024;
+	cp.async.bulk.tensor.2d.shared::cluster.global.tile.mbarrier::complete_tx::bytes [smem], [%rd1, {%r1, %r2}], [mbar];
+	wgmma.mma_async.sync.aligned.m64n8k16.f32.bf16.bf16 {%f1, %f2, %f3, %f4}, %rd5, %rd6, %p1, 1, 1, 0, 1;
+	vadd.s32.u32.s32.sat 	%r8, %r1.b0, %r2.h1, %r3;
+	{ // callseq 0
+	.param .b32 param0;
+	st.param.b32 	[param0], %r1;
+	.param .b32 retval0;
+	call.uni (retval0), add2, (param0, %r1);
+	ld.param.b32 	%r9, [retval0];
+	}
+	.loc 1 12 3, function_name $L__info_string0, inlined_at 1 20 5
+	@%p1 exit;
+	ret;
+}

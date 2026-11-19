@@ -1,0 +1,31 @@
+// The cluster's special registers in a grid of 4 clusters of 3 CTAs (a dimension that is not a
+// power of two): each CTA's thread 0 writes %clusterid, %cluster_ctaid, %nclusterid,
+// %cluster_nctaid, %cluster_ctarank and %cluster_nctarank.
+.version 8.8
+.target sm_90a
+.address_size 64
+
+.visible .entry clusterid(.param .u64 out) .reqnctapercluster 3, 1, 1 {
+  .reg .pred p;
+  .reg .b32 t, x, v<14>;
+  .reg .b64 o, off;
+  mov.u32 t, %tid.x;
+  setp.ne.u32 p, t, 0;
+  @p bra done;
+  ld.param.u64 o, [out];
+  cvta.to.global.u64 o, o;
+  mov.u32 x, %ctaid.x;
+  mul.wide.u32 off, x, 64;
+  add.s64 o, o, off;
+  mov.u32 v0, %clusterid.x; mov.u32 v1, %clusterid.y; mov.u32 v2, %clusterid.z;
+  mov.u32 v3, %cluster_ctaid.x; mov.u32 v4, %cluster_ctaid.y; mov.u32 v5, %cluster_ctaid.z;
+  mov.u32 v6, %nclusterid.x; mov.u32 v7, %nclusterid.y; mov.u32 v8, %nclusterid.z;
+  mov.u32 v9, %cluster_nctaid.x; mov.u32 v10, %cluster_nctaid.y; mov.u32 v11, %cluster_nctaid.z;
+  mov.u32 v12, %cluster_ctarank; mov.u32 v13, %cluster_nctarank;
+  st.global.v4.u32 [o], {v0, v1, v2, v3};
+  st.global.v4.u32 [o+16], {v4, v5, v6, v7};
+  st.global.v4.u32 [o+32], {v8, v9, v10, v11};
+  st.global.v2.u32 [o+48], {v12, v13};
+done:
+  ret;
+}

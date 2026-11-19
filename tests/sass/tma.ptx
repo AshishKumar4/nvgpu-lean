@@ -1,0 +1,67 @@
+.version 9.0
+.target sm_90a
+.address_size 64
+
+// A TMA refill loop: tensor map by its parameter address, coordinates in registers.
+.visible .entry tma_loop(.param .align 64 .b8 tmap[128], .param .u32 n)
+{
+  .reg .pred p, pe;
+  .reg .b32 r<12>;
+  .reg .b64 rd<4>;
+  .shared .align 1024 .b8 buf[16384];
+  .shared .align 8 .b64 bar;
+  ld.param.u32 r1, [n];
+  mov.u64 rd1, tmap;
+  mov.u32 r2, buf;
+  mov.u32 r3, bar;
+  mov.u32 r4, 0;
+  mov.u32 r9, 0;
+L:
+  elect.sync r5|pe, 0xffffffff;
+  and.b32 r6, r4, 3;
+  shl.b32 r6, r6, 12;
+  add.u32 r7, r2, r6;
+  shl.b32 r8, r4, 6;
+  @pe cp.async.bulk.tensor.2d.shared::cluster.global.tile.mbarrier::complete_tx::bytes [r7], [rd1, {r9, r8}], [r3];
+  add.u32 r4, r4, 1;
+  setp.lt.u32 p, r4, r1;
+  @p bra L;
+  ret;
+}
+
+// The same with the shared base read once at entry and many uniform values live across the loop.
+.visible .entry tma_loop_pressure(.param .align 64 .b8 tmap[128], .param .u32 n, .param .u32 k0, .param .u32 k1, .param .u32 k2, .param .u32 k3, .param .u32 k4, .param .u32 k5, .param .u32 k6, .param .u32 k7)
+{
+  .reg .pred p, pe;
+  .reg .b32 r<12>;
+  .reg .b32 k<8>;
+  .reg .b64 rd<4>;
+  .shared .align 1024 .b8 buf[16384];
+  .shared .align 8 .b64 bar;
+  ld.param.u32 r1, [n];
+  ld.param.u32 k0, [k0]; ld.param.u32 k1, [k1]; ld.param.u32 k2, [k2]; ld.param.u32 k3, [k3];
+  ld.param.u32 k4, [k4]; ld.param.u32 k5, [k5]; ld.param.u32 k6, [k6]; ld.param.u32 k7, [k7];
+  mov.u64 rd1, tmap;
+  mov.u32 r2, buf;
+  mov.u32 r3, bar;
+  mov.u32 r4, 0;
+L:
+  elect.sync r5|pe, 0xffffffff;
+  and.b32 r6, r4, 7;
+  shl.b32 r6, r6, 11;
+  add.u32 r7, r2, r6;
+  mul.lo.u32 r8, r4, k0;
+  add.u32 r8, r8, k1;
+  xor.b32 r9, r4, k2;
+  mul.lo.u32 r9, r9, k3;
+  @pe cp.async.bulk.tensor.2d.shared::cluster.global.tile.mbarrier::complete_tx::bytes [r7], [rd1, {r9, r8}], [r3];
+  mul.lo.u32 r10, r4, k4;
+  add.u32 r10, r10, k5;
+  xor.b32 r11, r4, k6;
+  add.u32 r11, r11, k7;
+  @pe cp.async.bulk.tensor.2d.shared::cluster.global.tile.mbarrier::complete_tx::bytes [r7], [rd1, {r10, r11}], [r3];
+  add.u32 r4, r4, 1;
+  setp.lt.u32 p, r4, r1;
+  @p bra L;
+  ret;
+}

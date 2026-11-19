@@ -1,0 +1,16 @@
+{ "code": "../../tests/kernels/gemm_tma_wgmma.cu", "function": "gemm",
+  "grid": [8, 16], "block": [256], "dynamicShared": 98368,
+  "buffers": [
+    { "name": "a", "bytes": 2097152,
+      "init": { "gen": "uniform", "dtype": "bf16", "lo": -64, "hi": 64, "scale": -6, "seed": 1 } },
+    { "name": "b", "bytes": 2097152,
+      "init": { "gen": "uniform", "dtype": "bf16", "lo": -64, "hi": 64, "scale": -6, "seed": 2 } },
+    { "name": "c", "bytes": 4194304 } ],
+  "tensorMaps": [
+    { "name": "map_a", "dtype": "bf16", "buffer": "a", "dims": [1024, 1024], "strides": [2048],
+      "box": [64, 64], "swizzle": "128B" },
+    { "name": "map_b", "dtype": "bf16", "buffer": "b", "dims": [1024, 1024], "strides": [2048],
+      "box": [64, 128], "swizzle": "128B" } ],
+  "params": [ { "ordinal": 0, "tensorMap": "map_a" }, { "ordinal": 1, "tensorMap": "map_b" },
+              { "ordinal": 2, "ptr": "c" }, { "ordinal": 3, "s32": 1024 },
+              { "ordinal": 4, "s32": 1024 } ] }

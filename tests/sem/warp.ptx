@@ -1,0 +1,75 @@
+// Warp collectives on a full warp and on a divergent half; checked by Tests/SassSem.lean.
+.version 9.0
+.target sm_90a
+.address_size 64
+
+// v = (lane * 7 + 3) / 4 % 8; out[16 * lane + k] = the k-th result.
+.visible .entry collectives(.param .u64 out)
+{
+  .reg .pred p<6>;
+  .reg .b32 lane, v, w, r<16>;
+  .reg .b64 rd<4>;
+  ld.param.u64 rd1, [out];
+  cvta.to.global.u64 rd1, rd1;
+  mov.u32 lane, %laneid;
+  mad.lo.u32 v, lane, 7, 3;
+  bfe.u32 v, v, 2, 3;
+  shfl.sync.up.b32 r0, v, 3, 0, -1;
+  shfl.sync.down.b32 r1, v, 5, 31, -1;
+  shfl.sync.bfly.b32 r2, v, 6, 31, -1;
+  sub.u32 w, 29, lane;
+  shfl.sync.idx.b32 r3, v, w, 31, -1;
+  setp.gt.u32 p0, v, 5;
+  vote.sync.ballot.b32 r4, p0, -1;
+  setp.eq.u32 p1, v, 7;
+  vote.sync.any.pred p2, p1, -1;
+  selp.u32 r5, 1, 0, p2;
+  setp.lt.u32 p3, v, 8;
+  vote.sync.all.pred p4, p3, -1;
+  selp.u32 r6, 1, 0, p4;
+  match.any.sync.b32 r7, v, -1;
+  redux.sync.add.u32 r8, v, -1;
+  sub.u32 w, v, 5;
+  redux.sync.min.s32 r9, w, -1;
+  redux.sync.max.u32 r10, v, -1;
+  redux.sync.xor.b32 r11, v, -1;
+  shfl.sync.down.b32 r12, v, 1, 0x181f, -1;
+  shfl.sync.idx.b32 r13, v, 2, 0x181f, -1;
+  shfl.sync.up.b32 r14, v, 1, 0x1800, -1;
+  mov.u32 r15, 0;
+  mul.wide.u32 rd2, lane, 64;
+  add.s64 rd3, rd1, rd2;
+  st.global.v4.u32 [rd3], {r0, r1, r2, r3};
+  st.global.v4.u32 [rd3+16], {r4, r5, r6, r7};
+  st.global.v4.u32 [rd3+32], {r8, r9, r10, r11};
+  st.global.v4.u32 [rd3+48], {r12, r13, r14, r15};
+  ret;
+}
+
+// The odd lanes alone: ballot, a leader by elect.sync, and a reduction over the half warp.
+// out[4 * lane + k]; even lanes store nothing.
+.visible .entry halfwarp(.param .u64 out)
+{
+  .reg .pred p<4>;
+  .reg .b32 lane, v, r<4>, ldr;
+  .reg .b64 rd<4>;
+  ld.param.u64 rd1, [out];
+  cvta.to.global.u64 rd1, rd1;
+  mov.u32 lane, %laneid;
+  and.b32 v, lane, 1;
+  setp.eq.u32 p0, v, 0;
+  @p0 bra END;
+  mul.lo.u32 v, lane, lane;
+  and.b32 v, v, 6;
+  setp.ne.u32 p1, v, 0;
+  vote.sync.ballot.b32 r0, p1, 0xaaaaaaaa;
+  elect.sync ldr|p2, 0xaaaaaaaa;
+  selp.u32 r1, 1, 0, p2;
+  redux.sync.add.u32 r2, lane, 0xaaaaaaaa;
+  mov.u32 r3, ldr;
+  mul.wide.u32 rd2, lane, 16;
+  add.s64 rd3, rd1, rd2;
+  st.global.v4.u32 [rd3], {r0, r1, r2, r3};
+END:
+  ret;
+}

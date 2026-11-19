@@ -1,0 +1,4 @@
+{ "code": "tcgen05_pair.cu", "function": "tcgen05_pair", "grid": [2], "block": [128], "cluster": [2, 1, 1],
+  "buffers": [ { "name": "out", "bytes": 65536 } ],
+  "params": [ { "ordinal": 0, "ptr": "out" } ],
+  "expect": [ { "buffer": "out", "file": "tcgen05_pair.expected.bin" } ] }

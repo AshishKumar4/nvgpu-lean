@@ -1,0 +1,77 @@
+// A tensor map a kernel builds on the device: thread 0 copies the
+// parameter map to a global workspace, replaces its address, dimension 1, box dimension 1 and
+// stride 0 (tensormap.replace), fences the tensormap proxy, then loads two boxes through it, the
+// second partly past the replaced dimension 1 (zero-filled). Out: the 128 floats loaded, then the
+// workspace map's 32 words, so PTX's replace and the compiled stores must agree bit for bit.
+.version 8.8
+.target sm_90a
+.address_size 64
+
+.visible .entry tmreplace(.param .u64 out, .param .u64 in, .param .u64 ws, .param .align 64 .b8 map[128])
+{
+  .shared .align 8 .b64 bar;
+  .shared .align 128 .b32 tile[128];
+  .reg .pred p, q;
+  .reg .b32 t, ma, ta, x, k, o, dimv, boxv, a0, a1, a2, a3;
+  .reg .b64 ob, ib, wb, wg, na, strv, rd, d, st;
+  ld.param.u64 ob, [out];
+  cvta.to.global.u64 ob, ob;
+  ld.param.u64 ib, [in];
+  ld.param.u64 wg, [ws];
+  cvta.to.global.u64 wb, wg;
+  mov.u32 t, %tid.x;
+  setp.eq.u32 p, t, 0;
+  @!p bra loaded;
+  ld.param.v4.u32 {a0, a1, a2, a3}, [map+0];   st.global.v4.u32 [wb+0], {a0, a1, a2, a3};
+  ld.param.v4.u32 {a0, a1, a2, a3}, [map+16];  st.global.v4.u32 [wb+16], {a0, a1, a2, a3};
+  ld.param.v4.u32 {a0, a1, a2, a3}, [map+32];  st.global.v4.u32 [wb+32], {a0, a1, a2, a3};
+  ld.param.v4.u32 {a0, a1, a2, a3}, [map+48];  st.global.v4.u32 [wb+48], {a0, a1, a2, a3};
+  ld.param.v4.u32 {a0, a1, a2, a3}, [map+64];  st.global.v4.u32 [wb+64], {a0, a1, a2, a3};
+  ld.param.v4.u32 {a0, a1, a2, a3}, [map+80];  st.global.v4.u32 [wb+80], {a0, a1, a2, a3};
+  ld.param.v4.u32 {a0, a1, a2, a3}, [map+96];  st.global.v4.u32 [wb+96], {a0, a1, a2, a3};
+  ld.param.v4.u32 {a0, a1, a2, a3}, [map+112]; st.global.v4.u32 [wb+112], {a0, a1, a2, a3};
+  add.s64 na, ib, 512;
+  mov.u32 dimv, 8;
+  mov.u32 boxv, 4;
+  mov.u64 strv, 128;
+  tensormap.replace.tile.global_address.global.b1024.b64 [wb], na;
+  tensormap.replace.tile.global_dim.global.b1024.b32 [wb], 1, dimv;
+  tensormap.replace.tile.box_dim.global.b1024.b32 [wb], 1, boxv;
+  tensormap.replace.tile.global_stride.global.b1024.b64 [wb], 0, strv;
+  fence.proxy.tensormap::generic.release.gpu;
+  fence.proxy.tensormap::generic.acquire.gpu [wg], 128;
+  mov.u32 ma, bar;
+  mbarrier.init.shared::cta.b64 [ma], 1;
+  fence.mbarrier_init.release.cluster;
+  mbarrier.arrive.expect_tx.shared::cta.b64 st, [ma], 512;
+  mov.u32 ta, tile;
+  cp.async.bulk.tensor.2d.shared::cluster.global.mbarrier::complete_tx::bytes [ta], [wg, {0, 0}], [ma];
+  add.u32 ta, ta, 256;
+  cp.async.bulk.tensor.2d.shared::cluster.global.mbarrier::complete_tx::bytes [ta], [wg, {0, 6}], [ma];
+wait:
+  mbarrier.try_wait.parity.acquire.cta.shared::cta.b64 q, [ma], 0;
+  @!q bra wait;
+loaded:
+  bar.sync 0;
+  // Each of the 32 threads: four floats of the tile, then one word of the map.
+  mov.u32 k, 0;
+copy:
+  shl.b32 o, k, 5;
+  add.u32 o, o, t;
+  shl.b32 o, o, 2;
+  mov.u32 ta, tile;
+  add.u32 ta, ta, o;
+  ld.shared.u32 x, [ta];
+  cvt.u64.u32 d, o;
+  add.s64 rd, ob, d;
+  st.global.u32 [rd], x;
+  add.u32 k, k, 1;
+  setp.lt.u32 q, k, 4;
+  @q bra copy;
+  mul.wide.u32 d, t, 4;
+  add.s64 rd, wb, d;
+  ld.global.u32 x, [rd];
+  add.s64 rd, ob, d;
+  st.global.u32 [rd+512], x;
+  ret;
+}

@@ -1,0 +1,75 @@
+// st.async and red.async into the other CTA of a cluster of two, compared word by word between
+// the PTX interpreter and the SASS simulator (Tests/SassDiff.lean). Thread t of CTA c reads
+// x = in[2(32c + t)], y = in[2(32c + t) + 1] and sends them to the same thread's slots of CTA
+// 1 - c; each CTA waits on its mbarrier for every byte, then writes its slots: out[8(32c + t) + k]
+//   0 st.async x  1, 2 st.async.b64 (x, y)  3 red.async.add x  4 red.async.min.s32 y
+//   5 red.async.inc (bound y)  6 red.async.xor y  7 0
+.version 9.0
+.target sm_90a
+.address_size 64
+
+.visible .entry stasync(.param .u64 out, .param .u64 in)
+{
+  .shared .align 8 .b64 bar;
+  .shared .align 16 .b32 slots[256];
+  .reg .pred p, q;
+  .reg .b32 t, c, peer, sa, ma, ra, rm, x, y, o, v, k;
+  .reg .b64 d, rd, ob, ib, xy, st;
+  ld.param.u64 ob, [out];
+  ld.param.u64 ib, [in];
+  cvta.to.global.u64 ob, ob;
+  cvta.to.global.u64 ib, ib;
+  mov.u32 t, %tid.x;
+  mov.u32 c, %cluster_ctarank;
+  xor.b32 peer, c, 1;
+  // Slots: thread t's eight words at slots[8t]; seeds for the reductions.
+  mov.u32 sa, slots;
+  shl.b32 o, t, 5;
+  add.u32 sa, sa, o;
+  st.shared.u32 [sa+12], 100;
+  st.shared.u32 [sa+16], 0x7fffffff;
+  st.shared.u32 [sa+20], 7;
+  st.shared.u32 [sa+24], 0x5a5a5a5a;
+  st.shared.u32 [sa+28], 0;
+  mov.u32 ma, bar;
+  setp.eq.u32 p, t, 0;
+  @p mbarrier.init.shared::cta.b64 [ma], 1;
+  @p mbarrier.arrive.expect_tx.shared::cta.b64 st, [ma], 896;
+  fence.mbarrier_init.release.cluster;
+  barrier.cluster.arrive;
+  barrier.cluster.wait;
+  shl.b32 o, c, 5;
+  add.u32 o, o, t;
+  mul.wide.u32 d, o, 8;
+  add.s64 rd, ib, d;
+  ld.global.u32 x, [rd];
+  ld.global.u32 y, [rd+4];
+  mapa.shared::cluster.u32 ra, sa, peer;
+  mapa.shared::cluster.u32 rm, ma, peer;
+  st.async.shared::cluster.mbarrier::complete_tx::bytes.u32 [ra], x, [rm];
+  mov.b64 xy, {x, y};
+  st.async.shared::cluster.mbarrier::complete_tx::bytes.b64 [ra+8], xy, [rm];
+  red.async.relaxed.cluster.shared::cluster.mbarrier::complete_tx::bytes.add.u32 [ra+12], x, [rm];
+  red.async.relaxed.cluster.shared::cluster.mbarrier::complete_tx::bytes.min.s32 [ra+16], y, [rm];
+  red.async.relaxed.cluster.shared::cluster.mbarrier::complete_tx::bytes.inc.u32 [ra+20], y, [rm];
+  red.async.relaxed.cluster.shared::cluster.mbarrier::complete_tx::bytes.xor.b32 [ra+24], y, [rm];
+wait:
+  mbarrier.try_wait.parity.acquire.cluster.shared::cta.b64 q, [ma], 0;
+  @!q bra wait;
+  mul.wide.u32 d, o, 32;
+  add.s64 rd, ob, d;
+  mov.u32 k, 0;
+copy:
+  shl.b32 o, k, 2;
+  add.u32 v, sa, o;
+  ld.shared.u32 v, [v];
+  cvt.u64.u32 d, o;
+  add.s64 d, rd, d;
+  st.global.u32 [d], v;
+  add.u32 k, k, 1;
+  setp.lt.u32 p, k, 8;
+  @p bra copy;
+  barrier.cluster.arrive;
+  barrier.cluster.wait;
+  ret;
+}

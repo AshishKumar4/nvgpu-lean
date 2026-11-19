@@ -1,0 +1,54 @@
+// An mbarrier hand-off with and without back-pressure (Tests/Sched.lean). Warp 0 produces two
+// phases of one full barrier, an arrival each; warp 1 waits for phase 0 (parity 0) then phase 1
+// (parity 1), and writes 1 to out[0] when both are seen. `.param .u32 guard`: 0, warp 0 arrives
+// for phase 1 at once, so if both phases complete before warp 1 first looks, the barrier is back
+// at parity 0 and warp 1's wait for phase 0 never passes; 1, warp 0 first waits on an empty
+// barrier warp 1 arrives on after seeing phase 0.
+.version 8.8
+.target sm_90a
+.address_size 64
+
+.visible .entry phase(.param .u64 out, .param .u32 guard)
+{
+  .shared .align 8 .b64 full;
+  .shared .align 8 .b64 empty;
+  .reg .pred p, q, g;
+  .reg .b32 t, w, f, e, gv, v;
+  .reg .b64 ob, st;
+  ld.param.u64 ob, [out];
+  cvta.to.global.u64 ob, ob;
+  ld.param.u32 gv, [guard];
+  setp.ne.u32 g, gv, 0;
+  mov.u32 t, %tid.x;
+  shr.u32 w, t, 5;
+  mov.u32 f, full;
+  mov.u32 e, empty;
+  setp.eq.u32 p, t, 0;
+  @p mbarrier.init.shared::cta.b64 [f], 1;
+  @p mbarrier.init.shared::cta.b64 [e], 1;
+  bar.sync 0;
+  setp.ne.u32 p, t, 0;
+  @p bra consumer;
+  mbarrier.arrive.shared::cta.b64 st, [f];
+  @!g bra second;
+wempty:
+  mbarrier.try_wait.parity.shared::cta.b64 q, [e], 0;
+  @!q bra wempty;
+second:
+  mbarrier.arrive.shared::cta.b64 st, [f];
+  bra done;
+consumer:
+  setp.ne.u32 p, t, 32;
+  @p bra done;
+w0:
+  mbarrier.try_wait.parity.shared::cta.b64 q, [f], 0;
+  @!q bra w0;
+  @g mbarrier.arrive.shared::cta.b64 st, [e];
+w1:
+  mbarrier.try_wait.parity.shared::cta.b64 q, [f], 1;
+  @!q bra w1;
+  mov.u32 v, 1;
+  st.global.u32 [ob], v;
+done:
+  ret;
+}

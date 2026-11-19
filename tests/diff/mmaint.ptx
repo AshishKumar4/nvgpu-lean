@@ -1,0 +1,47 @@
+// Integer, sub-byte and single-bit mma.sync, compared between the PTX interpreter and the SASS
+// simulator (Tests/SassDiff.lean).
+// Each thread loads A, B, C fragment words from in[8t..8t+7] and stores D to out[24t + k]:
+//   0-3   m16n8k32 s4 x u4             4-7   m16n8k64 s4 x s4 satfinite
+//   8-11  m16n8k128 b1 and             12-15 m16n8k256 b1 xor
+//   16-17 m8n8k16 s8 x u8              18-19 m8n8k32 u4 x u4          20-21 m8n8k128 b1 and
+//   22-23 m8n8k32 s4 x s4 satfinite
+.version 9.0
+.target sm_90a
+.address_size 64
+
+.visible .entry mmaint(.param .u64 out, .param .u64 in)
+{
+  .reg .b32 a<4>, b<2>, c<4>, d<4>, t;
+  .reg .b64 o, x, rd;
+  ld.param.u64 o, [out];
+  ld.param.u64 x, [in];
+  cvta.to.global.u64 o, o;
+  cvta.to.global.u64 x, x;
+  mov.u32 t, %laneid;
+  mul.wide.u32 rd, t, 32;
+  add.s64 x, x, rd;
+  mul.wide.u32 rd, t, 96;
+  add.s64 o, o, rd;
+  ld.global.v4.b32 {a0, a1, a2, a3}, [x];
+  ld.global.v2.b32 {b0, b1}, [x+16];
+  ld.global.v2.b32 {c0, c1}, [x+24];
+  mov.b32 c2, a3;
+  mov.b32 c3, b1;
+  mma.sync.aligned.m16n8k32.row.col.s32.s4.u4.s32 {d0, d1, d2, d3}, {a0, a1}, {b0}, {c0, c1, c2, c3};
+  st.global.v4.b32 [o], {d0, d1, d2, d3};
+  mma.sync.aligned.m16n8k64.row.col.satfinite.s32.s4.s4.s32 {d0, d1, d2, d3}, {a0, a1, a2, a3}, {b0, b1}, {c0, c1, c2, c3};
+  st.global.v4.b32 [o+16], {d0, d1, d2, d3};
+  mma.sync.aligned.m16n8k128.row.col.s32.b1.b1.s32.and.popc {d0, d1, d2, d3}, {a0, a1}, {b0}, {c0, c1, c2, c3};
+  st.global.v4.b32 [o+32], {d0, d1, d2, d3};
+  mma.sync.aligned.m16n8k256.row.col.s32.b1.b1.s32.xor.popc {d0, d1, d2, d3}, {a0, a1, a2, a3}, {b0, b1}, {c0, c1, c2, c3};
+  st.global.v4.b32 [o+48], {d0, d1, d2, d3};
+  mma.sync.aligned.m8n8k16.row.col.s32.s8.u8.s32 {d0, d1}, {a0}, {b0}, {c0, c1};
+  st.global.v2.b32 [o+64], {d0, d1};
+  mma.sync.aligned.m8n8k32.row.col.s32.u4.u4.s32 {d0, d1}, {a1}, {b1}, {c0, c1};
+  st.global.v2.b32 [o+72], {d0, d1};
+  mma.sync.aligned.m8n8k128.row.col.s32.b1.b1.s32.and.popc {d0, d1}, {a2}, {b0}, {c0, c1};
+  st.global.v2.b32 [o+80], {d0, d1};
+  mma.sync.aligned.m8n8k32.row.col.satfinite.s32.s4.s4.s32 {d0, d1}, {a3}, {b1}, {c0, c1};
+  st.global.v2.b32 [o+88], {d0, d1};
+  ret;
+}

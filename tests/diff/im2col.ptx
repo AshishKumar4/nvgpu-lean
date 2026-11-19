@@ -1,0 +1,63 @@
+// TMA im2col loads, compared between the PTX interpreter and the SASS simulator
+// (Tests/SassDiff.lean). map4 is a 4D NHWC f32 tensor (C 4, W 6, H 5, N 2; corners -1/-1 in W and
+// H; 16 pixels of 4 channels); map3 a 3D NWC one (C 4, W 20, N 2; corners -2/1; W stride 2;
+// 16 pixels). The CTA loads map4 from filter base (W 2, H 1, N 0) with offsets (1, 2) and map3
+// from W 3 with offset 3 into one box, and thread t writes the box's words t, t + 32, t + 64,
+// t + 96 to out[4t ...].
+.version 9.0
+.target sm_90a
+.address_size 64
+
+.visible .entry im2col(.param .u64 out, .param .u64 in, .param .align 64 .b8 map4[128],
+                       .param .align 64 .b8 map3[128])
+{
+  .shared .align 128 .b32 box[128];
+  .shared .align 8 .b64 bar;
+  .reg .pred p, q;
+  .reg .b16 o0, o1, o2;
+  .reg .b32 t, ma, sa, c0, c1, c2, c3, x, k, a;
+  .reg .b64 ob, rd, m4, m3, st;
+  ld.param.u64 ob, [out];
+  cvta.to.global.u64 ob, ob;
+  mov.u64 m4, map4;
+  cvta.param.u64 m4, m4;
+  mov.u64 m3, map3;
+  cvta.param.u64 m3, m3;
+  mov.u32 t, %tid.x;
+  mov.u32 ma, bar;
+  mov.u32 sa, box;
+  setp.eq.u32 p, t, 0;
+  @p mbarrier.init.shared::cta.b64 [ma], 1;
+  @p mbarrier.arrive.expect_tx.shared::cta.b64 st, [ma], 512;
+  bar.sync 0;
+  mov.u32 c0, 0;
+  mov.u32 c1, 2;
+  mov.u32 c2, 1;
+  mov.u32 c3, 0;
+  mov.u16 o0, 1;
+  mov.u16 o1, 2;
+  mov.u16 o2, 3;
+  @p cp.async.bulk.tensor.4d.shared::cluster.global.im2col.mbarrier::complete_tx::bytes [sa], [m4, {c0, c1, c2, c3}], [ma], {o0, o1};
+  add.u32 a, sa, 256;
+  mov.u32 c1, 3;
+  @p cp.async.bulk.tensor.3d.shared::cluster.global.im2col.mbarrier::complete_tx::bytes [a], [m3, {c0, c1, c3}], [ma], {o2};
+wait:
+  mbarrier.try_wait.parity.shared::cta.b64 q, [ma], 0;
+  @!q bra wait;
+  mov.u32 k, 0;
+copy:
+  shl.b32 a, k, 5;
+  add.u32 a, a, t;
+  shl.b32 a, a, 2;
+  add.u32 a, a, sa;
+  ld.shared.u32 x, [a];
+  shl.b32 a, t, 2;
+  add.u32 a, a, k;
+  mul.wide.u32 rd, a, 4;
+  add.s64 rd, ob, rd;
+  st.global.u32 [rd], x;
+  add.u32 k, k, 1;
+  setp.lt.u32 q, k, 4;
+  @q bra copy;
+  ret;
+}

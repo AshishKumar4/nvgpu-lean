@@ -1,0 +1,36 @@
+// Cubemap fetches (tex.cube, tex.acube), compared between the PTX interpreter and the SASS
+// simulator (Tests/SassDiff.lean): thread t points (x, y, z) = (t % 5 - 2, (t / 5) % 5 - 2.25,
+// t odd ? 1.5 : -2.5) into two 4 x 4 float cubemaps (linear filtering), the second through
+// tex.acube with index t % 2, and writes both texels' four words to out[8t ...].
+.version 9.0
+.target sm_90a
+.address_size 64
+
+.visible .entry cube(.param .u64 out, .param .u64 in, .param .u64 tex)
+{
+  .reg .pred p;
+  .reg .b32 t, a, b, k, r0, r1, r2, r3;
+  .reg .f32 x, y, z;
+  .reg .b64 o, h, d;
+  ld.param.u64 o, [out];
+  ld.param.u64 h, [tex];
+  cvta.to.global.u64 o, o;
+  mov.u32 t, %tid.x;
+  rem.u32 a, t, 5;
+  div.u32 b, t, 5;
+  rem.u32 b, b, 5;
+  and.b32 k, t, 1;
+  cvt.rn.f32.u32 x, a;
+  sub.f32 x, x, 0f40000000;
+  cvt.rn.f32.u32 y, b;
+  sub.f32 y, y, 0f40100000;
+  setp.eq.u32 p, k, 1;
+  selp.f32 z, 0f3FC00000, 0fC0200000, p;
+  mul.wide.u32 d, t, 32;
+  add.s64 o, o, d;
+  tex.cube.v4.f32.f32 {r0, r1, r2, r3}, [h, {x, y, z, z}];
+  st.global.v4.b32 [o], {r0, r1, r2, r3};
+  tex.acube.v4.f32.f32 {r0, r1, r2, r3}, [h, {k, x, y, z}];
+  st.global.v4.b32 [o+16], {r0, r1, r2, r3};
+  ret;
+}

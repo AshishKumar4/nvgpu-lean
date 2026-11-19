@@ -1,0 +1,177 @@
+// binary32 arithmetic, comparisons, conversions and the special-function unit, one result per
+// line of OPS below; the differential test (Tests/SassDiff.lean) runs this kernel in the PTX
+// interpreter and, compiled, in the SASS simulator, and compares every output word.
+// in[3t], in[3t+1], in[3t+2] = a, b, c; out[49 t + k] = result k.
+//    0 add.rn.f32
+//    1 add.rz.f32
+//    2 add.rm.f32
+//    3 add.rp.f32
+//    4 add.rn.ftz
+//    5 sub.rn
+//    6 mul.rn
+//    7 mul.rz
+//    8 mul.rm
+//    9 mul.rp
+//   10 mul.ftz
+//   11 mul.sat
+//   12 fma.rn
+//   13 fma.rz
+//   14 fma.rm
+//   15 fma.rp
+//   16 fma.ftz
+//   17 min
+//   18 max
+//   19 min.NaN
+//   20 abs
+//   21 neg
+//   22 setp.lt
+//   23 setp.geu
+//   24 setp.equ
+//   25 setp.nan
+//   26 div.rn
+//   27 div.approx
+//   28 div.full
+//   29 sqrt.rn
+//   30 rcp.rn
+//   31 ex2.approx
+//   32 ex2.approx.ftz
+//   33 lg2.approx
+//   34 rsqrt.approx
+//   35 sqrt.approx
+//   36 rcp.approx
+//   37 sin.approx
+//   38 cos.approx
+//   39 tanh.approx
+//   40 cvt.rni.s32
+//   41 cvt.rzi.u32
+//   42 cvt.rmi.s32
+//   43 cvt.rn.f32.s32
+//   44 cvt.rz.f32.u32
+//   45 cvt.f16
+//   46 cvt.bf16x2
+//   47 cvt.f16x2.relu
+//   48 copysign
+.version 9.0
+.target sm_90a
+.address_size 64
+
+.visible .entry f32ops(.param .u64 out, .param .u64 in)
+{
+  .reg .pred p;
+  .reg .f32 a, b, c, r;
+  .reg .b32 ia, ir, t;
+  .reg .b16 h;
+  .reg .b64 o, x, rd;
+  ld.param.u64 o, [out];
+  ld.param.u64 x, [in];
+  cvta.to.global.u64 o, o;
+  cvta.to.global.u64 x, x;
+  mov.u32 t, %tid.x;
+  mul.wide.u32 rd, t, 12;
+  add.s64 x, x, rd;
+  ld.global.f32 a, [x];
+  ld.global.f32 b, [x+4];
+  ld.global.f32 c, [x+8];
+  mov.b32 ia, a;
+  mul.wide.u32 rd, t, 196;
+  add.s64 o, o, rd;
+  add.rn.f32 r, a, b;
+  st.global.f32 [o+0], r;
+  add.rz.f32 r, a, b;
+  st.global.f32 [o+4], r;
+  add.rm.f32 r, a, b;
+  st.global.f32 [o+8], r;
+  add.rp.f32 r, a, b;
+  st.global.f32 [o+12], r;
+  add.rn.ftz.f32 r, a, b;
+  st.global.f32 [o+16], r;
+  sub.rn.f32 r, a, b;
+  st.global.f32 [o+20], r;
+  mul.rn.f32 r, a, b;
+  st.global.f32 [o+24], r;
+  mul.rz.f32 r, a, b;
+  st.global.f32 [o+28], r;
+  mul.rm.f32 r, a, b;
+  st.global.f32 [o+32], r;
+  mul.rp.f32 r, a, b;
+  st.global.f32 [o+36], r;
+  mul.rn.ftz.f32 r, a, b;
+  st.global.f32 [o+40], r;
+  mul.rn.sat.f32 r, a, b;
+  st.global.f32 [o+44], r;
+  fma.rn.f32 r, a, b, c;
+  st.global.f32 [o+48], r;
+  fma.rz.f32 r, a, b, c;
+  st.global.f32 [o+52], r;
+  fma.rm.f32 r, a, b, c;
+  st.global.f32 [o+56], r;
+  fma.rp.f32 r, a, b, c;
+  st.global.f32 [o+60], r;
+  fma.rn.ftz.f32 r, a, b, c;
+  st.global.f32 [o+64], r;
+  min.f32 r, a, b;
+  st.global.f32 [o+68], r;
+  max.f32 r, a, b;
+  st.global.f32 [o+72], r;
+  min.NaN.f32 r, a, b;
+  st.global.f32 [o+76], r;
+  abs.f32 r, a;
+  st.global.f32 [o+80], r;
+  neg.f32 r, a;
+  st.global.f32 [o+84], r;
+  setp.lt.f32 p, a, b; selp.f32 r, 0f00000001, 0f00000000, p;
+  st.global.f32 [o+88], r;
+  setp.geu.f32 p, a, b; selp.f32 r, 0f00000001, 0f00000000, p;
+  st.global.f32 [o+92], r;
+  setp.equ.f32 p, a, b; selp.f32 r, 0f00000001, 0f00000000, p;
+  st.global.f32 [o+96], r;
+  setp.nan.f32 p, a, b; selp.f32 r, 0f00000001, 0f00000000, p;
+  st.global.f32 [o+100], r;
+  div.rn.f32 r, a, b;
+  st.global.f32 [o+104], r;
+  div.approx.f32 r, a, b;
+  st.global.f32 [o+108], r;
+  div.full.f32 r, a, b;
+  st.global.f32 [o+112], r;
+  sqrt.rn.f32 r, a;
+  st.global.f32 [o+116], r;
+  rcp.rn.f32 r, a;
+  st.global.f32 [o+120], r;
+  ex2.approx.f32 r, a;
+  st.global.f32 [o+124], r;
+  ex2.approx.ftz.f32 r, a;
+  st.global.f32 [o+128], r;
+  lg2.approx.f32 r, a;
+  st.global.f32 [o+132], r;
+  rsqrt.approx.f32 r, a;
+  st.global.f32 [o+136], r;
+  sqrt.approx.f32 r, a;
+  st.global.f32 [o+140], r;
+  rcp.approx.f32 r, a;
+  st.global.f32 [o+144], r;
+  sin.approx.f32 r, a;
+  st.global.f32 [o+148], r;
+  cos.approx.f32 r, a;
+  st.global.f32 [o+152], r;
+  tanh.approx.f32 r, a;
+  st.global.f32 [o+156], r;
+  cvt.rni.s32.f32 ir, a;
+  st.global.b32 [o+160], ir;
+  cvt.rzi.u32.f32 ir, a;
+  st.global.b32 [o+164], ir;
+  cvt.rmi.s32.f32 ir, a;
+  st.global.b32 [o+168], ir;
+  cvt.rn.f32.s32 r, ia;
+  st.global.f32 [o+172], r;
+  cvt.rz.f32.u32 r, ia;
+  st.global.f32 [o+176], r;
+  cvt.rn.f16.f32 h, a; cvt.f32.f16 r, h;
+  st.global.f32 [o+180], r;
+  cvt.rn.bf16x2.f32 ir, a, b;
+  st.global.b32 [o+184], ir;
+  cvt.rn.relu.f16x2.f32 ir, a, b;
+  st.global.b32 [o+188], ir;
+  copysign.f32 r, a, b;
+  st.global.f32 [o+192], r;
+  ret;
+}

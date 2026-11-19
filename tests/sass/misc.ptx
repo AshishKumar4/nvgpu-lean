@@ -1,0 +1,102 @@
+.version 9.0
+.target sm_90a
+.address_size 64
+
+// mbarrier spin loop then a shared load, with fence.proxy.async.
+.visible .entry spin(.param .u64 out)
+{
+  .reg .pred p;
+  .reg .b32 r<6>;
+  .reg .b64 rd<6>;
+  .shared .align 8 .b64 bar;
+  .shared .align 4 .b32 sm[256];
+  ld.param.u64 rd1, [out];
+  cvta.to.global.u64 rd1, rd1;
+  mov.u32 r1, %tid.x;
+  mov.u32 r2, bar;
+  mbarrier.init.shared::cta.b64 [r2], 1;
+  fence.proxy.async.shared::cta;
+  bar.sync 0;
+WAIT:
+  mbarrier.try_wait.parity.shared::cta.b64 p, [r2], 0;
+  @!p bra WAIT;
+  mov.u32 r3, sm;
+  shl.b32 r4, r1, 2;
+  add.u32 r3, r3, r4;
+  ld.shared.u32 r5, [r3];
+  mul.wide.u32 rd2, r1, 4;
+  add.s64 rd3, rd1, rd2;
+  st.global.u32 [rd3], r5;
+  ret;
+}
+
+// FP8 mma.sync on sm_90a.
+.visible .entry fp8mma(.param .u64 out)
+{
+  .reg .b32 a<4>;
+  .reg .b32 b<2>;
+  .reg .f32 c<4>;
+  .reg .b32 r1;
+  .reg .b64 rd<4>;
+  ld.param.u64 rd1, [out];
+  cvta.to.global.u64 rd1, rd1;
+  mov.u32 r1, %tid.x;
+  mov.b32 a0, r1; add.u32 a1, r1, 1; add.u32 a2, r1, 2; add.u32 a3, r1, 3;
+  add.u32 b0, r1, 4; add.u32 b1, r1, 5;
+  mov.f32 c0, 0f00000000; mov.f32 c1, 0f00000000; mov.f32 c2, 0f00000000; mov.f32 c3, 0f00000000;
+  mma.sync.aligned.m16n8k32.row.col.f32.e4m3.e4m3.f32 {c0,c1,c2,c3}, {a0,a1,a2,a3}, {b0,b1}, {c0,c1,c2,c3};
+  mul.wide.u32 rd2, r1, 16;
+  add.s64 rd3, rd1, rd2;
+  st.global.v4.f32 [rd3], {c0,c1,c2,c3};
+  ret;
+}
+
+// A chain of dependent bf16 mma.sync: waits longer than 15 cycles.
+.visible .entry hmma_chain(.param .u64 out)
+{
+  .reg .b32 a<4>;
+  .reg .b32 b<2>;
+  .reg .f32 c<4>;
+  .reg .b32 r1;
+  .reg .b64 rd<4>;
+  ld.param.u64 rd1, [out];
+  cvta.to.global.u64 rd1, rd1;
+  mov.u32 r1, %tid.x;
+  mov.b32 a0, r1; add.u32 a1, r1, 1; add.u32 a2, r1, 2; add.u32 a3, r1, 3;
+  add.u32 b0, r1, 4; add.u32 b1, r1, 5;
+  mov.f32 c0, 0f00000000; mov.f32 c1, 0f00000000; mov.f32 c2, 0f00000000; mov.f32 c3, 0f00000000;
+  mma.sync.aligned.m16n8k16.row.col.f32.bf16.bf16.f32 {c0,c1,c2,c3}, {a0,a1,a2,a3}, {b0,b1}, {c0,c1,c2,c3};
+  mma.sync.aligned.m16n8k16.row.col.f32.bf16.bf16.f32 {c0,c1,c2,c3}, {a0,a1,a2,a3}, {b0,b1}, {c0,c1,c2,c3};
+  mma.sync.aligned.m16n8k16.row.col.f32.bf16.bf16.f32 {c0,c1,c2,c3}, {a0,a1,a2,a3}, {b0,b1}, {c0,c1,c2,c3};
+  mul.wide.u32 rd2, r1, 16;
+  add.s64 rd3, rd1, rd2;
+  st.global.v4.f32 [rd3], {c0,c1,c2,c3};
+  ret;
+}
+
+// Cluster launch attributes.
+.visible .entry clus(.param .u64 out) .reqntid 128, 1, 1 .reqnctapercluster 2, 1, 1
+{
+  .reg .b32 r<3>;
+  .reg .b64 rd<4>;
+  ld.param.u64 rd1, [out];
+  cvta.to.global.u64 rd1, rd1;
+  mov.u32 r1, %cluster_ctarank;
+  mov.u32 r2, %tid.x;
+  mul.wide.u32 rd2, r2, 4;
+  add.s64 rd3, rd1, rd2;
+  st.global.u32 [rd3], r1;
+  ret;
+}
+
+// Fence instructions and scopes.
+.visible .entry scopes(.param .u64 g)
+{
+  .reg .b32 r<3>;
+  .reg .b64 rd<3>;
+  ld.param.u64 rd1, [g];
+  cvta.to.global.u64 rd1, rd1;
+  ld.acquire.gpu.global.u32 r1, [rd1];
+  red.release.gpu.global.add.u32 [rd1+4], r1;
+  ret;
+}

@@ -1,0 +1,30 @@
+// FP8 mma.sync, compared between the PTX interpreter and the SASS simulator (Tests/SassDiff.lean)
+// (Matrix.loweredF8 on sm_90a). Each thread loads its A, B, C
+// fragment words from in[16t..16t+15] and stores D to out[16t + k]:
+//   0-3   m16n8k32 e4m3 x e4m3 + f32          4-7   m16n8k32 e5m2 x e4m3 + f32
+.version 9.0
+.target sm_90a
+.address_size 64
+
+.visible .entry mmas8(.param .u64 out, .param .u64 in)
+{
+  .reg .b32 a<4>, b<2>, c<4>, t;
+  .reg .f32 d<4>;
+  .reg .b64 o, x, rd;
+  ld.param.u64 o, [out];
+  ld.param.u64 x, [in];
+  cvta.to.global.u64 o, o;
+  cvta.to.global.u64 x, x;
+  mov.u32 t, %laneid;
+  mul.wide.u32 rd, t, 64;
+  add.s64 x, x, rd;
+  add.s64 o, o, rd;
+  ld.global.v4.b32 {a0, a1, a2, a3}, [x];
+  ld.global.v2.b32 {b0, b1}, [x+16];
+  ld.global.v4.b32 {c0, c1, c2, c3}, [x+32];
+  mma.sync.aligned.m16n8k32.row.col.f32.e4m3.e4m3.f32 {d0, d1, d2, d3}, {a0, a1, a2, a3}, {b0, b1}, {c0, c1, c2, c3};
+  st.global.v4.f32 [o], {d0, d1, d2, d3};
+  mma.sync.aligned.m16n8k32.row.col.f32.e5m2.e4m3.f32 {d0, d1, d2, d3}, {a0, a1, a2, a3}, {b0, b1}, {c0, c1, c2, c3};
+  st.global.v4.f32 [o+16], {d0, d1, d2, d3};
+  ret;
+}

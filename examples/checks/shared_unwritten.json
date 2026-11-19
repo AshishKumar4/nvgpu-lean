@@ -1,0 +1,3 @@
+{ "code": "checks.cu", "function": "shared_unwritten", "grid": [1], "block": [64],
+  "buffers": [ { "name": "out", "bytes": 256 } ],
+  "params": [ { "ordinal": 0, "ptr": "out" } ] }

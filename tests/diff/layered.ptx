@@ -1,0 +1,43 @@
+// Layered texture and surface objects, compared between the PTX interpreter and the SASS
+// simulator (Tests/SassDiff.lean).
+.version 9.0
+.target sm_90a
+.address_size 64
+
+// Layered objects: thread t fetches from layer t % 3 of a layered 2D texture (linear filtering
+// within the layer) and of a layered 1D one, and loads, then stores, through a layered 2D surface.
+.visible .entry layered(.param .u64 out, .param .u64 in, .param .u64 tex, .param .u64 tex1, .param .u64 surf)
+{
+  .reg .b32 t, a, b, k, r0, r1, r2, r3, v0, v1;
+  .reg .f32 x, y, fa, fb;
+  .reg .b64 o, h, h1, s, d;
+  ld.param.u64 o, [out];
+  ld.param.u64 h, [tex];
+  ld.param.u64 h1, [tex1];
+  ld.param.u64 s, [surf];
+  cvta.to.global.u64 o, o;
+  mov.u32 t, %tid.x;
+  rem.u32 a, t, 8;
+  div.u32 b, t, 8;
+  rem.u32 k, t, 3;
+  cvt.rn.f32.u32 fa, a;
+  cvt.rn.f32.u32 fb, b;
+  fma.rn.f32 x, fa, 0f3F900000, 0fBF000000;
+  fma.rn.f32 y, fb, 0f3F400000, 0f3E800000;
+  mul.wide.u32 d, t, 48;
+  add.s64 o, o, d;
+  tex.a2d.v4.f32.f32 {r0, r1, r2, r3}, [h, {k, x, y, y}];
+  st.global.v4.b32 [o], {r0, r1, r2, r3};
+  tex.a1d.v4.f32.f32 {r0, r1, r2, r3}, [h1, {k, x}];
+  st.global.v4.b32 [o+16], {r0, r1, r2, r3};
+  shl.b32 a, a, 3;
+  rem.u32 b, b, 4;
+  suld.b.a2d.v2.b32.trap {v0, v1}, [s, {k, a, b, b}];
+  st.global.v2.b32 [o+32], {v0, v1};
+  bar.sync 0;
+  sust.b.a2d.v2.b32.trap [s, {k, a, b, b}], {v1, v0};
+  bar.sync 0;
+  suld.b.a2d.v2.b32.trap {v0, v1}, [s, {k, a, b, b}];
+  st.global.v2.b32 [o+40], {v0, v1};
+  ret;
+}

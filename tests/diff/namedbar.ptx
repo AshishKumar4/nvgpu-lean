@@ -1,0 +1,114 @@
+// Named barriers whose id and count are registers (`bar.sync %r, 128`):
+// warps 0 and 3 meet at barrier 1, warps 1 and 2 at barrier 2 (64 threads each). Warps 2 and 3
+// count for a while (a sum of loaded words), write their lanes' words to their
+// pair's shared slot and arrive; warps 0 and 1 sync and read their pair's slot. With the
+// barriers kept apart every reader sees its writer's words; merged, the two readers' arrivals
+// complete the barrier before either writer has written, whatever order the warps run in.
+.version 8.8
+.target sm_90a
+.address_size 64
+
+.visible .entry namedbar(.param .u64 out, .param .u64 in)
+{
+  .shared .align 4 .b32 s[64];
+  .reg .pred p, q, a3;
+  .reg .b32 t, w, lane, id, cnt, i, n, v, a, base;
+  .reg .b64 o, e, ip, ia;
+  ld.param.u64 o, [out];
+  cvta.to.global.u64 o, o;
+  ld.param.u64 ip, [in];
+  cvta.to.global.u64 ip, ip;
+  mov.u32 t, %tid.x;
+  shr.u32 w, t, 5;
+  and.b32 lane, t, 31;
+  // The pair's barrier: 1 for warps 0 and 3, 2 for warps 1 and 2.
+  setp.eq.u32 p, w, 0;
+  setp.eq.u32 a3, w, 3;
+  or.pred p, p, a3;
+  selp.u32 id, 1, 2, p;
+  mov.u32 cnt, 64;
+  mov.u32 base, s;
+  // The pair's slot: 32 words at (id - 1) * 128 bytes.
+  sub.u32 a, id, 1;
+  shl.b32 a, a, 7;
+  shl.b32 v, lane, 2;
+  add.u32 a, a, v;
+  add.u32 a, a, base;
+  mul.wide.u32 e, t, 4;
+  add.s64 e, o, e;
+  setp.lt.u32 q, w, 2;
+  @q bra reader;
+  mov.u32 n, 0;
+  mov.u32 i, 0;
+spin:
+  and.b32 v, i, 3;
+  mul.wide.u32 ia, v, 4;
+  add.s64 ia, ip, ia;
+  ld.global.u32 v, [ia];
+  add.u32 n, n, v;
+  add.u32 i, i, 1;
+  setp.lt.u32 p, i, 500;
+  @p bra spin;
+  add.u32 v, t, n;
+  st.shared.u32 [a], v;
+  bar.arrive id, cnt;
+  st.global.u32 [e], n;
+  ret;
+reader:
+  bar.sync id, cnt;
+  ld.shared.u32 v, [a];
+  st.global.u32 [e], v;
+  ret;
+}
+
+// A predicated-off arrival does not count: warp 1's `@p bar.arrive 1, 64` has p false at run time
+// (an input word that is never 12345), so warp 2's `bar.sync 1, 64` waits for warp 0, which counts
+// for a while, writes its lanes' words and arrives. Counted, warp 1's arrival would let warp 2 read
+// before the write.
+.visible .entry predbar(.param .u64 out, .param .u64 in) {
+  .shared .align 4 .b32 s[32];
+  .reg .pred p, q;
+  .reg .b32 t, w, lane, i, n, v, a, base;
+  .reg .b64 o, e, ip, ia;
+  ld.param.u64 o, [out]; cvta.to.global.u64 o, o;
+  ld.param.u64 ip, [in]; cvta.to.global.u64 ip, ip;
+  mov.u32 t, %tid.x;
+  shr.u32 w, t, 5;
+  and.b32 lane, t, 31;
+  mov.u32 base, s;
+  shl.b32 a, lane, 2;
+  add.u32 a, a, base;
+  mul.wide.u32 e, t, 4;
+  add.s64 e, o, e;
+  setp.eq.u32 q, w, 1;
+  @q bra skipper;
+  setp.eq.u32 q, w, 2;
+  @q bra reader;
+  mov.u32 n, 0;
+  mov.u32 i, 0;
+spin:
+  and.b32 v, i, 3;
+  mul.wide.u32 ia, v, 4;
+  add.s64 ia, ip, ia;
+  ld.global.u32 v, [ia];
+  add.u32 n, n, v;
+  add.u32 i, i, 1;
+  setp.lt.u32 q, i, 500;
+  @q bra spin;
+  add.u32 v, t, n;
+  st.shared.u32 [a], v;
+  bar.arrive 1, 64;
+  st.global.u32 [e], n;
+  ret;
+skipper:
+  ld.global.u32 v, [ip];
+  setp.eq.u32 p, v, 12345;
+  @p bar.arrive 1, 64;
+  st.global.u32 [e], v;
+  ret;
+reader:
+  bar.sync 1, 64;
+  ld.shared.u32 v, [a];
+  st.global.u32 [e], v;
+  ret;
+}

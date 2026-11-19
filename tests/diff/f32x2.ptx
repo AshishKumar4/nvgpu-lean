@@ -1,0 +1,45 @@
+// Packed binary32 pairs (sm_100a, PTX `.f32x2`): each thread adds, multiplies and fuses three pairs
+// of edge values under each rounding, with flushing, with a source's halves swapped and with one
+// value for both halves, so FADD2/FMUL2/FFMA2 meet `.F32x2.HI_LO`, `.LO_HI` and `.F32` sources; and
+// with negated sources and a constant (`-R` and immediate operands).
+.version 8.8
+.target sm_100a
+.address_size 64
+
+.visible .entry f32x2(.param .u64 out, .param .u64 in, .param .f32 s) {
+  .reg .b32 t, s0, s1, k;
+  .reg .b64 o, a, off, x, y, z, w, v, c, n, d<14>;
+  ld.param.u64 o, [out]; ld.param.u64 a, [in]; ld.param.f32 k, [s];
+  cvta.to.global.u64 o, o; cvta.to.global.u64 a, a;
+  mov.u32 t, %tid.x;
+  mul.wide.u32 off, t, 24;
+  add.s64 a, a, off;
+  ld.global.b64 x, [a]; ld.global.b64 y, [a+8]; ld.global.b64 z, [a+16];
+  mul.wide.u32 off, t, 112;
+  add.s64 o, o, off;
+  add.rn.f32x2 d0, x, y;
+  mul.rn.f32x2 d1, x, y;
+  fma.rn.f32x2 d2, x, y, z;
+  add.rz.f32x2 d3, x, y;
+  mul.rm.f32x2 d4, x, y;
+  fma.rp.ftz.f32x2 d5, x, y, z;
+  add.rn.ftz.f32x2 d6, x, y;
+  mov.b64 {s0, s1}, x; mov.b64 w, {s1, s0};
+  mul.rn.f32x2 d7, w, y;
+  mov.b64 v, {k, k};
+  add.rn.f32x2 d8, x, v;
+  fma.rn.f32x2 d9, x, v, z;
+  mov.b64 c, 0x3E0293EE3E0293EE;
+  mov.b64 n, 0x8000000080000000;
+  xor.b64 n, z, n;
+  fma.rn.f32x2 d10, x, c, n;
+  sub.rn.f32x2 d11, x, y;
+  mul.rn.f32x2 d12, x, c;
+  sub.rn.f32x2 d13, x, v;
+  st.global.b64 [o], d0; st.global.b64 [o+8], d1; st.global.b64 [o+16], d2;
+  st.global.b64 [o+24], d3; st.global.b64 [o+32], d4; st.global.b64 [o+40], d5;
+  st.global.b64 [o+48], d6; st.global.b64 [o+56], d7; st.global.b64 [o+64], d8;
+  st.global.b64 [o+72], d9; st.global.b64 [o+80], d10; st.global.b64 [o+88], d11;
+  st.global.b64 [o+96], d12; st.global.b64 [o+104], d13;
+  ret;
+}

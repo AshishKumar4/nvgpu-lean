@@ -1,0 +1,47 @@
+// CTA barrier reductions and warp reductions, compared word by word between the PTX interpreter
+// and the SASS simulator (Tests/SassDiff.lean). in[t] = a; out[8t + k]:
+//   0 bar.red.popc of (a odd)  1 bar.red.and of (a != 0)  2 bar.red.or of (a > 0xf0000000)
+//   3 redux.sync.and  4 redux.sync.or  5 redux.sync.add  6 redux.sync.min.u32  7 redux.sync.max.s32
+.version 9.0
+.target sm_90a
+.address_size 64
+
+.visible .entry barred(.param .u64 out, .param .u64 in)
+{
+  .reg .pred p, q;
+  .reg .b32 a, r, t;
+  .reg .b64 o, x, rd;
+  ld.param.u64 o, [out];
+  ld.param.u64 x, [in];
+  cvta.to.global.u64 o, o;
+  cvta.to.global.u64 x, x;
+  mov.u32 t, %tid.x;
+  mul.wide.u32 rd, t, 4;
+  add.s64 x, x, rd;
+  ld.global.b32 a, [x];
+  mul.wide.u32 rd, t, 32;
+  add.s64 o, o, rd;
+  and.b32 r, a, 1;
+  setp.ne.u32 p, r, 0;
+  bar.red.popc.u32 r, 0, p;
+  st.global.u32 [o], r;
+  setp.ne.u32 p, a, 0;
+  bar.red.and.pred q, 1, p;
+  selp.u32 r, 1, 0, q;
+  st.global.u32 [o+4], r;
+  setp.gt.u32 p, a, 0xf0000000;
+  bar.red.or.pred q, 2, 64, p;
+  selp.u32 r, 1, 0, q;
+  st.global.u32 [o+8], r;
+  redux.sync.and.b32 r, a, 0xffffffff;
+  st.global.u32 [o+12], r;
+  redux.sync.or.b32 r, a, 0xffffffff;
+  st.global.u32 [o+16], r;
+  redux.sync.add.u32 r, a, 0xffffffff;
+  st.global.u32 [o+20], r;
+  redux.sync.min.u32 r, a, 0xffffffff;
+  st.global.u32 [o+24], r;
+  redux.sync.max.s32 r, a, 0xffffffff;
+  st.global.u32 [o+28], r;
+  ret;
+}

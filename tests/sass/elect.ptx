@@ -1,0 +1,86 @@
+.version 9.0
+.target sm_90a
+.address_size 64
+
+// Copy issued by lane-0 threads (a %tid-derived guard), size read in both arms of a %tid branch.
+.visible .entry bulk_lane0_phi(.param .u64 src)
+{
+  .reg .pred p, pl;
+  .reg .b32 r<10>;
+  .reg .b64 rd<4>;
+  .shared .align 128 .b8 buf[4096];
+  .shared .align 8 .b64 bar;
+  ld.param.u64 rd1, [src];
+  mov.u32 r1, %tid.x;
+  setp.eq.u32 p, r1, 64;
+  @p bra A;
+  mov.u32 r2, %nctaid.x;
+  bra.uni J;
+A:
+  mov.u32 r2, %nctaid.x;
+  st.shared.u32 [buf], r1;
+J:
+  shl.b32 r3, r2, 4;
+  mov.u32 r4, buf;
+  mov.u32 r5, bar;
+  and.b32 r6, r1, 31;
+  setp.eq.u32 pl, r6, 0;
+  @pl cp.async.bulk.shared::cluster.global.mbarrier::complete_tx::bytes [r4], [rd1], r3, [r5];
+  ret;
+}
+
+// The same guard, with the size from a kernel-parameter branch.
+.visible .entry bulk_lane0_param(.param .u64 src, .param .u32 k)
+{
+  .reg .pred p, pl;
+  .reg .b32 r<10>;
+  .reg .b64 rd<4>;
+  .shared .align 128 .b8 buf[4096];
+  .shared .align 8 .b64 bar;
+  ld.param.u64 rd1, [src];
+  ld.param.u32 r7, [k];
+  mov.u32 r1, %tid.x;
+  setp.eq.u32 p, r7, 64;
+  @p bra A;
+  mov.u32 r2, %nctaid.x;
+  bra.uni J;
+A:
+  mov.u32 r2, %nctaid.x;
+  st.shared.u32 [buf], r1;
+J:
+  shl.b32 r3, r2, 4;
+  mov.u32 r4, buf;
+  mov.u32 r5, bar;
+  and.b32 r6, r1, 31;
+  setp.eq.u32 pl, r6, 0;
+  @pl cp.async.bulk.shared::cluster.global.mbarrier::complete_tx::bytes [r4], [rd1], r3, [r5];
+  ret;
+}
+
+// Size from a shfl.sync of the %tid branch's value: uniform again.
+.visible .entry bulk_lane0_shfl(.param .u64 src)
+{
+  .reg .pred p, pl;
+  .reg .b32 r<10>;
+  .reg .b64 rd<4>;
+  .shared .align 128 .b8 buf[4096];
+  .shared .align 8 .b64 bar;
+  ld.param.u64 rd1, [src];
+  mov.u32 r1, %tid.x;
+  setp.eq.u32 p, r1, 64;
+  @p bra A;
+  mov.u32 r2, %nctaid.x;
+  bra.uni J;
+A:
+  mov.u32 r2, %nctaid.x;
+  st.shared.u32 [buf], r1;
+J:
+  shfl.sync.idx.b32 r8, r2, 0, 31, -1;
+  shl.b32 r3, r8, 4;
+  mov.u32 r4, buf;
+  mov.u32 r5, bar;
+  and.b32 r6, r1, 31;
+  setp.eq.u32 pl, r6, 0;
+  @pl cp.async.bulk.shared::cluster.global.mbarrier::complete_tx::bytes [r4], [rd1], r3, [r5];
+  ret;
+}

@@ -1,0 +1,51 @@
+// A TMA load in .tile::gather4 mode (SASS UTMALDG.2D.GATHER4): four rows of a 16 x 16 f32 tensor
+// (buffer 1, map parameter 2: a box of 16 columns by one row, 128-byte swizzled), rows 9, 2, 14 and
+// 5 from column 0, as one tile (four rows 128 bytes apart, the swizzle's span), compared between
+// the PTX interpreter and the SASS simulator (Tests/SassDiff.lean); then thread t writes the
+// tile's words t, t + 32, t + 64 and t + 96 to the same places of out.
+.version 9.0
+.target sm_100a
+.address_size 64
+
+.visible .entry gather4(.param .u64 out, .param .u64 in, .param .align 64 .b8 map[128])
+{
+  .shared .align 8 .b64 bar;
+  .shared .align 1024 .b32 tile[128];
+  .reg .pred p, q;
+  .reg .b32 t, ma, ta, o, x, c, r0, r1, r2, r3;
+  .reg .b64 d, rd, ob, mp, st;
+  ld.param.u64 ob, [out];
+  cvta.to.global.u64 ob, ob;
+  mov.u64 mp, map;
+  cvta.param.u64 mp, mp;
+  mov.u32 t, %tid.x;
+  mov.u32 ma, bar;
+  mov.u32 ta, tile;
+  setp.eq.u32 p, t, 0;
+  @p mbarrier.init.shared::cta.b64 [ma], 1;
+  fence.mbarrier_init.release.cluster;
+  bar.sync 0;
+  mov.u32 c, 0;
+  mov.u32 r0, 9;
+  mov.u32 r1, 2;
+  mov.u32 r2, 14;
+  mov.u32 r3, 5;
+  @p mbarrier.arrive.expect_tx.shared::cta.b64 st, [ma], 256;
+  @p cp.async.bulk.tensor.2d.shared::cta.global.tile::gather4.mbarrier::complete_tx::bytes [ta], [mp, {c, r0, r1, r2, r3}], [ma];
+wait:
+  mbarrier.try_wait.parity.acquire.cta.shared::cta.b64 q, [ma], 0;
+  @!q bra wait;
+  shl.b32 o, t, 2;
+  add.u32 o, ta, o;
+  ld.shared.u32 x, [o];
+  mul.wide.u32 d, t, 4;
+  add.s64 rd, ob, d;
+  st.global.u32 [rd], x;
+  ld.shared.u32 x, [o+128];
+  st.global.u32 [rd+128], x;
+  ld.shared.u32 x, [o+256];
+  st.global.u32 [rd+256], x;
+  ld.shared.u32 x, [o+384];
+  st.global.u32 [rd+384], x;
+  ret;
+}

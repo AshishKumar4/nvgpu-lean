@@ -1,0 +1,96 @@
+// Rounding to integral, packed comparisons, set, dot products, saturating narrowing, bit field
+// and byte operations, compared word by word between the PTX interpreter and the SASS simulator
+// (Tests/SassDiff.lean). in[3t..3t+2] = a, b, c (as f32, f16x2 or integer words); out[16t + k]:
+//   0 cvt.rni.f32.f32  1 cvt.rzi.f32.f32  2 cvt.rmi.f32.f32  3 cvt.rpi.f32.f32
+//   4 setp.lt.f16x2 (both halves)  5 set.lt.u32.f32  6 dp4a.s32.s32  7 dp2a.lo.u32.u32
+//   8 cvt.sat.s8.s32  9 cvt.u16.u32  10 testp.normal.f32  11 mul24.lo.s32
+//   12 sad.u32  13 bfe.s32  14 abs.s16x2? (vabsdiff4)  15 fns.b32
+.version 9.0
+.target sm_90a
+.address_size 64
+
+.visible .entry misc(.param .u64 out, .param .u64 in)
+{
+  .reg .pred p, q;
+  .reg .b32 a, b, c, r, t;
+  .reg .f32 fa, fb, fr;
+  .reg .b16 h;
+  .reg .b64 o, x, rd;
+  ld.param.u64 o, [out];
+  ld.param.u64 x, [in];
+  cvta.to.global.u64 o, o;
+  cvta.to.global.u64 x, x;
+  mov.u32 t, %tid.x;
+  mul.wide.u32 rd, t, 12;
+  add.s64 x, x, rd;
+  ld.global.b32 a, [x];
+  ld.global.b32 b, [x+4];
+  ld.global.b32 c, [x+8];
+  mov.b32 fa, a;
+  mov.b32 fb, b;
+  mul.wide.u32 rd, t, 64;
+  add.s64 o, o, rd;
+  cvt.rni.f32.f32 fr, fa;
+  st.global.f32 [o], fr;
+  cvt.rzi.f32.f32 fr, fa;
+  st.global.f32 [o+4], fr;
+  cvt.rmi.f32.f32 fr, fa;
+  st.global.f32 [o+8], fr;
+  cvt.rpi.f32.f32 fr, fa;
+  st.global.f32 [o+12], fr;
+  setp.lt.f16x2 p|q, a, b;
+  selp.u32 r, 1, 0, p;
+  selp.u32 t, 2, 0, q;
+  or.b32 r, r, t;
+  st.global.b32 [o+16], r;
+  set.lt.u32.f32 r, fa, fb;
+  st.global.b32 [o+20], r;
+  dp4a.s32.s32 r, a, b, c;
+  st.global.b32 [o+24], r;
+  dp2a.lo.u32.u32 r, a, b, c;
+  st.global.b32 [o+28], r;
+  cvt.sat.s8.s32 r, a;
+  st.global.b32 [o+32], r;
+  cvt.u16.u32 h, a;
+  cvt.u32.u16 r, h;
+  st.global.b32 [o+36], r;
+  testp.normal.f32 p, fa;
+  selp.u32 r, 1, 0, p;
+  st.global.b32 [o+40], r;
+  mul24.lo.s32 r, a, b;
+  st.global.b32 [o+44], r;
+  sad.u32 r, a, b, c;
+  st.global.b32 [o+48], r;
+  and.b32 t, c, 31;
+  bfe.s32 r, a, t, 7;
+  st.global.b32 [o+52], r;
+  vabsdiff4.u32.u32.u32 r, a, b, c;
+  st.global.b32 [o+56], r;
+  fns.b32 r, a, 0, 3;
+  st.global.b32 [o+60], r;
+  ret;
+}
+
+// Sums of absolute differences (stereoDisparity's __vsadu4): in[3t..3t+2] = a, b, c;
+// out[2t] = vabsdiff4.add a, b, c, out[2t + 1] = vabsdiff2.add a, b, c.
+.visible .entry sad4(.param .u64 out, .param .u64 in)
+{
+  .reg .b32 t, a, b, c, r, s;
+  .reg .b64 o, x, rd, ro;
+  ld.param.u64 o, [out];
+  ld.param.u64 x, [in];
+  cvta.to.global.u64 o, o;
+  cvta.to.global.u64 x, x;
+  mov.u32 t, %tid.x;
+  mul.wide.u32 rd, t, 12;
+  add.s64 x, x, rd;
+  ld.global.u32 a, [x];
+  ld.global.u32 b, [x+4];
+  ld.global.u32 c, [x+8];
+  vabsdiff4.u32.u32.u32.add r, a, b, c;
+  vabsdiff2.u32.u32.u32.add s, a, b, c;
+  mul.wide.u32 ro, t, 8;
+  add.s64 o, o, ro;
+  st.global.v2.u32 [o], {r, s};
+  ret;
+}

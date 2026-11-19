@@ -1,0 +1,23 @@
+// Independent reads of independent writes with acquire loads: not multi-copy atomic.
+.global x;
+.global y;
+
+d0.b0.t0 {
+  st.relaxed.gpu [x], 1;
+}
+
+d0.b1.t0 {
+  st.relaxed.gpu [y], 1;
+}
+
+d0.b2.t0 {
+  ld.acquire.gpu r0, [x];
+  ld.acquire.gpu r1, [y];
+}
+
+d0.b3.t0 {
+  ld.acquire.gpu r2, [y];
+  ld.acquire.gpu r3, [x];
+}
+
+permit (r0 == 1 && r1 == 0 && r2 == 1 && r3 == 0) as iriw;

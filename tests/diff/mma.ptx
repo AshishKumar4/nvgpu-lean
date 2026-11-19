@@ -1,0 +1,37 @@
+// mma.sync forms, compared word by word between the PTX interpreter and the SASS simulator
+// (Tests/SassDiff.lean). Each thread loads its A, B, C fragment words from in[16t..16t+15] and
+// stores D to out[16t + k]:
+//   0-3   m16n8k16 bf16 x bf16 + f32          4-7   m16n8k16 f16 x f16 + f32
+//   8-9   m16n8k16 f16 x f16 + f16            12-15 m16n8k8 tf32 x tf32 + f32
+//   10-11 unused (zero)
+.version 9.0
+.target sm_90a
+.address_size 64
+
+.visible .entry mmas(.param .u64 out, .param .u64 in)
+{
+  .reg .b32 a<4>, b<2>, c<4>, t;
+  .reg .f32 d<4>;
+  .reg .b32 h<2>;
+  .reg .b64 o, x, rd;
+  ld.param.u64 o, [out];
+  ld.param.u64 x, [in];
+  cvta.to.global.u64 o, o;
+  cvta.to.global.u64 x, x;
+  mov.u32 t, %laneid;
+  mul.wide.u32 rd, t, 64;
+  add.s64 x, x, rd;
+  add.s64 o, o, rd;
+  ld.global.v4.b32 {a0, a1, a2, a3}, [x];
+  ld.global.v2.b32 {b0, b1}, [x+16];
+  ld.global.v4.b32 {c0, c1, c2, c3}, [x+32];
+  mma.sync.aligned.m16n8k16.row.col.f32.bf16.bf16.f32 {d0, d1, d2, d3}, {a0, a1, a2, a3}, {b0, b1}, {c0, c1, c2, c3};
+  st.global.v4.f32 [o], {d0, d1, d2, d3};
+  mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32 {d0, d1, d2, d3}, {a0, a1, a2, a3}, {b0, b1}, {c0, c1, c2, c3};
+  st.global.v4.f32 [o+16], {d0, d1, d2, d3};
+  mma.sync.aligned.m16n8k16.row.col.f16.f16.f16.f16 {h0, h1}, {a0, a1, a2, a3}, {b0, b1}, {c0, c1};
+  st.global.v2.b32 [o+32], {h0, h1};
+  mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32 {d0, d1, d2, d3}, {a0, a1, a2, a3}, {b0, b1}, {c0, c1, c2, c3};
+  st.global.v4.f32 [o+48], {d0, d1, d2, d3};
+  ret;
+}

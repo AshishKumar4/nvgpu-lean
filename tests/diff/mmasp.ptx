@@ -1,0 +1,40 @@
+// Sparse integer mma (mma.sp, mma.sp::ordered_metadata), compared between the PTX interpreter and
+// the SASS simulator (Tests/SassDiff.lean). Each thread loads its compressed A, B and C fragment
+// words from in[16t..16t+11] and its metadata from in[16t+12] (valid ordered index pairs), and
+// stores D to out[20t + k]:
+//   0-3   m16n8k32 s8 x s8, selector 0         4-7   m16n8k32 u8 x s8 satfinite, selector 1
+//   8-11  m16n8k64 u8 x u8                     12-15 m16n8k64 s4 x u4, selector 1
+//   16-19 m16n8k128 s4 x s4 satfinite
+.version 9.0
+.target sm_90a
+.address_size 64
+
+.visible .entry mmasp(.param .u64 out, .param .u64 in)
+{
+  .reg .b32 a<4>, b<4>, c<4>, d<4>, e, t;
+  .reg .b64 o, x, rd;
+  ld.param.u64 o, [out];
+  ld.param.u64 x, [in];
+  cvta.to.global.u64 o, o;
+  cvta.to.global.u64 x, x;
+  mov.u32 t, %laneid;
+  mul.wide.u32 rd, t, 64;
+  add.s64 x, x, rd;
+  mul.wide.u32 rd, t, 80;
+  add.s64 o, o, rd;
+  ld.global.v4.b32 {a0, a1, a2, a3}, [x];
+  ld.global.v4.b32 {b0, b1, b2, b3}, [x+16];
+  ld.global.v4.b32 {c0, c1, c2, c3}, [x+32];
+  ld.global.b32 e, [x+48];
+  mma.sp::ordered_metadata.sync.aligned.m16n8k32.row.col.s32.s8.s8.s32 {d0, d1, d2, d3}, {a0, a1}, {b0, b1}, {c0, c1, c2, c3}, e, 0x0;
+  st.global.v4.b32 [o], {d0, d1, d2, d3};
+  mma.sp::ordered_metadata.sync.aligned.m16n8k32.row.col.satfinite.s32.u8.s8.s32 {d0, d1, d2, d3}, {a2, a3}, {b2, b3}, {c0, c1, c2, c3}, e, 0x1;
+  st.global.v4.b32 [o+16], {d0, d1, d2, d3};
+  mma.sp.sync.aligned.m16n8k64.row.col.s32.u8.u8.s32 {d0, d1, d2, d3}, {a0, a1, a2, a3}, {b0, b1, b2, b3}, {c0, c1, c2, c3}, e, 0x0;
+  st.global.v4.b32 [o+32], {d0, d1, d2, d3};
+  mma.sp::ordered_metadata.sync.aligned.m16n8k64.row.col.s32.s4.u4.s32 {d0, d1, d2, d3}, {a1, a2}, {b1, b2}, {c0, c1, c2, c3}, e, 0x1;
+  st.global.v4.b32 [o+48], {d0, d1, d2, d3};
+  mma.sp::ordered_metadata.sync.aligned.m16n8k128.row.col.satfinite.s32.s4.s4.s32 {d0, d1, d2, d3}, {a0, a1, a2, a3}, {b0, b1, b2, b3}, {c0, c1, c2, c3}, e, 0x0;
+  st.global.v4.b32 [o+64], {d0, d1, d2, d3};
+  ret;
+}

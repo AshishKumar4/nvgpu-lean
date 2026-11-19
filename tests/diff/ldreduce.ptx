@@ -1,0 +1,28 @@
+// multimem.ld_reduce on a multicast object of one device (the device's own global memory),
+// compared between the PTX interpreter and the SASS simulator (Tests/SassDiff.lean): thread t
+// load-reduces in[4t ...] as u32 add, s32 min, f32 add and b32 xor, writing out[4t ...].
+.version 9.0
+.target sm_90a
+.address_size 64
+
+.visible .entry ldreduce(.param .u64 out, .param .u64 in)
+{
+  .reg .b32 t, a, b, d;
+  .reg .f32 c;
+  .reg .b64 o, x, rd;
+  ld.param.u64 o, [out];
+  ld.param.u64 x, [in];
+  mov.u32 t, %tid.x;
+  mul.wide.u32 rd, t, 16;
+  add.s64 x, x, rd;
+  add.s64 o, o, rd;
+  multimem.ld_reduce.relaxed.sys.global.add.u32 a, [x];
+  multimem.ld_reduce.relaxed.sys.global.min.s32 b, [x+4];
+  multimem.ld_reduce.relaxed.sys.global.add.f32 c, [x+8];
+  multimem.ld_reduce.relaxed.sys.global.xor.b32 d, [x+12];
+  st.global.b32 [o], a;
+  st.global.b32 [o+4], b;
+  st.global.f32 [o+8], c;
+  st.global.b32 [o+12], d;
+  ret;
+}

@@ -1,0 +1,65 @@
+// The sm_100a/sm_120a forms of ldmatrix (.m16n16.trans .b8 and from .b4x16_p64; .m8n16 from
+// .b6x16_p32 and .b4x16_p64) and stmatrix (.m16n8.trans.b8), compared word by word between the
+// PTX interpreter and the SASS simulator (Tests/SassDiff.lean), as tests/diff/ldsm.ptx.
+// in[16t..16t+15]: lane t's 16 words, written to shared memory as rows of 16 bytes.
+// out[16t + k]: 0-3 m16n16.x2.trans.b8, 4-5 m16n16.x1.trans from b4, 6-9 m8n16.x4 from b6,
+// 10 m8n16.x1 from b4, 11 unused; out[512 + 16t + ...]: the shared memory after stmatrix x4, x1
+// and x2.
+.version 9.0
+.target sm_90a
+.address_size 64
+
+.visible .entry ldsm8(.param .u64 out, .param .u64 in)
+{
+  .reg .b32 t, s, a, r<12>, k;
+  .reg .b64 o, x, rd;
+  .shared .align 16 .b32 sm[512];
+  .shared .align 16 .b32 sn[512];
+  ld.param.u64 o, [out];
+  ld.param.u64 x, [in];
+  cvta.to.global.u64 o, o;
+  cvta.to.global.u64 x, x;
+  mov.u32 t, %laneid;
+  mul.wide.u32 rd, t, 64;
+  add.s64 x, x, rd;
+  add.s64 o, o, rd;
+  mov.u32 s, sm;
+  shl.b32 a, t, 6;
+  add.u32 a, s, a;
+  ld.global.v4.b32 {r0, r1, r2, r3}, [x];
+  st.shared.v4.b32 [a], {r0, r1, r2, r3};
+  ld.global.v4.b32 {r0, r1, r2, r3}, [x+16];
+  st.shared.v4.b32 [a+16], {r0, r1, r2, r3};
+  ld.global.v4.b32 {r0, r1, r2, r3}, [x+32];
+  st.shared.v4.b32 [a+32], {r0, r1, r2, r3};
+  ld.global.v4.b32 {r0, r1, r2, r3}, [x+48];
+  st.shared.v4.b32 [a+48], {r0, r1, r2, r3};
+  bar.warp.sync -1;
+  // Lane t points at row t of a 32-row region, rows 32 bytes apart.
+  shl.b32 k, t, 5;
+  add.u32 a, s, k;
+  ldmatrix.sync.aligned.m16n16.x2.trans.shared.b8 {r0, r1, r2, r3}, [a];
+  ldmatrix.sync.aligned.m16n16.x1.trans.shared.b8x16.b4x16_p64 {r4, r5}, [a+16];
+  ldmatrix.sync.aligned.m8n16.x4.shared.b8x16.b6x16_p32 {r6, r7, r8, r9}, [a+1024];
+  ldmatrix.sync.aligned.m8n16.x1.shared.b8x16.b4x16_p64 {r10}, [a+1040];
+  mov.u32 r11, 0;
+  st.global.v4.b32 [o], {r0, r1, r2, r3};
+  st.global.v4.b32 [o+16], {r4, r5, r6, r7};
+  st.global.v4.b32 [o+32], {r8, r9, r10, r11};
+  mov.u32 s, sn;
+  shl.b32 k, t, 4;
+  add.u32 a, s, k;
+  stmatrix.sync.aligned.m16n8.x4.trans.shared.b8 [a], {r0, r1, r2, r3};
+  stmatrix.sync.aligned.m16n8.x1.trans.shared.b8 [a+512], {r6};
+  stmatrix.sync.aligned.m16n8.x2.trans.shared.b8 [a+1024], {r8, r10};
+  bar.warp.sync -1;
+  ld.shared.v4.b32 {r0, r1, r2, r3}, [a];
+  st.global.v4.b32 [o+2048], {r0, r1, r2, r3};
+  ld.shared.v4.b32 {r0, r1, r2, r3}, [a+512];
+  st.global.v4.b32 [o+2064], {r0, r1, r2, r3};
+  ld.shared.v4.b32 {r0, r1, r2, r3}, [a+1024];
+  st.global.v4.b32 [o+2080], {r0, r1, r2, r3};
+  ld.shared.v4.b32 {r0, r1, r2, r3}, [a+1536];
+  st.global.v4.b32 [o+2096], {r0, r1, r2, r3};
+  ret;
+}

@@ -1,0 +1,4 @@
+{ "code": "tcgen05_gemm.cu", "function": "tcgen05_gemm", "grid": [1], "block": [128],
+  "buffers": [ { "name": "out", "bytes": 32768 } ],
+  "params": [ { "ordinal": 0, "ptr": "out" } ],
+  "expect": [ { "buffer": "out", "file": "tcgen05_gemm.expected.bin" } ] }

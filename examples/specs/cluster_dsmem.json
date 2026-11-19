@@ -1,0 +1,5 @@
+{ "code": "cluster_dsmem.cu", "function": "cluster_dsmem", "grid": [8], "block": [128],
+  "cluster": [2, 1, 1],
+  "buffers": [ { "name": "out", "bytes": 4096 } ],
+  "params": [ { "ordinal": 0, "ptr": "out" } ],
+  "expect": [ { "buffer": "out", "file": "cluster_dsmem.expected.bin" } ] }

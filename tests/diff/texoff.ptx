@@ -1,0 +1,36 @@
+// Texture fetches with texel offsets, compared between the PTX interpreter and the SASS simulator
+// (Tests/SassDiff.lean): thread t fetches a 2D texture at (x, y) as tex2d does, moved by
+// (t % 16 - 8, (t / 16) % 16 - 8) texels, and a 1D texture at x moved by t % 16 - 8; out[8t ...].
+.version 9.0
+.target sm_90a
+.address_size 64
+
+.visible .entry texoff(.param .u64 out, .param .u64 in, .param .u64 tex, .param .u64 tex1)
+{
+  .reg .b32 t, a, b, ox, oy, r0, r1, r2, r3;
+  .reg .f32 x, y, fa, fb;
+  .reg .b64 o, h, h1, d;
+  ld.param.u64 o, [out];
+  ld.param.u64 h, [tex];
+  ld.param.u64 h1, [tex1];
+  cvta.to.global.u64 o, o;
+  mov.u32 t, %tid.x;
+  rem.u32 a, t, 8;
+  div.u32 b, t, 8;
+  cvt.rn.f32.u32 fa, a;
+  cvt.rn.f32.u32 fb, b;
+  fma.rn.f32 x, fa, 0f3FB00000, 0fC0100000;
+  fma.rn.f32 y, fb, 0f3F500000, 0fBF800000;
+  rem.u32 ox, t, 16;
+  sub.s32 ox, ox, 8;
+  shr.u32 oy, t, 4;
+  rem.u32 oy, oy, 16;
+  sub.s32 oy, oy, 8;
+  mul.wide.u32 d, t, 32;
+  add.s64 o, o, d;
+  tex.2d.v4.f32.f32 {r0, r1, r2, r3}, [h, {x, y}], {ox, oy};
+  st.global.v4.b32 [o], {r0, r1, r2, r3};
+  tex.1d.v4.f32.f32 {r0, r1, r2, r3}, [h1, {x}], {ox};
+  st.global.v4.b32 [o+16], {r0, r1, r2, r3};
+  ret;
+}

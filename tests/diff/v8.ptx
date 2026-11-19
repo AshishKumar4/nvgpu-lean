@@ -1,0 +1,22 @@
+// 256-bit global loads and stores (sm_100a, PTX `.v8.b32`): each thread loads 8 words with
+// `ld.global.nc.v8` and `ld.global.v8`, permutes them and stores them with `st.global.v8`, so both
+// register quads of `LDG.E.ENL2.256` and `STG.E.ENL2.256` carry data to distinct places.
+.version 8.8
+.target sm_100a
+.address_size 64
+
+.visible .entry v8(.param .u64 out, .param .u64 in) {
+  .reg .b32 r<16>, t;
+  .reg .b64 o, a, off;
+  ld.param.u64 o, [out]; ld.param.u64 a, [in];
+  cvta.to.global.u64 o, o; cvta.to.global.u64 a, a;
+  mov.u32 t, %tid.x;
+  mul.wide.u32 off, t, 64;
+  add.s64 a, a, off; add.s64 o, o, off;
+  ld.global.nc.v8.b32 {r0,r1,r2,r3,r4,r5,r6,r7}, [a];
+  ld.global.v8.b32 {r8,r9,r10,r11,r12,r13,r14,r15}, [a+32];
+  add.u32 r0, r0, r15; xor.b32 r9, r9, r6;
+  st.global.v8.b32 [o], {r7,r6,r5,r4,r3,r2,r1,r0};
+  st.global.v8.b32 [o+32], {r8,r9,r10,r11,r12,r13,r14,t};
+  ret;
+}

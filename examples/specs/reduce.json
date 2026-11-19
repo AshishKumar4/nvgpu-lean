@@ -1,0 +1,6 @@
+{ "code": "reduce.cu", "function": "block_sum", "grid": [16], "block": [256],
+  "buffers": [
+    { "name": "in", "bytes": 16384, "init": { "gen": "iota", "dtype": "s32", "start": 0, "step": 1 } },
+    { "name": "out", "bytes": 64 } ],
+  "params": [ { "ordinal": 0, "ptr": "in" }, { "ordinal": 1, "ptr": "out" } ],
+  "expect": [ { "buffer": "out", "file": "reduce.expected.bin" } ] }

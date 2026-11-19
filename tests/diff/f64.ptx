@@ -1,0 +1,49 @@
+// Binary64 arithmetic, compared word by word between the PTX interpreter and the SASS simulator
+// (Tests/SassDiff.lean). in[6t..6t+5] = a, b, c as binary64; out[18t + 2k], [18t + 2k + 1]:
+//   k = 0 add.rn  1 mul.rn  2 fma.rn  3 min  4 max  5 div.rn  6 sqrt.rn  7 add.rp
+//   8 setp.gtu a, b as 0 or 1 (low word)
+.version 9.0
+.target sm_90a
+.address_size 64
+
+.visible .entry f64ops(.param .u64 out, .param .u64 in)
+{
+  .reg .f64 a, b, c, r;
+  .reg .pred p;
+  .reg .b32 t, u;
+  .reg .b64 o, x, rd, ro;
+  ld.param.u64 o, [out];
+  ld.param.u64 x, [in];
+  cvta.to.global.u64 o, o;
+  cvta.to.global.u64 x, x;
+  mov.u32 t, %tid.x;
+  mul.wide.u32 rd, t, 24;
+  add.s64 x, x, rd;
+  ld.global.f64 a, [x];
+  ld.global.f64 b, [x+8];
+  ld.global.f64 c, [x+16];
+  mul.wide.u32 ro, t, 72;
+  add.s64 o, o, ro;
+  add.rn.f64 r, a, b;
+  st.global.f64 [o], r;
+  mul.rn.f64 r, a, b;
+  st.global.f64 [o+8], r;
+  fma.rn.f64 r, a, b, c;
+  st.global.f64 [o+16], r;
+  min.f64 r, a, b;
+  st.global.f64 [o+24], r;
+  max.f64 r, a, b;
+  st.global.f64 [o+32], r;
+  div.rn.f64 r, a, b;
+  st.global.f64 [o+40], r;
+  abs.f64 r, a;
+  sqrt.rn.f64 r, r;
+  st.global.f64 [o+48], r;
+  add.rp.f64 r, a, c;
+  st.global.f64 [o+56], r;
+  setp.gtu.f64 p, a, b;
+  selp.u32 u, 1, 0, p;
+  st.global.u32 [o+64], u;
+  st.global.u32 [o+68], 0;
+  ret;
+}

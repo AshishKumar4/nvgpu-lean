@@ -1,0 +1,8 @@
+{ "code": "axpy.cu", "function": "axpy", "grid": [4], "block": [256],
+  "buffers": [
+    { "name": "x", "bytes": 4000, "init": { "gen": "iota", "dtype": "s32", "start": 0, "step": 1 } },
+    { "name": "y", "bytes": 4000, "init": { "gen": "fill", "dtype": "s32", "value": 1 } } ],
+  "params": [ { "ordinal": 0, "ptr": "x" }, { "ordinal": 1, "ptr": "y" },
+              { "ordinal": 2, "s32": 3 }, { "ordinal": 3, "s32": 1000 } ],
+  "expect": [ { "buffer": "y", "file": "axpy.expected.bin" } ],
+  "outputs": [ { "buffer": "y", "file": "axpy.out.bin" } ] }

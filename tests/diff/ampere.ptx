@@ -1,0 +1,98 @@
+// Ampere's asynchronous copies and matrix loads, as every target from sm_80 compiles them
+// (LDGSTS, LDGDEPBAR, DEPBAR, LDSM): 64 threads.
+// in: 2048 words. Each thread t copies, into shared memory,
+//   4 bytes (cp.async.ca) from in[t] to a[t],
+//   16 bytes (cp.async.cg) from in[64 + 4t] to b[4t],
+//   8 bytes (cp.async.ca) from in[320 + 2t] to c[2t] with src-size t % 9 (the rest zero-filled),
+// in two groups (the first waited for with wait_group 1, the second with wait_group 0), then
+// writes, after bar.sync, out[16t + 0..6] = a[t ^ 5], b[4(t ^ 9) + 0..3], c[2(t ^ 33) + 0..1],
+// out[16t + 7] = (address of the 8-byte source + (8 - t % 9) % 8) % 8,
+// and out[16t + 8..11] = ldmatrix.x4 of b (rows of 16 bytes: row r at b[4r]), out[16t + 12..15]
+// = ldmatrix.x2.trans of b.
+.version 8.0
+.target sm_80
+.address_size 64
+
+.visible .entry ampere(.param .u64 out, .param .u64 in)
+{
+  .reg .pred p;
+  .reg .b32 t, u, v, w, x, y, z, k, r<8>, q<4>;
+  .reg .b64 o, i, ia, ib, ic, a64;
+  .shared .align 16 .b32 a[64];
+  .shared .align 16 .b32 b[256];
+  .shared .align 16 .b32 c[128];
+  ld.param.u64 o, [out];
+  ld.param.u64 i, [in];
+  cvta.to.global.u64 o, o;
+  cvta.to.global.u64 i, i;
+  mov.u32 t, %tid.x;
+
+  // first group: 4 and 16 bytes
+  mul.wide.u32 ia, t, 4;
+  add.s64 ia, i, ia;
+  mov.u32 u, a;
+  shl.b32 v, t, 2;
+  add.u32 u, u, v;
+  cp.async.ca.shared.global [u], [ia], 4;
+  mul.wide.u32 ib, t, 16;
+  add.s64 ib, i, ib;
+  add.s64 ib, ib, 256;
+  mov.u32 u, b;
+  shl.b32 v, t, 4;
+  add.u32 u, u, v;
+  cp.async.cg.shared.global [u], [ib], 16;
+  cp.async.commit_group;
+  // second group: 8 bytes with a source size
+  mul.wide.u32 ic, t, 8;
+  add.s64 ic, i, ic;
+  add.s64 ic, ic, 1280;
+  mov.u32 u, c;
+  shl.b32 v, t, 3;
+  add.u32 u, u, v;
+  rem.u32 k, t, 9;
+  cp.async.ca.shared.global [u], [ic], 8, k;
+  cp.async.commit_group;
+  cp.async.wait_group 1;
+  cp.async.wait_group 0;
+  bar.sync 0;
+
+  // out row
+  mul.wide.u32 a64, t, 64;
+  add.s64 o, o, a64;
+  xor.b32 x, t, 5;
+  shl.b32 x, x, 2;
+  mov.u32 u, a;
+  add.u32 u, u, x;
+  ld.shared.u32 r0, [u];
+  xor.b32 y, t, 9;
+  shl.b32 y, y, 4;
+  mov.u32 u, b;
+  add.u32 u, u, y;
+  ld.shared.v4.u32 {r1, r2, r3, r4}, [u];
+  xor.b32 z, t, 33;
+  shl.b32 z, z, 3;
+  mov.u32 u, c;
+  add.u32 u, u, z;
+  ld.shared.v2.u32 {r5, r6}, [u];
+  sub.u32 r7, 8, k;
+  and.b32 r7, r7, 7;
+  cvt.u64.u32 a64, r7;
+  add.s64 a64, ic, a64;
+  cvt.u32.u64 r7, a64;
+  and.b32 r7, r7, 7;
+  st.global.v4.u32 [o], {r0, r1, r2, r3};
+  st.global.v4.u32 [o+16], {r4, r5, r6, r7};
+
+  // ldmatrix: lane l of each warp gives row l of the 32 rows of 16 bytes at b
+  and.b32 w, t, 31;
+  shl.b32 w, w, 4;
+  mov.u32 u, b;
+  add.u32 u, u, w;
+  ldmatrix.sync.aligned.m8n8.x4.shared.b16 {q0, q1, q2, q3}, [u];
+  st.global.v4.u32 [o+32], {q0, q1, q2, q3};
+  ldmatrix.sync.aligned.m8n8.x2.trans.shared.b16 {q0, q1}, [u];
+  mov.u32 q2, 0;
+  mov.u32 q3, 0;
+  st.global.v4.u32 [o+48], {q0, q1, q2, q3};
+  ret;
+}

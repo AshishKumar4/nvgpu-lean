@@ -1,0 +1,45 @@
+// FP6, FP4 and block-scaled mma.sync (sm_120a: QMMA, QMMA.SF, OMMA.SF), compared between the PTX
+// interpreter and the SASS simulator (Tests/SassDiff.lean). Each thread loads its A, B, C fragment
+// words and its two scale words from in[16t..16t+13] and stores D to out[24t + k]:
+//   0-3    m16n8k32 .kind::f8f6f4 e2m1 x e3m2 + f32
+//   4-7    m16n8k32 .kind::f8f6f4 e4m3 x e2m3 + f32
+//   8-11   m16n8k32 .kind::mxf8f6f4.scale_vec::1X e4m3 x e2m3, ue8m0, selectors {1, 1}, {2, 3}
+//   12-15  m16n8k64 .kind::mxf4.scale_vec::2X e2m1, ue8m0, selectors {2, 0}, {0, 1}
+//   16-19  m16n8k64 .kind::mxf4nvf4.scale_vec::4X e2m1, ue4m3, selectors {0, 1}, {0, 2}
+//   20-23  m16n8k64 .kind::mxf4nvf4.scale_vec::2X e2m1, ue8m0, selectors {0, 0}, {2, 3}
+.version 9.0
+.target sm_120a
+.address_size 64
+
+.visible .entry mma120(.param .u64 out, .param .u64 in)
+{
+  .reg .b32 a<4>, b<2>, c<4>, sa, sb, t;
+  .reg .f32 d<4>;
+  .reg .b64 o, x, rd;
+  ld.param.u64 o, [out];
+  ld.param.u64 x, [in];
+  cvta.to.global.u64 o, o;
+  cvta.to.global.u64 x, x;
+  mov.u32 t, %laneid;
+  mul.wide.u32 rd, t, 64;
+  add.s64 x, x, rd;
+  mul.wide.u32 rd, t, 96;
+  add.s64 o, o, rd;
+  ld.global.v4.b32 {a0, a1, a2, a3}, [x];
+  ld.global.v2.b32 {b0, b1}, [x+16];
+  ld.global.v4.b32 {c0, c1, c2, c3}, [x+32];
+  ld.global.v2.b32 {sa, sb}, [x+48];
+  mma.sync.aligned.m16n8k32.row.col.kind::f8f6f4.f32.e2m1.e3m2.f32 {d0, d1, d2, d3}, {a0, a1, a2, a3}, {b0, b1}, {c0, c1, c2, c3};
+  st.global.v4.f32 [o], {d0, d1, d2, d3};
+  mma.sync.aligned.m16n8k32.row.col.kind::f8f6f4.f32.e4m3.e2m3.f32 {d0, d1, d2, d3}, {a0, a1, a2, a3}, {b0, b1}, {c0, c1, c2, c3};
+  st.global.v4.f32 [o+16], {d0, d1, d2, d3};
+  mma.sync.aligned.m16n8k32.row.col.kind::mxf8f6f4.block_scale.scale_vec::1X.f32.e4m3.e2m3.f32.ue8m0 {d0, d1, d2, d3}, {a0, a1, a2, a3}, {b0, b1}, {c0, c1, c2, c3}, sa, {1, 1}, sb, {2, 3};
+  st.global.v4.f32 [o+32], {d0, d1, d2, d3};
+  mma.sync.aligned.m16n8k64.row.col.kind::mxf4.block_scale.scale_vec::2X.f32.e2m1.e2m1.f32.ue8m0 {d0, d1, d2, d3}, {a0, a1, a2, a3}, {b0, b1}, {c0, c1, c2, c3}, sa, {2, 0}, sb, {0, 1};
+  st.global.v4.f32 [o+48], {d0, d1, d2, d3};
+  mma.sync.aligned.m16n8k64.row.col.kind::mxf4nvf4.block_scale.scale_vec::4X.f32.e2m1.e2m1.f32.ue4m3 {d0, d1, d2, d3}, {a0, a1, a2, a3}, {b0, b1}, {c0, c1, c2, c3}, sa, {0, 1}, sb, {0, 2};
+  st.global.v4.f32 [o+64], {d0, d1, d2, d3};
+  mma.sync.aligned.m16n8k64.row.col.kind::mxf4nvf4.block_scale.scale_vec::2X.f32.e2m1.e2m1.f32.ue8m0 {d0, d1, d2, d3}, {a0, a1, a2, a3}, {b0, b1}, {c0, c1, c2, c3}, sa, {0, 0}, sb, {2, 3};
+  st.global.v4.f32 [o+80], {d0, d1, d2, d3};
+  ret;
+}

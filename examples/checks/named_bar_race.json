@@ -1,0 +1,3 @@
+{ "code": "checks.cu", "function": "named_bar_race", "grid": [1], "block": [384],
+  "buffers": [ { "name": "out", "bytes": 1024 } ],
+  "params": [ { "ordinal": 0, "ptr": "out" } ] }

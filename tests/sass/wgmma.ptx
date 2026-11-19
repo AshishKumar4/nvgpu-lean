@@ -1,0 +1,63 @@
+.version 9.0
+.target sm_90a
+.address_size 64
+
+.visible .entry wg(.param .u64 out, .param .u64 da, .param .u64 db, .param .u64 g)
+{
+  .reg .pred p;
+  .reg .f32 d<32>;
+  .reg .f32 x<3>;
+  .reg .b32 r<4>;
+  .reg .b64 rd<8>;
+  .shared .align 128 .b8 sm[8192];
+  ld.param.u64 rd1, [out];
+  ld.param.u64 rd2, [da];
+  ld.param.u64 rd3, [db];
+  ld.param.u64 rd4, [g];
+  cvta.to.global.u64 rd1, rd1;
+  cvta.to.global.u64 rd4, rd4;
+  mov.u32 r1, %tid.x;
+  setp.ne.u32 p, r1, 1000;
+  wgmma.fence.sync.aligned;
+  wgmma.mma_async.sync.aligned.m64n64k16.f32.bf16.bf16 {d0,d1,d2,d3,d4,d5,d6,d7,d8,d9,d10,d11,d12,d13,d14,d15,d16,d17,d18,d19,d20,d21,d22,d23,d24,d25,d26,d27,d28,d29,d30,d31}, rd2, rd3, 0, 1, 1, 0, 0;
+  add.s64 rd2, rd2, 2;
+  add.s64 rd3, rd3, 2;
+  wgmma.mma_async.sync.aligned.m64n64k16.f32.bf16.bf16 {d0,d1,d2,d3,d4,d5,d6,d7,d8,d9,d10,d11,d12,d13,d14,d15,d16,d17,d18,d19,d20,d21,d22,d23,d24,d25,d26,d27,d28,d29,d30,d31}, rd2, rd3, p, 1, 1, 0, 0;
+  wgmma.commit_group.sync.aligned;
+  mul.wide.u32 rd5, r1, 4;
+  add.s64 rd6, rd4, rd5;
+  ld.global.f32 x0, [rd6];
+  mov.u32 r2, sm;
+  shl.b32 r3, r1, 2;
+  add.u32 r2, r2, r3;
+  ld.shared.f32 x1, [r2];
+  wgmma.wait_group.sync.aligned 0;
+  add.f32 x2, d0, x0;
+  add.f32 x2, x2, x1;
+  add.f32 x2, x2, d31;
+  add.s64 rd7, rd1, rd5;
+  st.global.f32 [rd7], x2;
+  ret;
+}
+
+// A negated, transposed-operand wgmma: imm-scale-a = -1, imm-trans-a = imm-trans-b = 1.
+.visible .entry wg_neg(.param .u64 out, .param .u64 da, .param .u64 db)
+{
+  .reg .f32 d<8>;
+  .reg .b32 r<2>;
+  .reg .b64 rd<6>;
+  ld.param.u64 rd1, [out];
+  ld.param.u64 rd2, [da];
+  ld.param.u64 rd3, [db];
+  cvta.to.global.u64 rd1, rd1;
+  mov.u32 r1, %tid.x;
+  wgmma.fence.sync.aligned;
+  wgmma.mma_async.sync.aligned.m64n16k16.f32.bf16.bf16 {d0,d1,d2,d3,d4,d5,d6,d7}, rd2, rd3, 0, -1, 1, 1, 1;
+  wgmma.commit_group.sync.aligned;
+  wgmma.wait_group.sync.aligned 0;
+  mul.wide.u32 rd4, r1, 32;
+  add.s64 rd5, rd1, rd4;
+  st.global.v4.f32 [rd5], {d0,d1,d2,d3};
+  st.global.v4.f32 [rd5+16], {d4,d5,d6,d7};
+  ret;
+}

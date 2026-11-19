@@ -1,0 +1,28 @@
+// binary32 rounded to tf32 in its 32-bit container (cvt.{rn,rz}.tf32.f32,
+// F2FP.TF32.F32.PACK_B[.RZ]); compared word by word between the PTX interpreter and the SASS
+// simulator (Tests/SassDiff.lean). in[t] = a; out[2t + k]: 0 cvt.rn  1 cvt.rz.
+.version 9.0
+.target sm_90a
+.address_size 64
+
+.visible .entry tf32cvt(.param .u64 out, .param .u64 in)
+{
+  .reg .b32 r, t;
+  .reg .f32 a;
+  .reg .b64 o, x, rd;
+  ld.param.u64 o, [out];
+  ld.param.u64 x, [in];
+  cvta.to.global.u64 o, o;
+  cvta.to.global.u64 x, x;
+  mov.u32 t, %tid.x;
+  mul.wide.u32 rd, t, 4;
+  add.s64 x, x, rd;
+  ld.global.f32 a, [x];
+  mul.wide.u32 rd, t, 8;
+  add.s64 o, o, rd;
+  cvt.rn.tf32.f32 r, a;
+  st.global.b32 [o], r;
+  cvt.rz.tf32.f32 r, a;
+  st.global.b32 [o+4], r;
+  ret;
+}

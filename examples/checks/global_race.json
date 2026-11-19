@@ -1,0 +1,3 @@
+{ "code": "checks.cu", "function": "global_race", "grid": [1], "block": [128],
+  "buffers": [ { "name": "buf", "bytes": 512 }, { "name": "out", "bytes": 512 } ],
+  "params": [ { "ordinal": 0, "ptr": "buf" }, { "ordinal": 1, "ptr": "out" } ] }

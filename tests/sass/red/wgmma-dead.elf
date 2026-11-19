@@ -1,0 +1,1089 @@
+
+64bit elf: type=2, abi=7, sm=90a, toolkit=129, flags = 0x5a0d5a
+Sections:
+Index Offset   Size ES Align        Type        Flags Link     Info Name
+    1     40    1f1  0  1            STRTAB       0    0        0 .shstrtab
+    2    26a    25a  0  1            STRTAB       0    0        0 .strtab
+    3    4c8    138 18  8            SYMTAB       0    2        b .symtab
+    4    600     68  0  1          PROGBITS       0    0        0 .debug_frame
+    5    668    13c  0  1          PROGBITS       0    0        0 .debug_line
+    6    7a4    12b  0  1          PROGBITS       0    0        0 .nv_debug_line_sass
+    7    8cf   26de  0  1          PROGBITS       0    0        0 .nv_debug_ptx_txt
+    8   2fb0     24  0  4         CUDA_INFO       0    3        0 .nv.info
+    9   2fd4     70  0  4         CUDA_INFO      40    3        f .nv.info.negated_mosaic_gpu_kernel
+    a   3044     20  8  4    CUDA_CALLGRAPH       0    3        0 .nv.callgraph
+    b   3068      0 18  8              RELA      40    3        f .rela.text.negated_mosaic_gpu_kernel
+    c   3068     18 18  8              RELA      40    3        5 .rela.debug_line
+    d   3080     18 18  8              RELA      40    3        6 .rela.nv_debug_line_sass
+    e   3098     18 18  8              RELA      40    3        4 .rela.debug_frame
+    f   3100    a00  0 80          PROGBITS  200006    3        b .text.negated_mosaic_gpu_kernel
+   10   3b00    401  0 10            NOBITS      43    0        f .nv.shared.negated_mosaic_gpu_kernel
+   11   3b00      0  0  1            NOBITS       3    0        0 .nv.shared.reserved.0
+   12   3b00    228  0  4          PROGBITS      42    0        f .nv.constant0.negated_mosaic_gpu_kernel
+
+.section .strtab
+
+.section .shstrtab
+
+.section .symtab
+ index           value           size      info    other  shndx    name  
+   0               0               0        0        0      0     (null)
+ 0x1               0               0      0x3        0    0xf     .text.negated_mosaic_gpu_kernel
+ 0x2               0               0      0x3        0   0x10     .nv.shared.negated_mosaic_gpu_kernel
+ 0x3               0             0x4     0x21        0      0     .nv.reservedSmem.offset0
+ 0x4               0               0     0x20     0xa0   0x11     __nv_reservedSMEM_offset_0_alias
+ 0x5               0               0        0      0x1      0     (null)
+ 0x6               0               0      0x3        0    0x4     .debug_frame
+ 0x7               0               0      0x3        0    0x5     .debug_line
+ 0x8               0               0      0x3        0    0x6     .nv_debug_line_sass
+ 0x9               0               0      0x3        0    0x7     .nv_debug_ptx_txt
+ 0xa               0               0      0x3        0    0xa     .nv.callgraph
+ 0xb               0           0xa00     0x12     0x10    0xf     negated_mosaic_gpu_kernel
+ 0xc               0               0      0x3        0   0x12     .nv.constant0.negated_mosaic_gpu_kernel
+
+
+.nv.shared.negated_mosaic_gpu_kernel
+   No data to be dumped. 
+
+
+.nv.shared.reserved.0
+   No data to be dumped. 
+
+
+.nv.constant0.negated_mosaic_gpu_kernel
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 
+
+
+.nv.info
+	<0x1>
+	Attribute:	EIATTR_REGCOUNT
+	Format:	EIFMT_SVAL
+	Value:	function: negated_mosaic_gpu_kernel(0xb)	register count: 40
+	<0x2>
+	Attribute:	EIATTR_FRAME_SIZE
+	Format:	EIFMT_SVAL
+	Value:	function: negated_mosaic_gpu_kernel(0xb)	frame size: 0x0
+	<0x3>
+	Attribute:	EIATTR_MIN_STACK_SIZE
+	Format:	EIFMT_SVAL
+	Value:	function: negated_mosaic_gpu_kernel(0xb)	min stack size: 0x0
+
+
+.nv.info.negated_mosaic_gpu_kernel
+	<0x1>
+	Attribute:	EIATTR_CUDA_API_VERSION
+	Format:	EIFMT_SVAL
+	Value:	0x81 
+	<0x2>
+	Attribute:	EIATTR_KPARAM_INFO
+	Format:	EIFMT_SVAL
+	Value:	Index : 0x0	Ordinal : 0x2	Offset  : 0x10	Size    : 0x8
+		Pointee's logAlignment : 0x8	Space : 0x5	cbank : 0x1f	Parameter Space : CBANK	
+	<0x3>
+	Attribute:	EIATTR_KPARAM_INFO
+	Format:	EIFMT_SVAL
+	Value:	Index : 0x0	Ordinal : 0x1	Offset  : 0x8	Size    : 0x8
+		Pointee's logAlignment : 0x8	Space : 0x5	cbank : 0x1f	Parameter Space : CBANK	
+	<0x4>
+	Attribute:	EIATTR_KPARAM_INFO
+	Format:	EIFMT_SVAL
+	Value:	Index : 0x0	Ordinal : 0x0	Offset  : 0x0	Size    : 0x8
+		Pointee's logAlignment : 0x8	Space : 0x5	cbank : 0x1f	Parameter Space : CBANK	
+	<0x5>
+	Attribute:	EIATTR_SPARSE_MMA_MASK
+	Format:	EIFMT_HVAL
+	Value:	0x0
+	<0x6>
+	Attribute:	EIATTR_MAXREG_COUNT
+	Format:	EIFMT_HVAL
+	Value:	0xff
+	<0x7>
+	Attribute:	EIATTR_EXIT_INSTR_OFFSETS
+	Format:	EIFMT_SVAL
+	Value:	0x930 
+	<0x8>
+	Attribute:	EIATTR_MAX_THREADS
+	Format:	EIFMT_SVAL
+	Value:	0x80 0x1 0x1 
+	<0x9>
+	Attribute:	EIATTR_CBANK_PARAM_SIZE
+	Format:	EIFMT_HVAL
+	Value:	0x18
+	<0x10>
+	Attribute:	EIATTR_PARAM_CBANK
+	Format:	EIFMT_SVAL
+	Value:	0xc 0x180210 
+	<0x11>
+	Attribute:	EIATTR_SW_WAR
+	Format:	EIFMT_SVAL
+	Value:	0x8 
+
+
+.nv.callgraph
+ <0,-1>
+ <0,-2>
+ <0,-3>
+ <0,-4>
+
+
+.text.negated_mosaic_gpu_kernel
+bar = 2	reg = 0	lmem=0	smem=1025
+0xff017b82 0x00000a00 0x00000800 0x000fe200
+0x00007918 0x00000000 0x00000000 0x000fe200
+0x00007919 0x00000000 0x00002100 0x000e2c00
+0xff047b82 0x00008400 0x00000a00 0x000e6200
+0x00067ab9 0x00008200 0x00000a00 0x000fce00
+0x000579c3 0x00000000 0x00008800 0x000ea200
+0x00047882 0x00000400 0x00000000 0x000fce00
+0xff227b82 0x00008800 0x00000a00 0x000ee200
+0x00027824 0x00000008 0x078e00ff 0x041fe400
+0x00067824 0x00000010 0x078e00ff 0x000fc600
+0x02037812 0x000000e0 0x078ec0ff 0x000fe400
+0x06027812 0x00000600 0x078ec0ff 0x000fe400
+0x03037812 0x00000003 0x078ef800 0x100fe200
+0x00007b1d 0x00000000 0x00010000 0x000fe600
+0x03037212 0x00000002 0x078efcff 0x000fe200
+0x00187824 0x00000020 0x078e00ff 0x000fe200
+0xff197819 0x00000001 0x00011600 0x000fe200
+0x05047291 0x00000004 0x0f8ec03f 0x004fc400
+0xff067b82 0x00008600 0x00000a00 0x000e2200
+0x03047825 0x00000004 0x078e0004 0x002fce00
+0x00007b1d 0x00000000 0x00010000 0x000fec00
+0x0000782e 0x00000000 0x00000000 0x000fe400
+0x00007b1d 0x00000000 0x00010000 0x000fec00
+0x04147981 0x00000006 0x0c1e1900 0x000ea800
+0x04157981 0x00001006 0x0c1e1900 0x000ea800
+0x04167981 0x00002006 0x0c1e1900 0x000ea800
+0x04177981 0x00003006 0x0c1e1900 0x000ea800
+0x04107981 0x00040006 0x0c1e1900 0x000f2800
+0x04117981 0x00041006 0x0c1e1900 0x000f2800
+0x04127981 0x00042006 0x0c1e1900 0x000f2800
+0x04137981 0x00043006 0x0c1e1900 0x000f2800
+0x040c7981 0x00004006 0x0c1e1900 0x000f6800
+0x040d7981 0x00005006 0x0c1e1900 0x000f6800
+0x040e7981 0x00006006 0x0c1e1900 0x000f6800
+0x040f7981 0x00007006 0x0c1e1900 0x000f6800
+0x04087981 0x00044006 0x0c1e1900 0x000ee800
+0x04097981 0x00045006 0x0c1e1900 0x000ee800
+0x040a7981 0x00046006 0x0c1e1900 0x000ee800
+0x040b7981 0x00047006 0x0c1e1900 0x0002e200
+0x18187812 0x000000e0 0x078ec0ff 0x000fc800
+0x18197812 0x0000000c 0x078ef819 0x000fe200
+0x00187824 0x00000004 0x078e00ff 0x000fc600
+0x19197212 0x00000002 0x078efcff 0x000fe400
+0x18187812 0x0000001c 0x078ec0ff 0x000fc800
+0x19027212 0x00000018 0x078e3cff 0x000fe400
+0x18047812 0x00000010 0x078e1e19 0x002fe400
+0x02027c11 0x00000004 0x0f8e10ff 0x000fe200
+0x00007b1d 0x00420000 0x00010000 0x000fe200
+0x04047c11 0x00000004 0x0f8e10ff 0x000fe200
+0x03067825 0x00000004 0x078e0006 0x001fc800
+0x02007844 0x00000014 0x00000200 0x004fe800
+0x02007844 0x00040010 0x00000200 0x010fe800
+0x04007844 0x0000000c 0x00000200 0x0201e800
+0x04007844 0x00040008 0x00000200 0x0083e200
+0x00007b1d 0x00420000 0x00010000 0x000fec00
+0x06187981 0x00000006 0x0c1e1900 0x000ea800
+0x06197981 0x00001006 0x0c1e1900 0x000ea800
+0x061a7981 0x00002006 0x0c1e1900 0x000ea800
+0x061b7981 0x00003006 0x0c1e1900 0x000ea800
+0x061c7981 0x00040006 0x0c1e1900 0x000ee800
+0x061d7981 0x00041006 0x0c1e1900 0x000ee800
+0x061e7981 0x00042006 0x0c1e1900 0x000ee800
+0x061f7981 0x00043006 0x0c1e1900 0x000ee800
+0x060c7981 0x00004006 0x0c1e1900 0x001f2800
+0x060d7981 0x00005006 0x0c1e1900 0x000f2800
+0x060e7981 0x00006006 0x0c1e1900 0x000f2800
+0x060f7981 0x00007006 0x0c1e1900 0x000f2800
+0x06087981 0x00044006 0x0c1e1900 0x002f6800
+0x06097981 0x00045006 0x0c1e1900 0x000f6800
+0x060a7981 0x00046006 0x0c1e1900 0x000f6800
+0x060b7981 0x00047006 0x0c1e1900 0x000f6200
+0x00007b1d 0x00420000 0x00010000 0x000fe200
+0xff107424 0x80000000 0x078e00ff 0x000fe200
+0x03037c11 0x00000004 0x0f8e18ff 0x000fe200
+0xff117424 0x80000000 0x078e00ff 0x000fc400
+0x00257824 0x00000002 0x078e00ff 0x000fca00
+0x25007c11 0x00000004 0x0f8e10ff 0x040fe200
+0x02007844 0x00200018 0x00000200 0x004fe800
+0x02007844 0x0024001c 0x00000200 0x008fe800
+0x04007844 0x0020000c 0x00000200 0x010fe800
+0x04007844 0x00240008 0x00000200 0x020fe200
+0x00007b1d 0x00420000 0x00010000 0x000fec00
+0x00007992 0x00000000 0x00008000 0x0001ec00
+0x000073c6 0x00000000 0x00000000 0x001e2200
+0x25227825 0x00000004 0x078e0022 0x000fe200
+0x00007b1d 0x00420000 0x00010000 0x001ff000
+0x00007b1d 0x00420000 0x00010000 0x000fec00
+0x000079c5 0x00000000 0x00000000 0x000fcc00
+0x3fff79f0 0x00000000 0x0c0000ff 0x000fe600
+0x000079c5 0x00008000 0x00010000 0x000fe400
+0x00007b1d 0x00420000 0x00010000 0x000fec00
+0x03007388 0x00400010 0x00000a00 0x000fe800
+0x03007388 0x00480010 0x00000a00 0x000fe800
+0x03007388 0x00402010 0x00000a00 0x000fe800
+0x03007388 0x00482010 0x00000a00 0x000fe800
+0x03007388 0x00404010 0x00000a00 0x000fe800
+0x03007388 0x00484010 0x00000a00 0x000fe800
+0x03007388 0x00406010 0x00000a00 0x000fe800
+0x03007388 0x00486010 0x00000a00 0x000fe800
+0x03007388 0x00408010 0x00000a00 0x000fe800
+0x03007388 0x00488010 0x00000a00 0x000fe800
+0x03007388 0x0040a010 0x00000a00 0x000fe800
+0x03007388 0x0048a010 0x00000a00 0x000fe800
+0x03007388 0x0040c010 0x00000a00 0x000fe800
+0x03007388 0x0048c010 0x00000a00 0x000fe800
+0x03007388 0x0040e010 0x00000a00 0x000fe800
+0x03007388 0x0048e010 0x00000a00 0x000fe200
+0x00007b1d 0x00420000 0x00010000 0x000fec00
+0x00007992 0x00000000 0x00008000 0x0001ec00
+0x000073c6 0x00000000 0x00000000 0x001e2400
+0x00007b1d 0x00420000 0x00010000 0x001ff000
+0x00007b1d 0x00420000 0x00010000 0x000fec00
+0x00207984 0x00400000 0x00000a00 0x000e2800
+0x001e7984 0x00440000 0x00000a00 0x000e6800
+0x001c7984 0x00480000 0x00000a00 0x000ea800
+0x001a7984 0x004c0000 0x00000a00 0x000ee800
+0x00187984 0x00500000 0x00000a00 0x000f2800
+0x00167984 0x00540000 0x00000a00 0x000f6800
+0x00147984 0x00580000 0x00000a00 0x000e2800
+0x00127984 0x005c0000 0x00000a00 0x000e6800
+0x00107984 0x00600000 0x00000a00 0x000ea800
+0x000e7984 0x00640000 0x00000a00 0x000ee800
+0x000c7984 0x00680000 0x00000a00 0x000f2800
+0x000a7984 0x006c0000 0x00000a00 0x000f6800
+0x00087984 0x00700000 0x00000a00 0x000f6800
+0x00067984 0x00740000 0x00000a00 0x000f6800
+0x00047984 0x00780000 0x00000a00 0x000f6800
+0x00027984 0x007c0000 0x00000a00 0x000f6200
+0x00007b1d 0x00420000 0x00010000 0x000fec00
+0x22007986 0x00000020 0x0c101b06 0x001fe800
+0x22007986 0x0004001e 0x0c101b06 0x002fe800
+0x22007986 0x0008001c 0x0c101b06 0x004fe800
+0x22007986 0x000c001a 0x0c101b06 0x008fe800
+0x22007986 0x00100018 0x0c101b06 0x010fe800
+0x22007986 0x00140016 0x0c101b06 0x020fe800
+0x22007986 0x00180014 0x0c101b06 0x000fe800
+0x22007986 0x001c0012 0x0c101b06 0x000fe800
+0x22007986 0x00200010 0x0c101b06 0x000fe800
+0x22007986 0x0024000e 0x0c101b06 0x000fe800
+0x22007986 0x0028000c 0x0c101b06 0x000fe800
+0x22007986 0x002c000a 0x0c101b06 0x000fe800
+0x22007986 0x00300008 0x0c101b06 0x000fe800
+0x22007986 0x00340006 0x0c101b06 0x000fe800
+0x22007986 0x00380004 0x0c101b06 0x000fe800
+0x22007986 0x003c0002 0x0c101b06 0x000fe200
+0x00007b1d 0x00420000 0x00010000 0x000ff000
+0x0000782d 0x00000000 0x00000000 0x000fe200
+0x0000794d 0x00000000 0x03800000 0x000fea00
+0x00fc7947 0xfffffffc 0x0383ffff 0x000fc000
+0x00007918 0x00000000 0x00000000 0x000fc000
+0x00007918 0x00000000 0x00000000 0x000fc000
+0x00007918 0x00000000 0x00000000 0x000fc000
+0x00007918 0x00000000 0x00000000 0x000fc000
+0x00007918 0x00000000 0x00000000 0x000fc000
+0x00007918 0x00000000 0x00000000 0x000fc000
+0x00007918 0x00000000 0x00000000 0x000fc000
+0x00007918 0x00000000 0x00000000 0x000fc000
+0x00007918 0x00000000 0x00000000 0x000fc000
+0x00007918 0x00000000 0x00000000 0x000fc000
+0x00007918 0x00000000 0x00000000 0x000fc000
+
+
+.section .rela.text.negated_mosaic_gpu_kernel	RELA
+
+.section .debug_line
+  Offset:                         0
+  Length:                         312
+  DWARF Version:                   2
+  Prologue Length:                143
+  Minimum instruction length:      1
+  Initial value of is_stmt:        1
+  Line base:                       -5
+  Line range:                      14
+  Opcode base:                     10
+
+Opcodes:
+  Opcode 1 has 0 args
+  Opcode 2 has 1 args
+  Opcode 3 has 1 args
+  Opcode 4 has 1 args
+  Opcode 5 has 1 args
+  Opcode 6 has 0 args
+  Opcode 7 has 0 args
+  Opcode 8 has 0 args
+  Opcode 9 has 1 args
+
+The Directory Table:
+  /home/ci/work/dew/dew/src/dew/nn/kernels/templates
+  /tmp/tmp3i8h4q20
+
+The File Name Table:
+  Entry   Dir     Time    Size    Name
+   1       1      1794034099       142649       mosaic.py
+   2       2      1794034106       5281       reads.py
+   3       1      1794034099       9567       mosaic_sm90.py
+
+Line Number Statements:
+  Extended opcode 2: set Address to 0x0
+  Set File Name to entry 1 in the File Name Table
+  Advance Line by 147 to 148
+  Copy
+  Advance Line by 508 to 656
+  Advance PC by 48 to 0x30
+  Copy
+  Advance Line by -508 to 148
+  Advance PC by 160 to 0xd0
+  Copy
+  Advance Line by 508 to 656
+  Advance PC by 16 to 0xe0
+  Copy
+  Advance Line by -508 to 148
+  Advance PC by 96 to 0x140
+  Copy
+  Set File Name to entry 2 in the File Name Table
+  Advance Line by -70 to 78
+  Advance PC by 32 to 0x160
+  Copy
+  Set File Name to entry 1 in the File Name Table
+  Advance Line by 578 to 656
+  Advance PC by 16 to 0x170
+  Copy
+  Set File Name to entry 2 in the File Name Table
+  Advance Line by -587 to 69
+  Advance PC by 784 to 0x480
+  Copy
+  Set File Name to entry 1 in the File Name Table
+  Advance Line by 587 to 656
+  Advance PC by 48 to 0x4b0
+  Copy
+  Set File Name to entry 2 in the File Name Table
+  Advance Line by -615 to 41
+  Advance PC by 112 to 0x520
+  Copy
+  Set File Name to entry 1 in the File Name Table
+  Advance Line by 615 to 656
+  Advance PC by 32 to 0x540
+  Copy
+  Set File Name to entry 2 in the File Name Table
+  Advance Line by -615 to 41
+  Advance PC by 16 to 0x550
+  Copy
+  Set File Name to entry 1 in the File Name Table
+  Advance Line by 955 to 996
+  Advance PC by 16 to 0x560
+  Copy
+  Set File Name to entry 3 in the File Name Table
+  Advance Line by -903 to 93
+  Advance PC by 16 to 0x570
+  Copy
+  Advance Line by -2 to 91
+  Advance PC by 32 to 0x590
+  Copy
+  Set File Name to entry 2 in the File Name Table
+  Advance Line by -22 to 69
+  Advance PC by 16 to 0x5a0
+  Copy
+  Advance Line by 3 to 72
+  Advance PC by 288 to 0x6c0
+  Copy
+  Set File Name to entry 1 in the File Name Table
+  Advance Line by 924 to 996
+  Advance PC by 48 to 0x6f0
+  Copy
+  Advance Line by -340 to 656
+  Advance PC by 16 to 0x700
+  Copy
+  Advance Line by -506 to 150
+  Advance PC by 544 to 0x920
+  Copy
+  Special opcode 227: advance Address by 16 to 0x930 and Line by -2 to 148
+  Advance PC by 208 to 0xa00
+  Extended opcode 1: End of Sequence
+
+
+
+.section .rela.debug_line	RELA
+0x9c    negated_mosaic_gpu_kernel    R_CUDA_64    0x0
+
+.section .nv_debug_line_sass
+  Offset:                         0
+  Length:                         295
+  DWARF Version:                   2
+  Prologue Length:                16
+  Minimum instruction length:      1
+  Initial value of is_stmt:        1
+  Line base:                       -5
+  Line range:                      14
+  Opcode base:                     10
+
+Opcodes:
+  Opcode 1 has 0 args
+  Opcode 2 has 1 args
+  Opcode 3 has 1 args
+  Opcode 4 has 1 args
+  Opcode 5 has 1 args
+  Opcode 6 has 0 args
+  Opcode 7 has 0 args
+  Opcode 8 has 0 args
+  Opcode 9 has 1 args
+
+The Directory Table:
+
+The File Name Table:
+  Entry   Dir     Time    Size    Name
+
+Line Number Statements:
+  Extended opcode 2: set Address to 0x0
+  Set File Name to entry 0 in the File Name Table
+  Advance Line by 18 to 19
+  Copy
+  Advance Line by 24 to 43
+  Advance PC by 16 to 0x10
+  Copy
+  Advance Line by -6 to 37
+  Advance PC by 16 to 0x20
+  Copy
+  Advance Line by 29 to 66
+  Advance PC by 16 to 0x30
+  Copy
+  Advance Line by -47 to 19
+  Advance PC by 16 to 0x40
+  Copy
+  Advance Line by 80 to 99
+  Advance PC by 16 to 0x50
+  Copy
+  Advance Line by 241 to 340
+  Advance PC by 32 to 0x70
+  Copy
+  Advance Line by -281 to 59
+  Advance PC by 16 to 0x80
+  Copy
+  Special opcode 232: advance Address by 16 to 0x90 and Line by 3 to 62
+  Special opcode 227: advance Address by 16 to 0xa0 and Line by -2 to 60
+  Special opcode 232: advance Address by 16 to 0xb0 and Line by 3 to 63
+  Special opcode 227: advance Address by 16 to 0xc0 and Line by -2 to 61
+  Advance Line by -15 to 46
+  Advance PC by 16 to 0xd0
+  Copy
+  Advance Line by 18 to 64
+  Advance PC by 16 to 0xe0
+  Copy
+  Advance Line by 25 to 89
+  Advance PC by 16 to 0xf0
+  Copy
+  Special opcode 231: advance Address by 16 to 0x100 and Line by 2 to 91
+  Special opcode 237: advance Address by 16 to 0x110 and Line by 8 to 99
+  Advance Line by 15 to 114
+  Advance PC by 16 to 0x120
+  Copy
+  Advance Line by -48 to 66
+  Advance PC by 16 to 0x130
+  Copy
+  Advance Line by -16 to 50
+  Advance PC by 16 to 0x140
+  Copy
+  Special opcode 231: advance Address by 16 to 0x150 and Line by 2 to 52
+  Special opcode 233: advance Address by 16 to 0x160 and Line by 4 to 56
+  Advance Line by 11 to 67
+  Advance PC by 16 to 0x170
+  Copy
+  Special opcode 231: advance Address by 16 to 0x180 and Line by 2 to 69
+  Special opcode 231: advance Address by 16 to 0x190 and Line by 2 to 71
+  Special opcode 231: advance Address by 16 to 0x1a0 and Line by 2 to 73
+  Special opcode 224: advance Address by 16 to 0x1b0 and Line by -5 to 68
+  Special opcode 231: advance Address by 16 to 0x1c0 and Line by 2 to 70
+  Special opcode 231: advance Address by 16 to 0x1d0 and Line by 2 to 72
+  Special opcode 231: advance Address by 16 to 0x1e0 and Line by 2 to 74
+  Special opcode 230: advance Address by 16 to 0x1f0 and Line by 1 to 75
+  Special opcode 231: advance Address by 16 to 0x200 and Line by 2 to 77
+  Special opcode 231: advance Address by 16 to 0x210 and Line by 2 to 79
+  Special opcode 231: advance Address by 16 to 0x220 and Line by 2 to 81
+  Special opcode 224: advance Address by 16 to 0x230 and Line by -5 to 76
+  Special opcode 231: advance Address by 16 to 0x240 and Line by 2 to 78
+  Special opcode 231: advance Address by 16 to 0x250 and Line by 2 to 80
+  Special opcode 231: advance Address by 16 to 0x260 and Line by 2 to 82
+  Special opcode 237: advance Address by 16 to 0x270 and Line by 8 to 90
+  Special opcode 232: advance Address by 16 to 0x280 and Line by 3 to 93
+  Special opcode 231: advance Address by 16 to 0x290 and Line by 2 to 95
+  Special opcode 228: advance Address by 16 to 0x2a0 and Line by -1 to 94
+  Special opcode 231: advance Address by 16 to 0x2b0 and Line by 2 to 96
+  Special opcode 230: advance Address by 16 to 0x2c0 and Line by 1 to 97
+  Special opcode 236: advance Address by 16 to 0x2d0 and Line by 7 to 104
+  Special opcode 225: advance Address by 16 to 0x2e0 and Line by -4 to 100
+  Advance Line by -14 to 86
+  Advance PC by 16 to 0x2f0
+  Copy
+  Advance Line by 20 to 106
+  Advance PC by 16 to 0x300
+  Copy
+  Special opcode 237: advance Address by 16 to 0x310 and Line by 8 to 114
+  Advance Line by -13 to 101
+  Advance PC by 16 to 0x320
+  Copy
+  Special opcode 230: advance Address by 16 to 0x330 and Line by 1 to 102
+  Special opcode 234: advance Address by 16 to 0x340 and Line by 5 to 107
+  Special opcode 230: advance Address by 16 to 0x350 and Line by 1 to 108
+  Special opcode 231: advance Address by 16 to 0x360 and Line by 2 to 110
+  Special opcode 234: advance Address by 16 to 0x370 and Line by 5 to 115
+  Special opcode 231: advance Address by 16 to 0x380 and Line by 2 to 117
+  Special opcode 231: advance Address by 16 to 0x390 and Line by 2 to 119
+  Special opcode 231: advance Address by 16 to 0x3a0 and Line by 2 to 121
+  Special opcode 224: advance Address by 16 to 0x3b0 and Line by -5 to 116
+  Special opcode 231: advance Address by 16 to 0x3c0 and Line by 2 to 118
+  Special opcode 231: advance Address by 16 to 0x3d0 and Line by 2 to 120
+  Special opcode 231: advance Address by 16 to 0x3e0 and Line by 2 to 122
+  Special opcode 230: advance Address by 16 to 0x3f0 and Line by 1 to 123
+  Special opcode 231: advance Address by 16 to 0x400 and Line by 2 to 125
+  Special opcode 231: advance Address by 16 to 0x410 and Line by 2 to 127
+  Special opcode 231: advance Address by 16 to 0x420 and Line by 2 to 129
+  Special opcode 224: advance Address by 16 to 0x430 and Line by -5 to 124
+  Special opcode 231: advance Address by 16 to 0x440 and Line by 2 to 126
+  Special opcode 231: advance Address by 16 to 0x450 and Line by 2 to 128
+  Special opcode 231: advance Address by 16 to 0x460 and Line by 2 to 130
+  Special opcode 232: advance Address by 16 to 0x470 and Line by 3 to 133
+  Advance Line by 151 to 284
+  Advance PC by 16 to 0x480
+  Copy
+  Special opcode 228: advance Address by 16 to 0x490 and Line by -1 to 283
+  Special opcode 230: advance Address by 16 to 0x4a0 and Line by 1 to 284
+  Advance Line by 32 to 316
+  Advance PC by 16 to 0x4b0
+  Copy
+  Special opcode 231: advance Address by 16 to 0x4c0 and Line by 2 to 318
+  Advance Line by -182 to 136
+  Advance PC by 16 to 0x4d0
+  Copy
+  Special opcode 230: advance Address by 16 to 0x4e0 and Line by 1 to 137
+  Special opcode 230: advance Address by 16 to 0x4f0 and Line by 1 to 138
+  Special opcode 230: advance Address by 16 to 0x500 and Line by 1 to 139
+  Special opcode 231: advance Address by 16 to 0x510 and Line by 2 to 141
+  Special opcode 233: advance Address by 16 to 0x520 and Line by 4 to 145
+  Advance Line by 195 to 340
+  Advance PC by 32 to 0x540
+  Copy
+  Advance Line by -193 to 147
+  Advance PC by 16 to 0x550
+  Copy
+  Special opcode 234: advance Address by 16 to 0x560 and Line by 5 to 152
+  Advance Line by 39 to 191
+  Advance PC by 16 to 0x570
+  Copy
+  Advance Line by 83 to 274
+  Advance PC by 32 to 0x590
+  Copy
+  Special opcode 234: advance Address by 16 to 0x5a0 and Line by 5 to 279
+  Special opcode 234: advance Address by 16 to 0x5b0 and Line by 5 to 284
+  Special opcode 230: advance Address by 16 to 0x5c0 and Line by 1 to 285
+  Special opcode 230: advance Address by 16 to 0x5d0 and Line by 1 to 286
+  Special opcode 230: advance Address by 16 to 0x5e0 and Line by 1 to 287
+  Special opcode 230: advance Address by 16 to 0x5f0 and Line by 1 to 288
+  Special opcode 230: advance Address by 16 to 0x600 and Line by 1 to 289
+  Special opcode 230: advance Address by 16 to 0x610 and Line by 1 to 290
+  Special opcode 230: advance Address by 16 to 0x620 and Line by 1 to 291
+  Special opcode 230: advance Address by 16 to 0x630 and Line by 1 to 292
+  Special opcode 230: advance Address by 16 to 0x640 and Line by 1 to 293
+  Special opcode 230: advance Address by 16 to 0x650 and Line by 1 to 294
+  Special opcode 230: advance Address by 16 to 0x660 and Line by 1 to 295
+  Special opcode 230: advance Address by 16 to 0x670 and Line by 1 to 296
+  Special opcode 230: advance Address by 16 to 0x680 and Line by 1 to 297
+  Special opcode 230: advance Address by 16 to 0x690 and Line by 1 to 298
+  Special opcode 230: advance Address by 16 to 0x6a0 and Line by 1 to 299
+  Special opcode 231: advance Address by 16 to 0x6b0 and Line by 2 to 301
+  Special opcode 233: advance Address by 16 to 0x6c0 and Line by 4 to 305
+  Advance Line by 2 to 307
+  Advance PC by 32 to 0x6e0
+  Copy
+  Special opcode 234: advance Address by 16 to 0x6f0 and Line by 5 to 312
+  Special opcode 236: advance Address by 16 to 0x700 and Line by 7 to 319
+  Special opcode 230: advance Address by 16 to 0x710 and Line by 1 to 320
+  Special opcode 230: advance Address by 16 to 0x720 and Line by 1 to 321
+  Special opcode 230: advance Address by 16 to 0x730 and Line by 1 to 322
+  Special opcode 230: advance Address by 16 to 0x740 and Line by 1 to 323
+  Special opcode 230: advance Address by 16 to 0x750 and Line by 1 to 324
+  Special opcode 230: advance Address by 16 to 0x760 and Line by 1 to 325
+  Special opcode 230: advance Address by 16 to 0x770 and Line by 1 to 326
+  Special opcode 230: advance Address by 16 to 0x780 and Line by 1 to 327
+  Special opcode 230: advance Address by 16 to 0x790 and Line by 1 to 328
+  Special opcode 230: advance Address by 16 to 0x7a0 and Line by 1 to 329
+  Special opcode 230: advance Address by 16 to 0x7b0 and Line by 1 to 330
+  Special opcode 230: advance Address by 16 to 0x7c0 and Line by 1 to 331
+  Special opcode 230: advance Address by 16 to 0x7d0 and Line by 1 to 332
+  Special opcode 230: advance Address by 16 to 0x7e0 and Line by 1 to 333
+  Special opcode 230: advance Address by 16 to 0x7f0 and Line by 1 to 334
+  Special opcode 232: advance Address by 16 to 0x800 and Line by 3 to 337
+  Special opcode 233: advance Address by 16 to 0x810 and Line by 4 to 341
+  Special opcode 230: advance Address by 16 to 0x820 and Line by 1 to 342
+  Special opcode 230: advance Address by 16 to 0x830 and Line by 1 to 343
+  Special opcode 230: advance Address by 16 to 0x840 and Line by 1 to 344
+  Special opcode 230: advance Address by 16 to 0x850 and Line by 1 to 345
+  Special opcode 230: advance Address by 16 to 0x860 and Line by 1 to 346
+  Special opcode 230: advance Address by 16 to 0x870 and Line by 1 to 347
+  Special opcode 230: advance Address by 16 to 0x880 and Line by 1 to 348
+  Special opcode 230: advance Address by 16 to 0x890 and Line by 1 to 349
+  Special opcode 230: advance Address by 16 to 0x8a0 and Line by 1 to 350
+  Special opcode 230: advance Address by 16 to 0x8b0 and Line by 1 to 351
+  Special opcode 230: advance Address by 16 to 0x8c0 and Line by 1 to 352
+  Special opcode 230: advance Address by 16 to 0x8d0 and Line by 1 to 353
+  Special opcode 230: advance Address by 16 to 0x8e0 and Line by 1 to 354
+  Special opcode 230: advance Address by 16 to 0x8f0 and Line by 1 to 355
+  Special opcode 230: advance Address by 16 to 0x900 and Line by 1 to 356
+  Special opcode 231: advance Address by 16 to 0x910 and Line by 2 to 358
+  Special opcode 234: advance Address by 16 to 0x920 and Line by 5 to 363
+  Special opcode 233: advance Address by 16 to 0x930 and Line by 4 to 367
+  Advance PC by 208 to 0xa00
+  Extended opcode 1: End of Sequence
+
+
+
+.section .rela.nv_debug_line_sass	RELA
+0x1d    negated_mosaic_gpu_kernel    R_CUDA_64    0x0
+
+.section .nv_debug_ptx_txt
+
+
+
+
+.version 8.8
+.target sm_90a
+.address_size 64
+
+
+
+
+.visible .entry negated_mosaic_gpu_kernel(
+.param .u64 .ptr .align 256 negated_mosaic_gpu_kernel_param_0,
+.param .u64 .ptr .align 256 negated_mosaic_gpu_kernel_param_1,
+.param .u64 .ptr .align 256 negated_mosaic_gpu_kernel_param_2
+)
+.maxntid 128, 1, 1
+.minnctapersm 1
+{
+.reg .pred 	%p<6>;
+.reg .b32 	%r<159>;
+.reg .b64 	%rd<35>;
+$L__func_begin0:
+
+
+.shared .align 16 .b8 __dynamic_shmem__0;
+ld.param::entry.b64 	%rd11, [negated_mosaic_gpu_kernel_param_0];
+cvta.to.global.u64 	%rd12, %rd11;
+ld.param::entry.b64 	%rd13, [negated_mosaic_gpu_kernel_param_1];
+cvta.to.global.u64 	%rd14, %rd13;
+ld.param::entry.b64 	%rd15, [negated_mosaic_gpu_kernel_param_2];
+cvta.to.global.u64 	%rd16, %rd15;
+$L__tmp0:
+
+elect.sync 	%r34|%p1, -1;
+elect.sync 	%r35|%p2, -1;
+mov.u32 	%r36, %tid.x;
+shr.u32 	%r37, %r36, 5;
+shfl.sync.idx.b32 	%r38, %r37, 0, 31, -1;
+elect.sync 	%r39|%p3, -1;
+shfl.sync.idx.b32 	%r40, %r37, 0, 31, -1;
+
+fence.mbarrier_init.release.cluster;
+
+
+bar.sync 	0;
+elect.sync 	%r41|%p4, -1;
+shfl.sync.idx.b32 	%r42, %r37, 0, 31, -1;
+elect.sync 	%r43|%p5, -1;
+bar.sync 	0;
+
+griddepcontrol.wait;
+
+
+
+bar.sync 	0;
+
+and.b32 	%r44, %r36, 3;
+shl.b32 	%r45, %r36, 3;
+and.b32 	%r46, %r45, 224;
+or.b32 	%r47, %r46, %r44;
+shl.b32 	%r48, %r36, 4;
+and.b32 	%r49, %r48, 1536;
+or.b32 	%r50, %r47, %r49;
+mul.wide.u32 	%rd17, %r50, 4;
+add.s64 	%rd18, %rd12, %rd17;
+ld.global.b32 	%r51, [%rd18];
+ld.global.b32 	%r52, [%rd18+1024];
+ld.global.b32 	%r53, [%rd18+16];
+ld.global.b32 	%r54, [%rd18+1040];
+ld.global.b32 	%r55, [%rd18+32];
+ld.global.b32 	%r56, [%rd18+1056];
+ld.global.b32 	%r57, [%rd18+48];
+ld.global.b32 	%r58, [%rd18+1072];
+ld.global.b32 	%r59, [%rd18+64];
+ld.global.b32 	%r60, [%rd18+1088];
+ld.global.b32 	%r61, [%rd18+80];
+ld.global.b32 	%r62, [%rd18+1104];
+ld.global.b32 	%r63, [%rd18+96];
+ld.global.b32 	%r64, [%rd18+1120];
+ld.global.b32 	%r65, [%rd18+112];
+ld.global.b32 	%r66, [%rd18+1136];
+
+mov.b32 	%r1, 1;
+
+bar.sync %r1, 128;
+
+
+shl.b32 	%r67, %r36, 5;
+and.b32 	%r68, %r67, 224;
+shr.u32 	%r69, %r36, 1;
+and.b32 	%r70, %r69, 12;
+or.b32 	%r71, %r68, %r70;
+or.b32 	%r72, %r71, %r49;
+shl.b32 	%r73, %r36, 2;
+and.b32 	%r74, %r73, 28;
+xor.b32 	%r75, %r72, %r74;
+mul.wide.u32 	%rd19, %r75, 4;
+mov.b64 	%rd20, __dynamic_shmem__0;
+add.s64 	%rd21, %rd20, %rd19;
+stmatrix.sync.aligned.m8n8.x4.shared.b16 [%rd21], {%r51, %r53, %r55, %r57};
+stmatrix.sync.aligned.m8n8.x4.shared.b16 [%rd21+1024], {%r52, %r54, %r56, %r58};
+or.b32 	%r76, %r72, 16;
+xor.b32 	%r77, %r76, %r74;
+mul.wide.u32 	%rd22, %r77, 4;
+add.s64 	%rd23, %rd20, %rd22;
+stmatrix.sync.aligned.m8n8.x4.shared.b16 [%rd23], {%r59, %r61, %r63, %r65};
+stmatrix.sync.aligned.m8n8.x4.shared.b16 [%rd23+1024], {%r60, %r62, %r64, %r66};
+
+bar.sync %r1, 128;
+
+
+
+add.s64 	%rd24, %rd14, %rd17;
+ld.global.b32 	%r78, [%rd24];
+ld.global.b32 	%r79, [%rd24+1024];
+ld.global.b32 	%r80, [%rd24+16];
+ld.global.b32 	%r81, [%rd24+1040];
+ld.global.b32 	%r82, [%rd24+32];
+ld.global.b32 	%r83, [%rd24+1056];
+ld.global.b32 	%r84, [%rd24+48];
+ld.global.b32 	%r85, [%rd24+1072];
+ld.global.b32 	%r86, [%rd24+64];
+ld.global.b32 	%r87, [%rd24+1088];
+ld.global.b32 	%r88, [%rd24+80];
+ld.global.b32 	%r89, [%rd24+1104];
+ld.global.b32 	%r90, [%rd24+96];
+ld.global.b32 	%r91, [%rd24+1120];
+ld.global.b32 	%r92, [%rd24+112];
+ld.global.b32 	%r93, [%rd24+1136];
+
+
+bar.sync %r1, 128;
+
+
+stmatrix.sync.aligned.m8n8.x4.shared.b16 [%rd21+8192], {%r78, %r80, %r82, %r84};
+stmatrix.sync.aligned.m8n8.x4.shared.b16 [%rd21+9216], {%r79, %r81, %r83, %r85};
+stmatrix.sync.aligned.m8n8.x4.shared.b16 [%rd23+8192], {%r86, %r88, %r90, %r92};
+stmatrix.sync.aligned.m8n8.x4.shared.b16 [%rd23+9216], {%r87, %r89, %r91, %r93};
+
+bar.sync %r1, 128;
+
+
+
+fence.proxy.async.shared::cta;
+
+bar.sync %r1, 128;
+
+
+
+
+bar.sync %r1, 128;
+
+
+mov.b32 	%r33, 0;
+
+mov.b32 	%r2, %r33;
+mov.b32 	%r3, %r33;
+mov.b32 	%r4, %r33;
+mov.b32 	%r5, %r33;
+mov.b32 	%r6, %r33;
+mov.b32 	%r7, %r33;
+mov.b32 	%r8, %r33;
+mov.b32 	%r9, %r33;
+mov.b32 	%r10, %r33;
+mov.b32 	%r11, %r33;
+mov.b32 	%r12, %r33;
+mov.b32 	%r13, %r33;
+mov.b32 	%r14, %r33;
+mov.b32 	%r15, %r33;
+mov.b32 	%r16, %r33;
+mov.b32 	%r17, %r33;
+mov.b32 	%r18, %r33;
+mov.b32 	%r19, %r33;
+mov.b32 	%r20, %r33;
+mov.b32 	%r21, %r33;
+mov.b32 	%r22, %r33;
+mov.b32 	%r23, %r33;
+mov.b32 	%r24, %r33;
+mov.b32 	%r25, %r33;
+mov.b32 	%r26, %r33;
+mov.b32 	%r27, %r33;
+mov.b32 	%r28, %r33;
+mov.b32 	%r29, %r33;
+mov.b32 	%r30, %r33;
+mov.b32 	%r31, %r33;
+mov.b32 	%r32, %r33;
+
+
+
+wgmma.fence.sync.aligned;
+
+
+
+shr.u64 	%rd25, %rd20, 4;
+and.b64 	%rd26, %rd25, 16383;
+or.b64 	%rd1, %rd26, 4611686293305294848;
+add.s64 	%rd27, %rd20, 8192;
+shr.u64 	%rd28, %rd27, 4;
+and.b64 	%rd29, %rd28, 16383;
+or.b64 	%rd2, %rd29, 4611686293309489152;
+
+mov.b64 %rd3, %rd1;
+
+
+
+mov.b64 %rd4, %rd2;
+
+
+
+{ .reg .pred p; setp.ne.b32 p, 1, 0; wgmma.mma_async.sync.aligned.m64n64k16.f32.bf16.bf16 {%r2,%r3,%r4,%r5,%r6,%r7,%r8,%r9,%r10,%r11,%r12,%r13,%r14,%r15,%r16,%r17,%r18,%r19,%r20,%r21,%r22,%r23,%r24,%r25,%r26,%r27,%r28,%r29,%r30,%r31,%r32,%r33}, %rd3, %rd4, p, 1, 1, 0, 1; }
+
+
+
+add.s64 	%rd5, %rd3, 2;
+add.s64 	%rd6, %rd4, 128;
+
+{ .reg .pred p; setp.ne.b32 p, 1, 0; wgmma.mma_async.sync.aligned.m64n64k16.f32.bf16.bf16 {%r2,%r3,%r4,%r5,%r6,%r7,%r8,%r9,%r10,%r11,%r12,%r13,%r14,%r15,%r16,%r17,%r18,%r19,%r20,%r21,%r22,%r23,%r24,%r25,%r26,%r27,%r28,%r29,%r30,%r31,%r32,%r33}, %rd5, %rd6, p, 1, 1, 0, 1; }
+
+
+
+add.s64 	%rd7, %rd3, 4;
+add.s64 	%rd8, %rd4, 256;
+
+{ .reg .pred p; setp.ne.b32 p, 1, 0; wgmma.mma_async.sync.aligned.m64n64k16.f32.bf16.bf16 {%r2,%r3,%r4,%r5,%r6,%r7,%r8,%r9,%r10,%r11,%r12,%r13,%r14,%r15,%r16,%r17,%r18,%r19,%r20,%r21,%r22,%r23,%r24,%r25,%r26,%r27,%r28,%r29,%r30,%r31,%r32,%r33}, %rd7, %rd8, p, 1, 1, 0, 1; }
+
+
+
+add.s64 	%rd9, %rd3, 6;
+add.s64 	%rd10, %rd4, 384;
+
+{ .reg .pred p; setp.ne.b32 p, 1, 0; wgmma.mma_async.sync.aligned.m64n64k16.f32.bf16.bf16 {%r2,%r3,%r4,%r5,%r6,%r7,%r8,%r9,%r10,%r11,%r12,%r13,%r14,%r15,%r16,%r17,%r18,%r19,%r20,%r21,%r22,%r23,%r24,%r25,%r26,%r27,%r28,%r29,%r30,%r31,%r32,%r33}, %rd9, %rd10, p, 1, 1, 0, 1; }
+
+
+
+xor.b32 	%r94, %r3, -2147483648;
+xor.b32 	%r95, %r2, -2147483648;
+xor.b32 	%r96, %r5, -2147483648;
+xor.b32 	%r97, %r4, -2147483648;
+xor.b32 	%r98, %r7, -2147483648;
+xor.b32 	%r99, %r6, -2147483648;
+xor.b32 	%r100, %r9, -2147483648;
+xor.b32 	%r101, %r8, -2147483648;
+xor.b32 	%r102, %r11, -2147483648;
+xor.b32 	%r103, %r10, -2147483648;
+xor.b32 	%r104, %r13, -2147483648;
+xor.b32 	%r105, %r12, -2147483648;
+xor.b32 	%r106, %r15, -2147483648;
+xor.b32 	%r107, %r14, -2147483648;
+xor.b32 	%r108, %r17, -2147483648;
+xor.b32 	%r109, %r16, -2147483648;
+xor.b32 	%r110, %r19, -2147483648;
+xor.b32 	%r111, %r18, -2147483648;
+xor.b32 	%r112, %r21, -2147483648;
+xor.b32 	%r113, %r20, -2147483648;
+xor.b32 	%r114, %r23, -2147483648;
+xor.b32 	%r115, %r22, -2147483648;
+xor.b32 	%r116, %r25, -2147483648;
+xor.b32 	%r117, %r24, -2147483648;
+xor.b32 	%r118, %r27, -2147483648;
+xor.b32 	%r119, %r26, -2147483648;
+xor.b32 	%r120, %r29, -2147483648;
+xor.b32 	%r121, %r28, -2147483648;
+xor.b32 	%r122, %r31, -2147483648;
+xor.b32 	%r123, %r30, -2147483648;
+xor.b32 	%r124, %r33, -2147483648;
+xor.b32 	%r125, %r32, -2147483648;
+
+wgmma.commit_group.sync.aligned;
+
+
+
+
+wgmma.wait_group.sync.aligned 0;
+
+
+
+
+bar.sync %r1, 128;
+
+
+mul.wide.u32 	%rd30, %r50, 8;
+add.s64 	%rd31, %rd20, %rd30;
+st.shared.v2.b32 	[%rd31+16384], {%r95, %r94};
+st.shared.v2.b32 	[%rd31+18432], {%r97, %r96};
+st.shared.v2.b32 	[%rd31+16416], {%r99, %r98};
+st.shared.v2.b32 	[%rd31+18464], {%r101, %r100};
+st.shared.v2.b32 	[%rd31+16448], {%r103, %r102};
+st.shared.v2.b32 	[%rd31+18496], {%r105, %r104};
+st.shared.v2.b32 	[%rd31+16480], {%r107, %r106};
+st.shared.v2.b32 	[%rd31+18528], {%r109, %r108};
+st.shared.v2.b32 	[%rd31+16512], {%r111, %r110};
+st.shared.v2.b32 	[%rd31+18560], {%r113, %r112};
+st.shared.v2.b32 	[%rd31+16544], {%r115, %r114};
+st.shared.v2.b32 	[%rd31+18592], {%r117, %r116};
+st.shared.v2.b32 	[%rd31+16576], {%r119, %r118};
+st.shared.v2.b32 	[%rd31+18624], {%r121, %r120};
+st.shared.v2.b32 	[%rd31+16608], {%r123, %r122};
+st.shared.v2.b32 	[%rd31+18656], {%r125, %r124};
+
+bar.sync %r1, 128;
+
+
+
+fence.proxy.async.shared::cta;
+
+bar.sync %r1, 128;
+
+
+
+
+bar.sync %r1, 128;
+
+
+
+shl.b32 	%r126, %r36, 1;
+mul.wide.u32 	%rd32, %r126, 4;
+add.s64 	%rd33, %rd20, %rd32;
+ld.shared.v2.b32 	{%r127, %r128}, [%rd33+16384];
+ld.shared.v2.b32 	{%r129, %r130}, [%rd33+17408];
+ld.shared.v2.b32 	{%r131, %r132}, [%rd33+18432];
+ld.shared.v2.b32 	{%r133, %r134}, [%rd33+19456];
+ld.shared.v2.b32 	{%r135, %r136}, [%rd33+20480];
+ld.shared.v2.b32 	{%r137, %r138}, [%rd33+21504];
+ld.shared.v2.b32 	{%r139, %r140}, [%rd33+22528];
+ld.shared.v2.b32 	{%r141, %r142}, [%rd33+23552];
+ld.shared.v2.b32 	{%r143, %r144}, [%rd33+24576];
+ld.shared.v2.b32 	{%r145, %r146}, [%rd33+25600];
+ld.shared.v2.b32 	{%r147, %r148}, [%rd33+26624];
+ld.shared.v2.b32 	{%r149, %r150}, [%rd33+27648];
+ld.shared.v2.b32 	{%r151, %r152}, [%rd33+28672];
+ld.shared.v2.b32 	{%r153, %r154}, [%rd33+29696];
+ld.shared.v2.b32 	{%r155, %r156}, [%rd33+30720];
+ld.shared.v2.b32 	{%r157, %r158}, [%rd33+31744];
+
+
+bar.sync %r1, 128;
+
+
+add.s64 	%rd34, %rd16, %rd32;
+st.global.v2.b32 	[%rd34], {%r127, %r128};
+st.global.v2.b32 	[%rd34+1024], {%r129, %r130};
+st.global.v2.b32 	[%rd34+2048], {%r131, %r132};
+st.global.v2.b32 	[%rd34+3072], {%r133, %r134};
+st.global.v2.b32 	[%rd34+4096], {%r135, %r136};
+st.global.v2.b32 	[%rd34+5120], {%r137, %r138};
+st.global.v2.b32 	[%rd34+6144], {%r139, %r140};
+st.global.v2.b32 	[%rd34+7168], {%r141, %r142};
+st.global.v2.b32 	[%rd34+8192], {%r143, %r144};
+st.global.v2.b32 	[%rd34+9216], {%r145, %r146};
+st.global.v2.b32 	[%rd34+10240], {%r147, %r148};
+st.global.v2.b32 	[%rd34+11264], {%r149, %r150};
+st.global.v2.b32 	[%rd34+12288], {%r151, %r152};
+st.global.v2.b32 	[%rd34+13312], {%r153, %r154};
+st.global.v2.b32 	[%rd34+14336], {%r155, %r156};
+st.global.v2.b32 	[%rd34+15360], {%r157, %r158};
+
+bar.sync %r1, 128;
+
+
+
+
+griddepcontrol.launch_dependents;
+
+
+
+ret;
+$L__tmp1:
+$L__func_end0:
+
+}
+.section	.debug_macinfo	{	}
+
+.section .debug_frame
+decodeDebugFrame, frameBuf 0xffffffff, total_length 104
+CIE length 36, cie_id -1
+version 3
+augmentation slen 1
+augmentation 
+code_align_factor slen 1
+data_align_factor slen 1
+ Debug Frame Common Information Entry
+  length:                 36
+  CIE_id :                -1
+  version:                3
+  augmentation:           
+  code align factor:      4
+  data align factor:      -4
+  return address register 0xffffffff
+  initial instructions: 19 bytes, ptr = 0x8080810c, frameBuf = 0xffffffff
+  DW_CFA_def_cfa register R1, offset 0
+  DW_CFA_same_value R255
+  DW_CFA_same_value R1
+  DW_CFA_nop
+  DW_CFA_nop
+  DW_CFA_nop
+ Debug Frame Description Entry
+  length:                 44
+  CIE_pointer:            0
+  initial_location:       0x0
+  address_range:          0xa00
+  function:               negated_mosaic_gpu_kernel
+  instructions: 20 bytes
+  DW_CFA_advance_loc4 delta 584
+  DW_CFA_def_cfa register R1, offset 0
+  DW_CFA_advance_loc4 delta 4
+  DW_CFA_nop
+  DW_CFA_nop
+  DW_CFA_nop
+  DW_CFA_nop
+
+.section .rela.debug_frame	RELA
+0x44    negated_mosaic_gpu_kernel    R_CUDA_64    0x0

@@ -1,0 +1,72 @@
+// Integer arithmetic per thread over edge and hashed inputs; the SASS semantics tests
+// (Tests/SassSem.lean) check every output against the PTX ISA's definitions.
+.version 9.0
+.target sm_90a
+.address_size 64
+
+// in[2t], in[2t+1] = x, y; out[32t + k] = the k-th result.
+.visible .entry ints(.param .u64 out, .param .u64 in)
+{
+  .reg .pred p<4>;
+  .reg .b32 x, y, t, s, r<32>;
+  .reg .b64 X, Y, W<4>, rd<6>;
+  ld.param.u64 rd1, [out];
+  ld.param.u64 rd2, [in];
+  cvta.to.global.u64 rd1, rd1;
+  cvta.to.global.u64 rd2, rd2;
+  mov.u32 t, %tid.x;
+  mul.wide.u32 rd3, t, 8;
+  add.s64 rd3, rd2, rd3;
+  ld.global.v2.u32 {x, y}, [rd3];
+  and.b32 s, y, 31;
+  mov.b64 X, {x, y};
+  mov.b64 Y, {y, x};
+  mul.lo.u32 r0, x, y;
+  mul.hi.u32 r1, x, y;
+  mul.hi.s32 r2, x, y;
+  mad.lo.u32 r3, x, y, 7;
+  add.s64 W0, X, Y;
+  mov.b64 {r4, r5}, W0;
+  sub.s64 W1, X, Y;
+  mov.b64 {r6, r7}, W1;
+  mul.lo.u64 W2, X, Y;
+  mov.b64 {r8, r9}, W2;
+  shl.b32 r10, x, s;
+  shr.u32 r11, x, s;
+  shr.s32 r12, x, s;
+  shf.l.clamp.b32 r13, x, y, s;
+  lop3.b32 r14, x, y, t, 0xe8;
+  prmt.b32 r15, x, y, 0x5410;
+  prmt.b32 r16, x, y, y;
+  popc.b32 r17, x;
+  clz.b32 r18, x;
+  brev.b32 r19, x;
+  bfind.u32 r20, x;
+  min.s32 r21, x, y;
+  max.u32 r22, x, y;
+  add.s32 r23, x, y;
+  min.s32 r23, r23, t;
+  abs.s32 r24, x;
+  setp.lt.s32 p0, x, y;
+  selp.b32 r25, x, y, p0;
+  setp.gt.u32 p1, x, y;
+  and.pred p2, p0, p1;
+  selp.u32 r26, 1, 0, p2;
+  bfe.u32 r27, x, 3, 9;
+  bfi.b32 r28, x, y, 5, 7;
+  mul.wide.s32 W3, x, y;
+  mov.b64 {r29, r30}, W3;
+  setp.lt.u64 p3, X, Y;
+  selp.u32 r31, 1, 0, p3;
+  mul.wide.u32 rd4, t, 128;
+  add.s64 rd4, rd1, rd4;
+  st.global.v4.u32 [rd4], {r0, r1, r2, r3};
+  st.global.v4.u32 [rd4+16], {r4, r5, r6, r7};
+  st.global.v4.u32 [rd4+32], {r8, r9, r10, r11};
+  st.global.v4.u32 [rd4+48], {r12, r13, r14, r15};
+  st.global.v4.u32 [rd4+64], {r16, r17, r18, r19};
+  st.global.v4.u32 [rd4+80], {r20, r21, r22, r23};
+  st.global.v4.u32 [rd4+96], {r24, r25, r26, r27};
+  st.global.v4.u32 [rd4+112], {r28, r29, r30, r31};
+  ret;
+}

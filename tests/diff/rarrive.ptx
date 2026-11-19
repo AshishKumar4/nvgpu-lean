@@ -1,0 +1,231 @@
+// Remote mbarrier arrivals in a cluster of two, compared between the PTX interpreter and the
+// SASS simulator (Tests/SassDiff.lean): each CTA's barrier expects all 32 threads of the other
+// CTA to arrive (mbarrier.arrive.release.cluster.shared::cluster on its mapa'd address), as
+// CUTLASS's consumers release a multicast producer's stages; each thread then waits for its own
+// barrier's phase and writes in[32c + t] + c to out[32c + t].
+.version 9.0
+.target sm_90a
+.address_size 64
+
+.visible .entry rarrive(.param .u64 out, .param .u64 in)
+{
+  .shared .align 8 .b64 bar;
+  .reg .pred p, q;
+  .reg .b32 t, c, peer, ma, rm, o, x;
+  .reg .b64 d, rd, ob, ib;
+  ld.param.u64 ob, [out];
+  ld.param.u64 ib, [in];
+  cvta.to.global.u64 ob, ob;
+  cvta.to.global.u64 ib, ib;
+  mov.u32 t, %tid.x;
+  mov.u32 c, %cluster_ctarank;
+  xor.b32 peer, c, 1;
+  mov.u32 ma, bar;
+  setp.eq.u32 p, t, 0;
+  @p mbarrier.init.shared::cta.b64 [ma], 32;
+  fence.mbarrier_init.release.cluster;
+  barrier.cluster.arrive;
+  barrier.cluster.wait;
+  mapa.shared::cluster.u32 rm, ma, peer;
+  mbarrier.arrive.release.cluster.shared::cluster.b64 _, [rm];
+wait:
+  mbarrier.try_wait.parity.acquire.cluster.shared::cta.b64 q, [ma], 0;
+  @!q bra wait;
+  shl.b32 o, c, 5;
+  add.u32 o, o, t;
+  mul.wide.u32 d, o, 4;
+  add.s64 rd, ib, d;
+  ld.global.u32 x, [rd];
+  add.u32 x, x, c;
+  add.s64 rd, ob, d;
+  st.global.u32 [rd], x;
+  barrier.cluster.arrive;
+  barrier.cluster.wait;
+  ret;
+}
+
+// A bulk reduction into the other CTA's shared memory (cp.reduce.async.bulk.shared::cluster
+// .shared::cta.mbarrier::complete_tx::bytes.add.u32): each CTA's acc[t] starts at in[32c + t] and
+// gets the other CTA's src[t] = in[64 + 32c' + t] added; out[32c + t] = acc[t].
+.visible .entry bulkred(.param .u64 out, .param .u64 in)
+{
+  .shared .align 8 .b64 bar;
+  .shared .align 16 .b32 src[32];
+  .shared .align 16 .b32 acc[32];
+  .reg .pred p, q;
+  .reg .b32 t, c, peer, ma, rm, ra, sa, aa, o, x, y;
+  .reg .b64 d, rd, ob, ib, st;
+  ld.param.u64 ob, [out];
+  ld.param.u64 ib, [in];
+  cvta.to.global.u64 ob, ob;
+  cvta.to.global.u64 ib, ib;
+  mov.u32 t, %tid.x;
+  mov.u32 c, %cluster_ctarank;
+  xor.b32 peer, c, 1;
+  shl.b32 o, c, 5;
+  add.u32 o, o, t;
+  mul.wide.u32 d, o, 4;
+  add.s64 rd, ib, d;
+  ld.global.u32 x, [rd];
+  ld.global.u32 y, [rd+256];
+  shl.b32 o, t, 2;
+  mov.u32 sa, src;
+  add.u32 sa, sa, o;
+  mov.u32 aa, acc;
+  add.u32 aa, aa, o;
+  st.shared.u32 [sa], y;
+  st.shared.u32 [aa], x;
+  mov.u32 ma, bar;
+  setp.eq.u32 p, t, 0;
+  @p mbarrier.init.shared::cta.b64 [ma], 1;
+  @p mbarrier.arrive.expect_tx.shared::cta.b64 st, [ma], 128;
+  fence.proxy.async.shared::cta;
+  fence.mbarrier_init.release.cluster;
+  barrier.cluster.arrive;
+  barrier.cluster.wait;
+  mov.u32 sa, src;
+  mov.u32 aa, acc;
+  mapa.shared::cluster.u32 ra, aa, peer;
+  mapa.shared::cluster.u32 rm, ma, peer;
+  @p cp.reduce.async.bulk.shared::cluster.shared::cta.mbarrier::complete_tx::bytes.add.u32 [ra], [sa], 128, [rm];
+wait:
+  mbarrier.try_wait.parity.acquire.cluster.shared::cta.b64 q, [ma], 0;
+  @!q bra wait;
+  add.u32 aa, aa, o;
+  ld.shared.u32 x, [aa];
+  add.s64 rd, ob, d;
+  st.global.u32 [rd], x;
+  barrier.cluster.arrive;
+  barrier.cluster.wait;
+  ret;
+}
+
+// The same with a bulk copy (cp.async.bulk.shared::cluster.shared::cta.mbarrier::complete_tx::
+// bytes): acc[t] becomes the other CTA's src[t].
+.visible .entry bulkcp(.param .u64 out, .param .u64 in)
+{
+  .shared .align 8 .b64 bar;
+  .shared .align 16 .b32 src[32];
+  .shared .align 16 .b32 acc[32];
+  .reg .pred p, q;
+  .reg .b32 t, c, peer, ma, rm, ra, sa, aa, o, x, y;
+  .reg .b64 d, rd, ob, ib, st;
+  ld.param.u64 ob, [out];
+  ld.param.u64 ib, [in];
+  cvta.to.global.u64 ob, ob;
+  cvta.to.global.u64 ib, ib;
+  mov.u32 t, %tid.x;
+  mov.u32 c, %cluster_ctarank;
+  xor.b32 peer, c, 1;
+  shl.b32 o, c, 5;
+  add.u32 o, o, t;
+  mul.wide.u32 d, o, 4;
+  add.s64 rd, ib, d;
+  ld.global.u32 x, [rd];
+  ld.global.u32 y, [rd+256];
+  shl.b32 o, t, 2;
+  mov.u32 sa, src;
+  add.u32 sa, sa, o;
+  mov.u32 aa, acc;
+  add.u32 aa, aa, o;
+  st.shared.u32 [sa], y;
+  st.shared.u32 [aa], x;
+  mov.u32 ma, bar;
+  setp.eq.u32 p, t, 0;
+  @p mbarrier.init.shared::cta.b64 [ma], 1;
+  @p mbarrier.arrive.expect_tx.shared::cta.b64 st, [ma], 128;
+  fence.proxy.async.shared::cta;
+  fence.mbarrier_init.release.cluster;
+  barrier.cluster.arrive;
+  barrier.cluster.wait;
+  mov.u32 sa, src;
+  mov.u32 aa, acc;
+  mapa.shared::cluster.u32 ra, aa, peer;
+  mapa.shared::cluster.u32 rm, ma, peer;
+  @p cp.async.bulk.shared::cluster.shared::cta.mbarrier::complete_tx::bytes [ra], [sa], 128, [rm];
+wait:
+  mbarrier.try_wait.parity.acquire.cluster.shared::cta.b64 q, [ma], 0;
+  @!q bra wait;
+  add.u32 aa, aa, o;
+  ld.shared.u32 x, [aa];
+  add.s64 rd, ob, d;
+  st.global.u32 [rd], x;
+  barrier.cluster.arrive;
+  barrier.cluster.wait;
+  ret;
+}
+
+// Counted arrivals (mbarrier.arrive.shared::cta.b64 _, [a], count): a barrier expecting 64 arrivals gets lane 0 of each of the CTA's 2 warps arriving 32
+// times at once; every thread then waits for the phase and writes in[t] + 1 to out[t].
+.visible .entry carrive(.param .u64 out, .param .u64 in)
+{
+  .shared .align 8 .b64 bar;
+  .reg .pred p, q, l0;
+  .reg .b32 t, ma, n, x, lane;
+  .reg .b64 d, rd, ob, ib;
+  ld.param.u64 ob, [out];
+  ld.param.u64 ib, [in];
+  cvta.to.global.u64 ob, ob;
+  cvta.to.global.u64 ib, ib;
+  mov.u32 t, %tid.x;
+  mov.u32 ma, bar;
+  setp.eq.u32 p, t, 0;
+  @p mbarrier.init.shared::cta.b64 [ma], 64;
+  bar.sync 0;
+  and.b32 lane, t, 31;
+  setp.eq.u32 l0, lane, 0;
+  mov.u32 n, 32;
+  @l0 mbarrier.arrive.shared::cta.b64 _, [ma], n;
+cwait:
+  mbarrier.try_wait.parity.shared::cta.b64 q, [ma], 0;
+  @!q bra cwait;
+  mul.wide.u32 d, t, 4;
+  add.s64 rd, ib, d;
+  ld.global.u32 x, [rd];
+  add.u32 x, x, 1;
+  add.s64 rd, ob, d;
+  st.global.u32 [rd], x;
+  ret;
+}
+
+// One arrival instruction whose lanes reach two CTAs' barriers: threads 0-15 arrive on their own
+// CTA's (by its mapa'd cluster address), threads 16-31 on the peer's, so each barrier receives 16
+// arrivals from each CTA; then as rarrive.
+.visible .entry mixedarrive(.param .u64 out, .param .u64 in)
+{
+  .shared .align 8 .b64 bar;
+  .reg .pred p, q, h;
+  .reg .b32 t, c, peer, tgt, ma, rm, o, x;
+  .reg .b64 d, rd, ob, ib;
+  ld.param.u64 ob, [out];
+  ld.param.u64 ib, [in];
+  cvta.to.global.u64 ob, ob;
+  cvta.to.global.u64 ib, ib;
+  mov.u32 t, %tid.x;
+  mov.u32 c, %cluster_ctarank;
+  xor.b32 peer, c, 1;
+  mov.u32 ma, bar;
+  setp.eq.u32 p, t, 0;
+  @p mbarrier.init.shared::cta.b64 [ma], 32;
+  fence.mbarrier_init.release.cluster;
+  barrier.cluster.arrive;
+  barrier.cluster.wait;
+  setp.ge.u32 h, t, 16;
+  selp.u32 tgt, peer, c, h;
+  mapa.shared::cluster.u32 rm, ma, tgt;
+  mbarrier.arrive.release.cluster.shared::cluster.b64 _, [rm];
+wait:
+  mbarrier.try_wait.parity.acquire.cluster.shared::cta.b64 q, [ma], 0;
+  @!q bra wait;
+  shl.b32 o, c, 5;
+  add.u32 o, o, t;
+  mul.wide.u32 d, o, 4;
+  add.s64 rd, ib, d;
+  ld.global.u32 x, [rd];
+  add.u32 x, x, c;
+  add.s64 rd, ob, d;
+  st.global.u32 [rd], x;
+  barrier.cluster.arrive;
+  barrier.cluster.wait;
+  ret;
+}

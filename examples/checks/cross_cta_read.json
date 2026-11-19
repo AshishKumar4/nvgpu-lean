@@ -1,0 +1,3 @@
+{ "code": "checks.cu", "function": "cross_cta_read", "grid": [4], "block": [32],
+  "buffers": [ { "name": "data", "bytes": 640 } ],
+  "params": [ { "ordinal": 0, "ptr": "data" } ] }

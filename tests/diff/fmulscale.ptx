@@ -1,0 +1,47 @@
+// A product scaled by a power of two (PTX mul.f32 of a product by 0.5 ... 8: FMUL.D2 ... FMUL.M8); compared word by word between the PTX interpreter and the SASS simulator
+// (Tests/SassDiff.lean). in[7t + j] = a, b1 .. b6; out[6t + k]: a * b(k+1) * 2^-1, 2^-2, 2^-3, 2^1, 2^2, 2^3.
+.version 9.0
+.target sm_90a
+.address_size 64
+
+.visible .entry fmulscale(.param .u64 out, .param .u64 in)
+{
+  .reg .b32 t;
+  .reg .f32 a, b, p, r;
+  .reg .b64 o, x, rd;
+  ld.param.u64 o, [out];
+  ld.param.u64 x, [in];
+  cvta.to.global.u64 o, o;
+  cvta.to.global.u64 x, x;
+  mov.u32 t, %tid.x;
+  mul.wide.u32 rd, t, 28;
+  add.s64 x, x, rd;
+  ld.global.f32 a, [x];
+  mul.wide.u32 rd, t, 24;
+  add.s64 o, o, rd;
+  ld.global.f32 b, [x+4];
+  mul.f32 p, a, b;
+  mul.f32 r, p, 0f3F000000;
+  st.global.f32 [o+0], r;
+  ld.global.f32 b, [x+8];
+  mul.f32 p, a, b;
+  mul.f32 r, p, 0f3E800000;
+  st.global.f32 [o+4], r;
+  ld.global.f32 b, [x+12];
+  mul.f32 p, a, b;
+  mul.f32 r, p, 0f3E000000;
+  st.global.f32 [o+8], r;
+  ld.global.f32 b, [x+16];
+  mul.f32 p, a, b;
+  mul.f32 r, p, 0f40000000;
+  st.global.f32 [o+12], r;
+  ld.global.f32 b, [x+20];
+  mul.f32 p, a, b;
+  mul.f32 r, p, 0f40800000;
+  st.global.f32 [o+16], r;
+  ld.global.f32 b, [x+24];
+  mul.f32 p, a, b;
+  mul.f32 r, p, 0f41000000;
+  st.global.f32 [o+20], r;
+  ret;
+}

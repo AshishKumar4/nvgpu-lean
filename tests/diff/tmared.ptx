@@ -1,0 +1,45 @@
+// Tensor reductions (cp.reduce.async.bulk.tensor .add.tile), compared between the PTX interpreter
+// and the SASS simulator (Tests/SassDiff.lean). The tensor is out, 16 x 16 f32 (map parameter 2);
+// the CTA stores in[0..127] as a 16 x 8 box in shared memory and adds it into rows 0-7, then into
+// rows 4-11 (overlapping), then waits for the bulk group.
+.version 9.0
+.target sm_90a
+.address_size 64
+
+.visible .entry tmared(.param .u64 out, .param .u64 in, .param .align 64 .b8 map[128])
+{
+  .shared .align 128 .b32 box[128];
+  .reg .b32 t, k, o, x, sa, y;
+  .reg .pred q;
+  .reg .b64 ib, rd, mp;
+  ld.param.u64 ib, [in];
+  cvta.to.global.u64 ib, ib;
+  mov.u64 mp, map;
+  cvta.param.u64 mp, mp;
+  mov.u32 t, %tid.x;
+  mov.u32 k, 0;
+fill:
+  shl.b32 o, k, 5;
+  add.u32 o, o, t;
+  mul.wide.u32 rd, o, 4;
+  add.s64 rd, ib, rd;
+  ld.global.u32 x, [rd];
+  shl.b32 o, o, 2;
+  mov.u32 sa, box;
+  add.u32 sa, sa, o;
+  st.shared.u32 [sa], x;
+  add.u32 k, k, 1;
+  setp.lt.u32 q, k, 4;
+  @q bra fill;
+  bar.sync 0;
+  fence.proxy.async.shared::cta;
+  setp.eq.u32 q, t, 0;
+  mov.u32 sa, box;
+  mov.u32 x, 0;
+  mov.u32 y, 4;
+  @q cp.reduce.async.bulk.tensor.2d.global.shared::cta.add.tile.bulk_group [mp, {x, x}], [sa];
+  @q cp.reduce.async.bulk.tensor.2d.global.shared::cta.add.tile.bulk_group [mp, {x, y}], [sa];
+  @q cp.async.bulk.commit_group;
+  @q cp.async.bulk.wait_group 0;
+  ret;
+}

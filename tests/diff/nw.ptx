@@ -1,0 +1,66 @@
+// The Needleman-Wunsch recurrence of Rodinia nw, max(nw + ref, w - p, n - p), chained, then
+// unsigned minimum forms (VIADDMNMX/VIMNMX chains). Compared word by word between the PTX interpreter and the SASS
+// simulator (Tests/SassDiff.lean). in[4t..4t+3] = a, b, c, d; out[3t..3t+2] = r, v, e.
+.version 9.0
+.target sm_90a
+.address_size 64
+
+.visible .entry nwchain(.param .u64 out, .param .u64 in, .param .u32 pen)
+{
+  .reg .b32 t, a, b, c, d, e, p, r, s, u, v;
+  .reg .b64 o, x, rd;
+  ld.param.u64 o, [out];
+  ld.param.u64 x, [in];
+  ld.param.u32 p, [pen];
+  cvta.to.global.u64 o, o;
+  cvta.to.global.u64 x, x;
+  mov.u32 t, %tid.x;
+  mul.wide.u32 rd, t, 16;
+  add.s64 x, x, rd;
+  ld.global.v4.u32 {a, b, c, d}, [x];
+  add.s32 r, a, b;
+  sub.s32 s, c, p;
+  max.s32 r, r, s;
+  sub.s32 u, d, p;
+  max.s32 r, r, u;
+  add.s32 v, r, b;
+  sub.s32 s, r, p;
+  max.s32 v, v, s;
+  sub.s32 u, a, p;
+  max.s32 v, v, u;
+  min.u32 e, v, r;
+  add.u32 e, e, a;
+  min.u32 e, e, c;
+  mul.wide.u32 rd, t, 12;
+  add.s64 o, o, rd;
+  st.global.u32 [o], r;
+  st.global.u32 [o+4], v;
+  st.global.u32 [o+8], e;
+  ret;
+}
+
+// Three-input minimum and maximum (pathfinder's MIN(MIN(a, b), c); VIMNMX3), and a 64-bit add of a 32-bit value's top bits (LEA.HI with a carry out).
+// in[4t..4t+3] = a, b, c, _; out[4t..4t+3] = min(a, b, c) signed, max(a, b, c) unsigned, lo, hi.
+.visible .entry min3(.param .u64 out, .param .u64 in)
+{
+  .reg .b32 t, a, b, c, d, m, n, h, lo, hi;
+  .reg .b64 o, x, rd;
+  ld.param.u64 o, [out];
+  ld.param.u64 x, [in];
+  cvta.to.global.u64 o, o;
+  cvta.to.global.u64 x, x;
+  mov.u32 t, %tid.x;
+  mul.wide.u32 rd, t, 16;
+  add.s64 x, x, rd;
+  add.s64 o, o, rd;
+  ld.global.v4.u32 {a, b, c, d}, [x];
+  min.s32 m, a, b;
+  min.s32 m, m, c;
+  max.u32 n, a, b;
+  max.u32 n, n, c;
+  shr.u32 h, a, 30;
+  add.cc.u32 lo, b, h;
+  addc.u32 hi, c, 0;
+  st.global.v4.u32 [o], {m, n, lo, hi};
+  ret;
+}

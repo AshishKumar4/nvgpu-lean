@@ -1,0 +1,125 @@
+// Divergence, loops, reconvergence and calls; checked by Tests/SassSem.lean.
+.version 9.0
+.target sm_90a
+.address_size 64
+
+// Odd lanes loop t % 8 times, even lanes take a nested branch; after the warp reconverges every
+// lane reads its neighbour's value: out[t] = acc(t) + 1000 * acc(t ^ 1).
+.visible .entry branchy(.param .u64 out)
+{
+  .reg .pred p<4>;
+  .reg .b32 t, lane, acc, k, n, v, w;
+  .reg .b64 rd<4>;
+  ld.param.u64 rd1, [out];
+  cvta.to.global.u64 rd1, rd1;
+  mov.u32 t, %tid.x;
+  mov.u32 lane, %laneid;
+  mov.u32 acc, 0;
+  and.b32 v, t, 1;
+  setp.eq.u32 p0, v, 0;
+  @p0 bra EVEN;
+  and.b32 n, t, 7;
+  mov.u32 k, 0;
+LOOP:
+  setp.ge.u32 p1, k, n;
+  @p1 bra JOIN;
+  mad.lo.u32 acc, k, t, acc;
+  add.u32 k, k, 1;
+  bra.uni LOOP;
+EVEN:
+  mul.lo.u32 acc, t, 3;
+  and.b32 v, t, 4;
+  setp.ne.u32 p2, v, 0;
+  @!p2 bra JOIN;
+  xor.b32 acc, acc, 0x55;
+JOIN:
+  bar.warp.sync -1;
+  xor.b32 w, lane, 1;
+  shfl.sync.idx.b32 v, acc, w, 31, -1;
+  mad.lo.u32 acc, v, 1000, acc;
+  mul.wide.u32 rd2, t, 4;
+  add.s64 rd3, rd1, rd2;
+  st.global.u32 [rd3], acc;
+  ret;
+}
+
+// Lanes leave at different trips of a loop; the survivors store. out[t] = sum of k for k < t % 16
+// where t % 4 != 3, and nothing otherwise (lanes with t % 4 == 3 leave at trip t / 4 % 8, or after
+// the loop).
+.visible .entry exits(.param .u64 out)
+{
+  .reg .pred p<4>;
+  .reg .b32 t, k, n, acc, e, v;
+  .reg .b64 rd<4>;
+  ld.param.u64 rd1, [out];
+  cvta.to.global.u64 rd1, rd1;
+  mov.u32 t, %tid.x;
+  and.b32 n, t, 15;
+  bfe.u32 e, t, 2, 3;
+  and.b32 v, t, 3;
+  setp.eq.u32 p2, v, 3;
+  mov.u32 acc, 0;
+  mov.u32 k, 0;
+LOOP:
+  setp.ge.u32 p0, k, n;
+  @p0 bra DONE;
+  setp.eq.u32 p1, k, e;
+  and.pred p1, p1, p2;
+  @p1 ret;
+  add.u32 acc, acc, k;
+  add.u32 k, k, 1;
+  bra.uni LOOP;
+DONE:
+  @p2 ret;
+  mul.wide.u32 rd2, t, 4;
+  add.s64 rd3, rd1, rd2;
+  st.global.u32 [rd3], acc;
+  ret;
+}
+
+.func (.param .b32 ret) mix(.param .b32 a, .param .b32 b)
+{
+  .reg .b32 %r<4>;
+  ld.param.u32 %r1, [a];
+  ld.param.u32 %r2, [b];
+  mul.lo.u32 %r3, %r1, %r2;
+  xor.b32 %r3, %r3, %r1;
+  add.u32 %r3, %r3, %r2;
+  st.param.b32 [ret], %r3;
+  ret;
+}
+
+// A call kept out of line: out[t] = mix(t, t + 3) + mix(t + 1, 5).
+.visible .entry calls(.param .u64 out)
+{
+  .reg .b32 t, u, v, a, b;
+  .reg .b64 rd<4>;
+  ld.param.u64 rd1, [out];
+  cvta.to.global.u64 rd1, rd1;
+  mov.u32 t, %tid.x;
+  add.u32 u, t, 3;
+  {
+    .param .b32 pa;
+    .param .b32 pb;
+    .param .b32 pr;
+    st.param.b32 [pa], t;
+    st.param.b32 [pb], u;
+    call.uni (pr), mix, (pa, pb);
+    ld.param.b32 a, [pr];
+  }
+  add.u32 v, t, 1;
+  {
+    .param .b32 pa;
+    .param .b32 pb;
+    .param .b32 pr;
+    st.param.b32 [pa], v;
+    st.param.b32 [pb], 5;
+    call.uni (pr), mix, (pa, pb);
+    ld.param.b32 b, [pr];
+  }
+  add.u32 a, a, b;
+  mul.wide.u32 rd2, t, 4;
+  add.s64 rd3, rd1, rd2;
+  st.global.u32 [rd3], a;
+  ret;
+}

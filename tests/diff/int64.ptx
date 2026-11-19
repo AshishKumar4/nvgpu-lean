@@ -1,0 +1,41 @@
+// 64-bit integer minimum and maximum, compared word by word between the PTX interpreter and the
+// SASS simulator (Tests/SassDiff.lean). in[4t..4t+3] = a, b as 64-bit words; out[14t + 2k],
+// [14t + 2k + 1]: k = 0 min.s64  1 max.s64  2 min.u64  3 max.u64  4 selp a, b on a < b (signed)
+//   5 selp 1, 0x3fd8000000000000 on the same  6 selp 1, 0 on the same
+.version 9.0
+.target sm_90a
+.address_size 64
+
+.visible .entry int64(.param .u64 out, .param .u64 in)
+{
+  .reg .pred p;
+  .reg .b32 t;
+  .reg .b64 o, x, rd, a, b, r;
+  ld.param.u64 o, [out];
+  ld.param.u64 x, [in];
+  cvta.to.global.u64 o, o;
+  cvta.to.global.u64 x, x;
+  mov.u32 t, %tid.x;
+  mul.wide.u32 rd, t, 16;
+  add.s64 x, x, rd;
+  ld.global.b64 a, [x];
+  ld.global.b64 b, [x+8];
+  mul.wide.u32 rd, t, 56;
+  add.s64 o, o, rd;
+  min.s64 r, a, b;
+  st.global.b64 [o], r;
+  max.s64 r, a, b;
+  st.global.b64 [o+8], r;
+  min.u64 r, a, b;
+  st.global.b64 [o+16], r;
+  max.u64 r, a, b;
+  st.global.b64 [o+24], r;
+  setp.lt.s64 p, a, b;
+  selp.b64 r, a, b, p;
+  st.global.b64 [o+32], r;
+  selp.b64 r, 1, 0x3fd8000000000000, p;
+  st.global.b64 [o+40], r;
+  selp.b64 r, 1, 0, p;
+  st.global.b64 [o+48], r;
+  ret;
+}
