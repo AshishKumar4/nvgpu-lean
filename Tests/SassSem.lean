@@ -171,8 +171,8 @@ def checkAtomics (ks : Array Kernel) : IO (List String) := do
 
 def r (i : Nat) : Operand := .reg ⟨.r, i⟩
 
-def ctrl (stall : Nat) (wbar : Option (Fin 6) := none) (wait : Nat := 0) : Ctrl :=
-  { stall, yield := false, wbar, rbar := none, wait, reuse := 0 }
+def ctrl (stall : Nat) (wbar : Option (Fin 6) := none) (wait : Nat := 0) (rbar : Option (Fin 6) := none) : Ctrl :=
+  { stall, yield := false, wbar, rbar, wait, reuse := 0 }
 
 def ins (pc : Nat) (opcode : String) (mods : Array String) (ops : Array Operand) (c : Ctrl) : Instr :=
   { pc, opcode, mods, operands := ops, ctrl := c }
@@ -297,6 +297,26 @@ def shuffleBehindLoad : Kernel :=
     ins 0xa0 "STG" #["E"] #[gaddr 4, r 3] (ctrl 1),
     ins 0xb0 "EXIT" #[] #[] (ctrl 5)] }
 
+/-- `out[t] = 100 + t`: lane `t` stores `100 + t` to shared memory at `128 t` with an `STS` that
+reads its address on a read counter, and the next instruction, a `SHFL`, overwrites the address
+register without waiting on it: the shuffle leaves the MIO after the store, so the store reads its
+old value; then the word is loaded back from a copy of the address and stored out. No hazard. -/
+def shuffleAfterStore : Kernel :=
+  let sh (i : Nat) : Operand := .mem (some ⟨.r, i⟩) false none none 0
+  { name := "shflafterst", regs := 16, sharedBytes := 4096, params := #[(0, 8)], paramBytes := 8, code := #[
+    ins 0x00 "S2R" #[] #[r 0, .name "SR_TID.X"] (ctrl 1 (some 0)),
+    ins 0x10 "LDC" #["64"] #[r 4, .cbank 0 none 0x210] (ctrl 1 (some 1)),
+    ins 0x20 "IADD3" #[] #[r 6, r 0, .imm 100, .reg Reg.RZ] (ctrl 1 none 0b01),
+    ins 0x30 "IMAD" #[] #[r 7, r 0, .imm 128, .reg Reg.RZ] (ctrl 1),
+    ins 0x40 "IMAD" #[] #[r 9, r 0, .imm 128, .reg Reg.RZ] (ctrl 4),
+    ins 0x50 "STS" #[] #[sh 7, r 6] (ctrl 1 none 0 (some 3)),
+    ins 0x60 "SHFL" #["BFLY"] #[.reg ⟨.p, 7⟩, r 7, r 0, .imm 0, .imm 0x1f] (ctrl 1 (some 2)),
+    ins 0x70 "LDS" #[] #[r 8, sh 9] (ctrl 1 (some 4) 0b1000),
+    ins 0x80 "IADD3" #[] #[r 3, r 8, .imm 0, .reg Reg.RZ] (ctrl 4 none 0b10100),
+    ins 0x90 "IMAD" #["WIDE", "U32"] #[r 4, r 0, .imm 4, r 4] (ctrl 4 none 0b10),
+    ins 0xa0 "STG" #["E"] #[gaddr 4, r 3] (ctrl 1),
+    ins 0xb0 "EXIT" #[] #[] (ctrl 5)] }
+
 def checkTiming : IO (List String) := do
   let n := 32
   let mut out := []
@@ -316,6 +336,11 @@ def checkTiming : IO (List String) := do
     match ← run (uniformCounts sm) 1 n [Array.replicate n 0] with
     | .error e => out := out ++ [s!"UFLO, UPOPC sm_{sm}: {e}"]
     | .ok bs => out := out ++ compare s!"UFLO, UPOPC sm_{sm}" bs[0]! ((List.range n).map fun t => (t, 7 + 4 * 256))
+  match ← runWith shuffleAfterStore 1 n [Array.replicate n 0] with
+  | .error e => out := out ++ [s!"shuffle after a store: {e}"]
+  | .ok (bs, c) =>
+    out := out ++ compare "shuffle after a store" bs[0]! ((List.range n).map fun t => (t, 100 + t))
+    if c.hazards != 0 then out := out ++ [s!"shuffle after a store: {c.hazards} hazards"]
   match ← run shuffleBehindLoad 1 n [Array.replicate n 0] with
   | .error e => out := out ++ [s!"shuffle behind a shared load: {e}"]
   | .ok bs => out := out ++ compare "shuffle behind a shared load" bs[0]! ((List.range n).map fun t => (t, 100 + t))

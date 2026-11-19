@@ -1199,11 +1199,14 @@ private def pass (kit : Kit) (focus : Nat) (stop : Nat) (st : St) :
       -- memory instructions pass the MIO queue in order, so the earlier reads first.
       -- A later write to a register with a write pending is safe when it lands after it.
       -- A shuffle behind the warp's shared loads still in flight lands after them (`mioHeld`).
+      let shfl := ins.opcode == "SHFL" && tm.lateRead == 0
       let behindShared : Array Nat :=
-        if ins.opcode == "SHFL" && tm.lateRead == 0 then s.sharedLoads.toArray.filter s.inflight.contains
-        else #[]
+        if shfl then s.sharedLoads.toArray.filter s.inflight.contains else #[]
+      -- A shuffle also leaves the MIO after the warp's earlier requests: its result lands after
+      -- they read their sources (`lastMem`), so it may overwrite one a store has yet to read.
+      let shflLands := if shfl then max (t + tm.latency) (s.lastMem + 1) else t + tm.latency
       let lands := match ex with
-        | .reg .. => if behindShared.isEmpty then t + tm.latency else pendingAt
+        | .reg .. => if behindShared.isEmpty then shflLands else pendingAt
         | _ => pendingAt
       -- Pending entries are per lane: an instruction conflicts only on lanes it runs.
       let waw (l : NV.SASS.Loc) : Bool :=
@@ -1226,7 +1229,7 @@ private def pass (kit : Kit) (focus : Nat) (stop : Nat) (st : St) :
         | none => false
       let clash := ((fp.reads ++ fp.sets).find? raw).map (·, "writeback") <|>
         (fp.writes.find? waw).map (·, "writeback") <|>
-        (if viaMio then none else ((fp.writes ++ fp.sets).find? (s.pr.hasFor on)).map (·, "source read")) <|>
+        (if viaMio || shfl then none else ((fp.writes ++ fp.sets).find? (s.pr.hasFor on)).map (·, "source read")) <|>
         (if guardEarly then guardLoc.map (·, "guard latency") else none)
       -- Functionally nothing is pending: timing hazards do not apply.
       if let some (loc, what) := if l.functional then none else clash then
@@ -1269,7 +1272,7 @@ private def pass (kit : Kit) (focus : Nat) (stop : Nat) (st : St) :
           let held := (behindShared, t + tm.latency, Ev.wb wb (some pc) (some land), ins.ctrl.wbar)
           s := { s with mioHeld := s.mioHeld.push held }
         else if tm.lateRead == 0 then
-          wbs := wbs.push (t + tm.latency) { sm := si, slot := pick, ev := .wb wb (some pc) (some land) }
+          wbs := wbs.push shflLands { sm := si, slot := pick, ev := .wb wb (some pc) (some land) }
         else
           -- Sources read `lateRead` after issue: the instruction's result is computed then, from
           -- the warp as it is then, and written at its latency.
@@ -1435,7 +1438,7 @@ private def pass (kit : Kit) (focus : Nat) (stop : Nat) (st : St) :
       s := { s with sb := #[] }
       if let some b := ins.ctrl.wbar then
         -- A memory request's counter is released by its delivery; until then it is pending.
-        let release := if isMem || !behindShared.isEmpty then pendingAt else t + max tm.latency 1
+        let release := if isMem || !behindShared.isEmpty then pendingAt else max (t + max tm.latency 1) shflLands
         let release := match commitBar with | some (b', r) => if b' == b then r else release | none => release
         sb := sb.modify b fun es => (es.filter (· > t)).push release
         s := { s with sbMem := if isMem then s.sbMem ||| (1 <<< b.val) else s.sbMem - (s.sbMem &&& (1 <<< b.val)) }

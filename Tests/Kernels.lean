@@ -72,11 +72,11 @@ def base : UInt64 := 0x7f0000000000
 /-- Run `k` over `grid` CTAs of `block` threads with buffers initialized to `bufs` (32-bit words);
 each buffer's address is passed as a 64-bit parameter, then `extra` parameters. `textures`: the
 launch's texture and surface objects, each over a buffer (by index; its `base` an offset into it).
-Returns each buffer's final words. -/
-def run (k : Kernel) (grid block : Nat) (bufs : List (Array UInt32)) (extra : List (List UInt8) := [])
+Returns each buffer's final words and the run's counters. -/
+def runWith (k : Kernel) (grid block : Nat) (bufs : List (Array UInt32)) (extra : List (List UInt8) := [])
     (cluster : Nat × Nat × Nat := (1, 1, 1))
     (textures : List (Nat × NV.Tex.Texture) := []) :
-    IO (Except String (List (Array UInt32))) := do
+    IO (Except String (List (Array UInt32) × NV.Core.Counters)) := do
   let sizes := bufs.map fun b => (4 * b.size + 255) / 256 * 256
   let offs := (sizes.foldl (fun (acc : List Nat × Nat) n => (acc.1 ++ [acc.2], acc.2 + n)) ([], 0)).1
   let mut g := Store.empty base (max (sizes.foldl (· + ·) 0) 256)
@@ -92,7 +92,14 @@ def run (k : Kernel) (grid block : Nat) (bufs : List (Array UInt32)) (extra : Li
                              { t with base := base + (offs.getD b 0).toUInt64 + t.base }).toArray }
   let some p := NV.Arch.forSm k.sm | return .error s!"no part modelled for sm_{k.sm}"
   return (NV.Core.run p launch).map fun res =>
-    (bufs.zip offs).map fun (b, off) => res.global.read (base + off.toUInt64) (4 * b.size)
+    ((bufs.zip offs).map fun (b, off) => res.global.read (base + off.toUInt64) (4 * b.size), res.counters)
+
+/-- `runWith`'s buffers alone. -/
+def run (k : Kernel) (grid block : Nat) (bufs : List (Array UInt32)) (extra : List (List UInt8) := [])
+    (cluster : Nat × Nat × Nat := (1, 1, 1))
+    (textures : List (Nat × NV.Tex.Texture) := []) :
+    IO (Except String (List (Array UInt32))) :=
+  return (← runWith k grid block bufs extra cluster textures).map (·.1)
 
 /-! ## Fixed latencies against the fixtures
 
