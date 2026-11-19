@@ -56,15 +56,16 @@ def tcgen05Ops : List OpRule :=
 /-- Each fixed-latency opcode's latency cap on `sm_100a`. -/
 private def encoded : List (String × Nat) := [
   ("BREV", 32), ("CREDUX", 13), ("CS2R", 5), ("DADD", 7), ("DFMA", 8), ("DMUL", 6), ("DSETP", 6),
-  ("ELECT", 2), ("F2FP", 5), ("F2I", 17), ("F2IP", 16), ("FADD", 4), ("FFMA", 4), ("FMNMX", 4),
-  ("FMNMX3", 4), ("FMUL", 4), ("FRND", 75), ("FSEL", 4), ("FSETP", 4), ("HADD2", 7), ("HFMA2", 5),
-  ("HMMA", 19), ("HMNMX2", 23), ("HMUL2", 7), ("HSET2", 5), ("HSETP2", 56), ("I2F", 18),
-  ("I2FP", 4), ("I2I", 21), ("I2IP", 5), ("IABS", 5), ("IADD3", 4), ("IDP", 16), ("IMAD", 2),
-  ("IMMA", 19), ("ISETP", 4), ("LEA", 4), ("LOP3", 4), ("MOV", 3), ("MOVM", 6), ("MUFU", 25),
-  ("PLOP3", 2), ("POPC", 62), ("PRMT", 4), ("QSPC", 52), ("R2UR", 6), ("SEL", 4), ("SGXT", 4),
-  ("SHF", 4), ("SHFL", 23), ("UFLO", 6), ("UIADD3", 4), ("UISETP", 4), ("ULEA", 4), ("ULOP3", 4),
-  ("UMOV", 1), ("UPOPC", 6), ("UPRMT", 7), ("USHF", 4), ("VABSDIFF", 102), ("VABSDIFF4", 19),
-  ("VIADD", 4), ("VIADDMNMX", 4), ("VIMNMX", 4), ("VIMNMX3", 7), ("VOTE", 4), ("VOTEU", 2)]
+  ("ELECT", 2), ("F2FP", 9), ("F2I", 17), ("F2IP", 16), ("FADD", 4), ("FADD2", 4), ("FFMA", 4),
+  ("FFMA2", 4), ("FMNMX", 4), ("FMNMX3", 4), ("FMUL", 4), ("FMUL2", 4), ("FRND", 75), ("FSEL", 4),
+  ("FSETP", 4), ("HADD2", 7), ("HFMA2", 11), ("HMMA", 19), ("HMNMX2", 23), ("HMUL2", 7),
+  ("HSET2", 5), ("HSETP2", 56), ("I2F", 18), ("I2FP", 4), ("I2I", 21), ("I2IP", 5), ("IABS", 5),
+  ("IADD3", 4), ("IDP", 16), ("IMAD", 3), ("IMMA", 19), ("ISETP", 4), ("LEA", 4), ("LOP3", 4),
+  ("MOV", 4), ("MOVM", 6), ("MUFU", 25), ("PLOP3", 2), ("POPC", 62), ("PRMT", 4), ("QSPC", 52),
+  ("R2UR", 8), ("SEL", 4), ("SGXT", 4), ("SHF", 4), ("SHFL", 23), ("UFLO", 6), ("UIADD3", 4),
+  ("UISETP", 4), ("ULEA", 4), ("ULOP3", 4), ("UMOV", 2), ("UPOPC", 6), ("UPRMT", 7), ("USHF", 4),
+  ("VABSDIFF", 102), ("VABSDIFF4", 19), ("VIADD", 4), ("VIADDMNMX", 4), ("VIMNMX", 4),
+  ("VIMNMX3", 7), ("VOTE", 4), ("VOTEU", 2)]
 
 /-- A rule's latency held to `encoded`. -/
 private def retime (r : OpRule) : OpRule :=
