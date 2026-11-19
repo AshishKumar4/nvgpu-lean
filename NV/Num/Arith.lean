@@ -8,8 +8,9 @@ each result is the exact result rounded once (`Format.round`), with NVIDIA's rul
 leaves open:
 
 * `ftz` flushes subnormal inputs and results to sign-preserving zero (§9.7.3).
-* NaN results: binary64 instructions carry a NaN operand's payload (§9.7.3); every other format
-  returns the canonical NaN (`Format.nan`), which is what PTX calls "an unspecified NaN".
+* NaN results: binary64 instructions carry a NaN operand's payload (§9.7.3), an invalid operation
+  `CUDART_NAN`; every other format returns the canonical NaN (`Format.nan`), which is what PTX
+  calls "an unspecified NaN".
 * `min`/`max` order `-0 < +0` (§9.7.3.11–12); comparisons treat them as equal.
 -/
 
@@ -27,13 +28,14 @@ def negate (f : Format) (b : Nat) : Nat :=
 def decodeIn (f : Format) (ftz : Bool) (b : Nat) : Val := f.decode (if ftz then f.flush b else b)
 
 /-- The NaN an instruction returns, given its NaN operands in operand order. Binary64 returns the
-first one quieted (which operand wins is inferred); an invalid operation without NaN operands,
-and every other format, give the canonical NaN. -/
+first one quieted (which operand wins is inferred), and an invalid operation without NaN operands
+`0xfff8000000000000` (`CUDART_NAN`, `math_constants.h`: the default NaN of the fp64 unit, which the
+SASS semantics' `DFMA` gives too); every other format gives the canonical NaN. -/
 def nanOf (f : Format) (ops : List Nat) : Nat :=
   if f == .f64 then
     match ops.find? f.isNaN with
     | some b => b % 2 ^ 64 ||| 2 ^ 51
-    | none => f.nan
+    | none => 0xfff8000000000000
   else f.nan
 
 end Format

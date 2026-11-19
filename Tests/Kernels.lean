@@ -86,8 +86,9 @@ def runWith (k : Kernel) (grid block : Nat) (bufs : List (Array UInt32)) (extra 
   let mut params := ByteArray.mk (Array.replicate k.paramBytes 0)
   for ((off, sz), bytes) in k.params.toList.zip args do
     for j in [0:sz] do params := params.set! (off + j) bytes[j]!
+  -- Stopped at 50M cycles: a kernel that spins (a semantics fault) fails rather than hangs.
   let launch : Launch := { kernel := k, grid := (grid, 1, 1), block := (block, 1, 1), params,
-                           global := g, cluster,
+                           global := g, cluster, untilCycle := some 50000000,
                            textures := (textures.map fun (b, t) =>
                              { t with base := base + (offs.getD b 0).toUInt64 + t.base }).toArray }
   let some p := NV.Arch.forSm k.sm | return .error s!"no part modelled for sm_{k.sm}"
