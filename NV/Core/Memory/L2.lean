@@ -17,7 +17,8 @@ A global access performs at the slice that serves it: its home slice, or for a r
 homed in the other partition, the copy slice of the SM's partition when that holds the line.
 Every request of an SM to a far line passes that copy slice (writes drop the copy there and go
 on), so an SM's requests to a line reach the slice that performs them in the order the SM sent
-them.
+them. A copy slice keeps one miss in flight per line, as a slice does for its DRAM fills: a read
+missing sectors already on their way over the link waits for them there rather than crossing too.
 -/
 
 namespace NV.Core.Memory
@@ -58,6 +59,8 @@ structure L2Txn where
   far : Bool
   /-- A far request that went on from its copy slice to the home slice. -/
   forwarded : Bool := false
+  /-- A far read that waited at its copy slice for another's sectors: its slice time is taken. -/
+  waited : Bool := false
   /-- The answers of the lanes performed. -/
   resp : Array (Nat × Array UInt32) := #[]
   deriving Inhabited
@@ -88,6 +91,9 @@ structure L2Mem where
   l2 : Array Tags
   /-- Per slice: line ↦ the sectors being filled from DRAM and the cycle they arrive. -/
   l2Fill : Array (Std.HashMap Nat (Nat × Nat))
+  /-- Per `(copy slice, line)`: the sectors reads forwarded from there are bringing, how many such
+  reads are in flight, and the reads waiting for them. -/
+  copyFill : Std.HashMap (Nat × Nat) (Nat × Nat × Array Nat) := {}
   txns : Array L2Txn := #[]
   freeTxns : Array Nat := #[]
   events : Heap L2Ev := {}
@@ -252,15 +258,24 @@ private def performLanes (m : L2Mem) (id : Nat) : Except String L2Mem := do
     if y.x.req.op.returns then resp := resp.push (lane, laneWords y.x.req read)
   return { m with txns := m.txns.modify id ({ · with resp }) }
 
-/-- A far read at its copy slice: served there if every sector is present, else sent on over the
-partition link to the home slice. -/
+/-- A far read at its copy slice: served there if every sector is present, held there if the
+missing ones are on their way from reads forwarded before it, else sent on over the partition link
+to the home slice. -/
 private def copyStage (m : L2Mem) (t id cs : Nat) : Except String L2Mem := do
   let c := m.cfg
   let y := m.txns[id]!
   let n := popcount y.x.sectors
-  let (_, sLast, m) := m.take (.slice cs) t (n * c.sectorBytes)
+  let (sLast, m) := if y.waited then (t, m) else
+    let (_, l, m) := m.take (.slice cs) t (n * c.sectorBytes)
+    (l, m)
   let mut m := m
-  if m.l2[cs]!.present y.x.line y.x.sectors == y.x.sectors then
+  let present := m.l2[cs]!.present y.x.line y.x.sectors
+  let key := (cs, y.x.line)
+  let (coming, leaders, waiting) := (m.copyFill.get? key).getD (0, 0, #[])
+  if present != y.x.sectors && (y.x.sectors ^^^ present) &&& coming == y.x.sectors ^^^ present then
+    return { m with txns := m.txns.modify id ({ · with waited := true }),
+                    copyFill := m.copyFill.insert key (coming, leaders, waiting.push id) }
+  if present == y.x.sectors then
     m := { m with l2 := m.l2.modify cs (·.touch y.x.line),
                   counters := { m.counters with l2HitSectors := m.counters.l2HitSectors + n,
                                                 l2ReadSectors := m.counters.l2ReadSectors + n } }
@@ -268,6 +283,7 @@ private def copyStage (m : L2Mem) (t id cs : Nat) : Except String L2Mem := do
     return m.push sLast (.ret id)
   let (_, last, m') := m.take .farOut sLast y.x.bytes
   m := { m' with txns := m'.txns.modify id ({ · with forwarded := true }),
+                 copyFill := m'.copyFill.insert key (coming ||| y.x.sectors, leaders + 1, waiting),
                  counters := { m'.counters with l2FarSectors := m'.counters.l2FarSectors + n } }
   return m.push (last + c.out[1]! - c.out[0]!) (.slice id)
 
@@ -329,9 +345,6 @@ private def retStage (m : L2Mem) (t id : Nat) : L2Mem := Id.run do
   let y := m.txns[id]!
   let x := y.x
   let mut m := { m with freeTxns := m.freeTxns.push id }
-  -- A read forwarded from its copy slice leaves the line there on its way back.
-  if let some cs := x.copy then
-    if y.forwarded && x.req.op == .ld then m := m.fillL2 t cs x.line x.sectors false
   let bytes := match x.req.op with
     | .ld => popcount x.sectors * c.sectorBytes
     | .atom .. => x.lanes.size * x.req.bytes
@@ -341,7 +354,17 @@ private def retStage (m : L2Mem) (t id : Nat) : L2Mem := Id.run do
     let (_, l, m') := m.take .farIn t bytes
     m := m'
     last := l
-  return m.send (last + c.back[if y.crosses then 1 else 0]!) y.sm (.answer x.txn y.resp)
+  let answer := last + c.back[if y.crosses then 1 else 0]!
+  -- A read forwarded from its copy slice leaves the line there on its way back, and the reads
+  -- waiting there look again: answered as it is, not before.
+  if let some cs := x.copy then
+    if y.forwarded && x.req.op == .ld then
+      m := m.fillL2 t cs x.line x.sectors false
+      if let some (coming, leaders, waiting) := m.copyFill.get? (cs, x.line) then
+        m := { m with copyFill := if leaders ≤ 1 then m.copyFill.erase (cs, x.line)
+                                  else m.copyFill.insert (cs, x.line) (coming, leaders - 1, #[]) }
+        for w in waiting do m := m.push (answer - c.back[0]!) (.slice w)
+  return m.send answer y.sm (.answer x.txn y.resp)
 
 private def step (m : L2Mem) (t : Nat) : L2Ev → Except String L2Mem
   | .enter sm x => pure (m.enterStage t sm x)

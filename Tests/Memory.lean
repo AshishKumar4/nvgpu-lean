@@ -118,6 +118,20 @@ def tests : Except String T := do
   let k := m.counters
   t := t.check "L1 and L2 counters" (k.globalLdRequests == 6 && k.globalLdHitSectors == 1 &&
     k.l2MissSectors == 2 && k.l2HitSectors == 3 && k.dramReadBytes == 64) s!"{repr k}"
+  -- Two SMs of one partition read a far line, in its home slice only, a cycle apart: the second
+  -- waits at the copy slice for the sector the first is bringing over the link, rather than
+  -- crossing too.
+  if cfg.farCopies then
+    let farC := g (lineIn false 400)
+    let sm2 := ((List.range p.sms.value).filter fun s =>
+      s != 0 && cfg.nearPartition[s]! == cfg.nearPartition[0]!).head!
+    let (m, _) ← runAll fresh [(0, origin, req .global .st [some farC] (data := #[5]))]
+    let crossed := m.counters.l2FarSectors
+    let (m, ds) ← runAll m [(7000, origin, req .global .ld [some farC] (hint := #[".cg"])),
+                            (7001, origin sm2, req .global .ld [some farC] (hint := #[".cg"]))]
+    t := t.check "far reads of a line in flight cross once" (m.counters.l2FarSectors - crossed == 1 &&
+      ds[1]!.resp == #[5] && ds[1]!.at_ - 7001 > mem.l2NearHitLatency.value)
+      s!"{m.counters.l2FarSectors - crossed} sectors crossed; the second answered after {ds[1]!.at_ - 7001}"
   let remote := req .sharedCluster .ld [some (((1 : UInt64) <<< 24) + 64)]
   let (_, ds) ← runAll fresh [(100, origin, remote)]
   t := t.check "dsmem latency" (ds[0]!.at_ - 100 == mem.dsmemLatency.value) s!"{ds[0]!.at_ - 100}"
