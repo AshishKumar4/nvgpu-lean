@@ -59,8 +59,6 @@ structure L2Txn where
   far : Bool
   /-- A far request that went on from its copy slice to the home slice. -/
   forwarded : Bool := false
-  /-- A far read that waited at its copy slice for another's sectors: its slice time is taken. -/
-  waited : Bool := false
   /-- The answers of the lanes performed. -/
   resp : Array (Nat × Array UInt32) := #[]
   deriving Inhabited
@@ -265,16 +263,18 @@ private def copyStage (m : L2Mem) (t id cs : Nat) : Except String L2Mem := do
   let c := m.cfg
   let y := m.txns[id]!
   let n := popcount y.x.sectors
-  let (sLast, m) := if y.waited then (t, m) else
-    let (_, l, m) := m.take (.slice cs) t (n * c.sectorBytes)
-    (l, m)
-  let mut m := m
   let present := m.l2[cs]!.present y.x.line y.x.sectors
+  -- The copy slice's data port serves the reads it holds; one it sends on, or holds until the line
+  -- arrives, passes it as an idle port would (as at the home slice, `sliceStage`).
+  let (sLast, m) := if present == y.x.sectors then
+      let (_, l, m) := m.take (.slice cs) t (n * c.sectorBytes)
+      (l, m)
+    else ((({} : Port).take c.slice t (n * c.sectorBytes)).2.1, m)
+  let mut m := m
   let key := (cs, y.x.line)
   let (coming, leaders, waiting) := (m.copyFill.get? key).getD (0, 0, #[])
   if present != y.x.sectors && (y.x.sectors ^^^ present) &&& coming == y.x.sectors ^^^ present then
-    return { m with txns := m.txns.modify id ({ · with waited := true }),
-                    copyFill := m.copyFill.insert key (coming, leaders, waiting.push id) }
+    return { m with copyFill := m.copyFill.insert key (coming, leaders, waiting.push id) }
   if present == y.x.sectors then
     m := { m with l2 := m.l2.modify cs (·.touch y.x.line),
                   counters := { m.counters with l2HitSectors := m.counters.l2HitSectors + n,
@@ -297,7 +297,12 @@ private def sliceStage (m : L2Mem) (t id : Nat) : Except String L2Mem := do
   -- Writes go into a slice at `sliceWrite` bytes per cycle, against reads' `slice` rate.
   let bytes := n * c.sectorBytes
   let cost := if x.req.op == .ld then bytes else (bytes * c.sliceRead + c.sliceWrite - 1) / max c.sliceWrite 1
-  let (_, sLast, m) := m.take (.slice x.slice) t cost
+  -- A read's sectors the slice lacks pass it as DRAM brings them, their channel's pace: they hold
+  -- its data port only as an idle one would, so hits behind a burst of misses are not queued
+  -- behind DRAM's backlog (a slice serves hits under misses).
+  let missing := if x.req.op == .ld then x.sectors ^^^ m.l2[x.slice]!.present x.line x.sectors else 0
+  let (_, sLast, m) := m.take (.slice x.slice) t (cost - popcount missing * c.sectorBytes)
+  let sLast := if missing == 0 then sLast else max sLast (({} : Port).take c.slice t cost).2.1
   let mut m ← m.performLanes id
   -- Sectors still arriving from DRAM.
   let (pmask, pready) := (m.l2Fill[x.slice]!.get? x.line).getD (0, 0)

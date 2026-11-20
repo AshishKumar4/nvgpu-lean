@@ -132,6 +132,19 @@ def tests : Except String T := do
     t := t.check "far reads of a line in flight cross once" (m.counters.l2FarSectors - crossed == 1 &&
       ds[1]!.resp == #[5] && ds[1]!.at_ - 7001 > mem.l2NearHitLatency.value)
       s!"{m.counters.l2FarSectors - crossed} sectors crossed; the second answered after {ds[1]!.at_ - 7001}"
+  -- A slice serves hits under misses: an L2 hit behind 256 line misses to its slice (other SMs')
+  -- is answered as on an idle slice, while the misses wait for DRAM.
+  let hitLine := lineIn true 900
+  let slice := spread hitLine cfg.slices
+  let missLines := ((List.range 200000).map (hitLine + 1 + ·)).filter (spread · cfg.slices == slice) |>.take 256
+  let (m0, _) ← runAll fresh [(0, origin, req .global .ld [some (g hitLine)] (hint := #[".cg"]))]
+  let misses := missLines.zipIdx.map fun (l, i) =>
+    (9000, origin (1 + i % 100), req .global .ld [some (g l)] (hint := #[".cg"]))
+  let (_, idle) ← runAll m0 [(9010, origin, req .global .ld [some (g hitLine)] (hint := #[".cg"]))]
+  let (_, busy) ← runAll m0 (misses ++ [(9010, origin, req .global .ld [some (g hitLine)] (hint := #[".cg"]))])
+  t := t.check "a slice serves a hit under misses" (missLines.length == 256 &&
+    busy[256]!.at_ == idle[0]!.at_ && busy[0]!.at_ > busy[256]!.at_)
+    s!"idle {idle[0]!.at_ - 9010}, behind the misses {busy[256]!.at_ - 9010}, first miss {busy[0]!.at_ - 9000}"
   let remote := req .sharedCluster .ld [some (((1 : UInt64) <<< 24) + 64)]
   let (_, ds) ← runAll fresh [(100, origin, remote)]
   t := t.check "dsmem latency" (ds[0]!.at_ - 100 == mem.dsmemLatency.value) s!"{ds[0]!.at_ - 100}"
