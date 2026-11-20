@@ -123,4 +123,24 @@ def main : IO UInt32 := do
       want := (Array.range (mDim * nDim)).map fun x => ref (x / nDim) (x % nDim) }
   let ok1 ← run1 k mDim nDim kDim exact
   let ok2 ← run1 k mDim nDim kDim random
-  return if ok1 && ok2 then 0 else 1
+  -- A warp ready in a cycle its sub-partition's tensor core takes waits for the next free one: at
+  -- most a cycle an issue goes to the dispatch stall, the rest of its waits (here a chain of
+  -- shared-memory loads beside another warpgroup's wgmma) to their own reasons.
+  let cubin2 := (dir / "beside.cubin").toString
+  discard <| tool "nvcc" #["-arch=sm_90a", "-cubin", "-o", cubin2, "tests/kernels/wgmma_beside.cu"]
+  let ks2 ← IO.ofExcept (Read.kernels (← tool "cuobjdump" #["-sass", cubin2]) (← tool "cuobjdump" #["-elf", cubin2]))
+  let some kb := ks2.find? (·.name == "beside") | throw (IO.userError "beside not found")
+  let mut params := ByteArray.mk (Array.replicate kb.paramBytes 0)
+  for ((off, sz), v) in kb.params.toList.zip [0x7f0000000000, 64, 2000] do
+    for (j, byte) in (List.range sz).zip (le v sz) do params := params.set! (off + j) byte
+  let beside : Launch := { kernel := kb, grid := (1, 1, 1), block := (256, 1, 1), params,
+                            global := Store.empty 0x7f0000000000 64, dynShared := 8192 + 16384 + 4096 }
+  let ok3 ← match run NV.Arch.h200 beside with
+    | .error e => do IO.eprintln s!"beside: {e}"; pure false
+    | .ok res => do
+      let lost := res.counters.stalls[Stall.dispatch.index]!
+      IO.println s!"beside: {res.counters.cycles} cycles, {res.counters.instExecuted} issues, {lost} dispatch-stall cycles"
+      if lost > res.counters.instExecuted then
+        IO.eprintln s!"beside: {lost} dispatch-stall cycles over {res.counters.instExecuted} issues"
+      pure (lost ≤ res.counters.instExecuted)
+  return if ok1 && ok2 && ok3 then 0 else 1

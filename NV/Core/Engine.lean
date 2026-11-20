@@ -288,6 +288,9 @@ private structure Slot where
   /-- Why the warp is waiting now, and the cycle of its last issue (for `Counters.stalls`). -/
   why : Stall := .wait
   lastIssue : Option Nat := none
+  /-- Cycles since its last issue it was ready in but lost to its sub-partition's tensor core
+  (`Stall.dispatch`), apart from the reason it waited for the rest. -/
+  lost : Nat := 0
   /-- The functional mode over several workers: the writeback of the global atomic the warp waits
   on, which the master performs as the quantum ends. -/
   atomWb : Option (Resp → Warp → Warp) := none
@@ -1126,7 +1129,8 @@ private def pass (kit : Kit) (focus : Nat) (stop : Nat) (st : St) :
           -- No warp can become eligible before the cycle computed here (counter releases are
           -- fixed when set, ports only move later), so remember it and skip the warp until then.
           if at_ > s.readyAt then
-            sm := { sm with slots := sm.slots.modify i fun (w : Slot) => { w with readyAt := at_, why } }
+            sm := { sm with slots := sm.slots.modify i fun (w : Slot) =>
+              if why == .dispatch then { w with readyAt := at_, lost := w.lost + 1 } else { w with readyAt := at_, why } }
       if cands.isEmpty then continue
       let pick := match sm.last[q]!, p.issuePolicy.value with
         | _, .leastRecent => byAge p cands sm
@@ -1140,8 +1144,11 @@ private def pass (kit : Kit) (focus : Nat) (stop : Nat) (st : St) :
       -- The cycles since the warp's last issue go to the reason that held it last.
       let held := s.why
       if let some li := s.lastIssue then
-        if t > li + 1 then c := { c with stalls := c.stalls.modify held.index (· + (t - li - 1)) }
-      s := { s with lastIssue := some t, why := .wait }
+        if t > li + 1 then
+          let lost := min s.lost (t - li - 1)
+          c := { c with stalls := (c.stalls.modify held.index (· + (t - li - 1 - lost))).modify
+                                    Stall.dispatch.index (· + lost) }
+      s := { s with lastIssue := some t, why := .wait, lost := 0 }
       let some (pc, m) := s.w.current | return .error "an eligible warp with no live lane"
       let some ins := k.code[pc]? | return .error s!"pc {pc} outside the code"
       let some tm := timings[pc]?.join
