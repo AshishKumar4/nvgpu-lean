@@ -139,6 +139,18 @@ def checkJumps : IO (List String) := do
   | .ok bs => return compare "jumps" bs[0]! ((List.range n).map fun t =>
       (t, match t % 4 with | 0 => 10 | 1 => 3 * t | 2 => bxor t 0x5a | _ => t + 1000))
 
+/-- The same table on a warp-uniform index (`tests/sass/jumpsu.ptx`): `BRXU`, timed. -/
+def checkJumpsU : IO (List String) := do
+  let k ← kernel (← compile "tests/sass/jumpsu.ptx") "jumpsu"
+  let n := 64
+  let mut out := if k.code.any (·.opcode == "BRXU") then [] else ["jumpsu: ptxas emitted no BRXU"]
+  for sel in [1, 2] do
+    match ← run k 1 n [Array.replicate n 0] [[sel.toUInt8, 0, 0, 0]] with
+    | .error e => out := out ++ [s!"jumpsu {sel}: {e}"]
+    | .ok bs => out := out ++ compare s!"jumpsu {sel}" bs[0]! ((List.range n).map fun t =>
+        (t, if sel == 1 then 3 * t else bxor t 0x5a))
+  return out
+
 def checkWarp (ks : Array Kernel) : IO (List String) := do
   let mut out := []
   match ← run (← kernel ks "collectives") 1 32 [Array.replicate (16 * 32) 0] with
@@ -450,7 +462,7 @@ def main (args : List String) : IO UInt32 := do
   let fs ← if args.isEmpty || args.contains "compiled" then checkCompiled else pure []
   IO.println s!"compiled forms: {if fs.isEmpty then "ok" else s!"{fs.length} failures"}"
   failures := failures ++ fs
-  let fs ← if args.isEmpty || args.contains "jumps" then checkJumps else pure []
+  let fs ← if args.isEmpty || args.contains "jumps" then (do pure ((← checkJumps) ++ (← checkJumpsU))) else pure []
   IO.println s!"jumps: {if fs.isEmpty then "ok" else s!"{fs.length} failures"}"
   failures := failures ++ fs
   let fs ← if args.isEmpty || args.contains "timing" then checkTiming else pure []

@@ -1,0 +1,35 @@
+// An indirect branch through a jump table on a warp-uniform index (brx.idx on a parameter): ptxas
+// branches with BRXU, its offset in a uniform register.
+.version 9.0
+.target sm_90a
+.address_size 64
+
+// out[t] = one of four functions of t, chosen by sel & 3 through the table.
+.visible .entry jumpsu(.param .u64 out, .param .u32 sel)
+{
+  .reg .b32 t, k, acc;
+  .reg .b64 rd<4>;
+  ts: .branchtargets C0, C1, C2, C3;
+  ld.param.u64 rd1, [out];
+  cvta.to.global.u64 rd1, rd1;
+  mov.u32 t, %tid.x;
+  ld.param.u32 k, [sel];
+  and.b32 k, k, 3;
+  brx.idx k, ts;
+C0:
+  mov.u32 acc, 10;
+  bra.uni J;
+C1:
+  mul.lo.u32 acc, t, 3;
+  bra.uni J;
+C2:
+  xor.b32 acc, t, 0x5a;
+  bra.uni J;
+C3:
+  add.u32 acc, t, 1000;
+J:
+  mul.wide.u32 rd2, t, 4;
+  add.s64 rd3, rd1, rd2;
+  st.global.u32 [rd3], acc;
+  ret;
+}

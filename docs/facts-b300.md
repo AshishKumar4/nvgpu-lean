@@ -212,6 +212,7 @@ The role column says who reads a fact (`NV/Core/Roles.lean`): only `engine` fact
 | `NANOSLEEP` | cbu, every 1 | inferred | engine | `analogy`  |  |
 | `BAR` | cbu, every 1 | measured (H200) | engine | `meas-h200`  |  |
 | `BRX` | cbu, every 1 | encoded | engine | `fixtures`  |  |
+| `BRXU` | cbu, every 1 | inferred | engine | `analogy`  |  |
 | `BSSY` | cbu, every 1 | inferred | engine | `analogy`  |  |
 | `BSYNC` | cbu, every 1 | inferred | engine | `analogy`  |  |
 | `WARPSYNC` | cbu, every 1 | inferred | engine | `analogy`  |  |
@@ -259,7 +260,6 @@ The role column says who reads a fact (`NV/Core/Roles.lean`): only `engine` fact
 | `UFSETP` | uniform, every 2, latency 4 | inferred | engine | `fixtures`  |  |
 | `QMMA` | tensor, every 6, latency 16 | inferred | engine | `fixtures`  |  |
 | `OMMA` | tensor, every 6, latency 16 | inferred | engine | `fixtures`  |  |
-| `BRXU` | cbu, every 1 | inferred | engine | `fixtures`  |  |
 | `UVIMNMX` | uniform, every 2, latency 4 | inferred | engine | `analogy`  |  |
 | `ENDCOLLECTIVE` | cbu, every 1 | inferred | engine | `fixtures`  |  |
 | `UP2UR` | uniform, every 2, latency 4 | inferred (H200) | engine | `meas-h200`  |  |

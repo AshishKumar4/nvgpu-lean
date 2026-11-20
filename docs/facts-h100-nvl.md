@@ -211,6 +211,7 @@ The role column says who reads a fact (`NV/Core/Roles.lean`): only `engine` fact
 | `NANOSLEEP` | cbu, every 1 | inferred | engine | `analogy`  |  |
 | `BAR` | cbu, every 1 | measured (H200) | engine | `meas-h200`  |  |
 | `BRX` | cbu, every 1 | encoded | engine | `fixtures`  |  |
+| `BRXU` | cbu, every 1 | inferred | engine | `analogy`  |  |
 | `BSSY` | cbu, every 1 | inferred | engine | `analogy`  |  |
 | `BSYNC` | cbu, every 1 | inferred | engine | `analogy`  |  |
 | `WARPSYNC` | cbu, every 1 | inferred | engine | `analogy`  |  |

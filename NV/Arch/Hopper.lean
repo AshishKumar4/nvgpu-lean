@@ -369,6 +369,8 @@ def ops : Array OpRule := #[
   issueOnly "YIELD", issueOnly "NANOSLEEP",
   op "BAR" #[] (meas (tm .cbu 1 0) ""),
   op "BRX" #[] (encoded (tm .cbu 1 0) "" ""),
+  op "BRXU" #[] (inferred (tm .cbu 1 0) "analogy" ""
+    ""),
   issueOnly "BSSY", issueOnly "BSYNC", issueOnly "WARPSYNC", issueOnly "MEMBAR",
   issueOnly "ERRBAR", issueOnly "CGAERRBAR", issueOnly "CCTL",
   op "BRA" #[] (encoded (tm .cbu 1 0) ""),
