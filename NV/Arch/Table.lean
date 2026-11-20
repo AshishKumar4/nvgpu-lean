@@ -114,7 +114,7 @@ def sections (p : Params) : List (String × List Row) :=
     dsmemBytesPerCycle, smemCarveoutsKB, l2FarBytesPerCycle, smemAtomicInterval,
     l2FarCopiesNear, l2ClockRefMHz, l2LatencyFixedPermille, l2LatencyRefMHz, dramTurnaroundPs⟩ := mem
   let ⟨fmaPerCycle16, fmaPerCycle8, fmaPerCycleTF32, fmaPerCycleF64, wgmmaLatency, wgmmaLatencyRS,
-    mmaSyncLatency, tcgen05Latency, tmemLatency⟩ := tensor
+    mmaSyncLatency, wgmmaIssueSharePermille, wgmmaPipeSharePermille, tcgen05Latency, tmemLatency⟩ := tensor
   let ⟨mbarrierLatency, clusterMbarrierLatency, clusterBarrierCycles, namedBarrierLatency, barSync, fenceProxyAsync,
     fenceAcqRelCta, fenceAcqRelGpu, fenceScGpu, fenceAcqRelSys, fenceCycles, redReleaseGpu,
     atomAcqRelGpu,
@@ -187,6 +187,8 @@ def sections (p : Params) : List (String × List Row) :=
      row "tensor.wgmmaLatency" wgmmaLatency showPairs,
      row "tensor.wgmmaLatencyRS" wgmmaLatencyRS showPairs,
      rowN "tensor.mmaSyncLatency" mmaSyncLatency,
+     rowN "tensor.wgmmaIssueSharePermille" wgmmaIssueSharePermille,
+     rowN "tensor.wgmmaPipeSharePermille" wgmmaPipeSharePermille,
      rowN "tensor.tcgen05Latency" tcgen05Latency,
      rowN "tensor.tmemLatency" tmemLatency]),
    ("Synchronization (cycles unless the name says otherwise)",

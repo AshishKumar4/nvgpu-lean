@@ -321,6 +321,8 @@ The role column says who reads a fact (`NV/Core/Roles.lean`): only `engine` fact
 | `tensor.wgmmaLatency` |  | documented | engine | `ptx-isa-9.4` §9.7.15 Target ISA notes: wgmma requires sm_90a |  |
 | `tensor.wgmmaLatencyRS` |  | documented | engine | `ptx-isa-9.4` §9.7.15 Target ISA notes: wgmma requires sm_90a |  |
 | `tensor.mmaSyncLatency` | 35 | published (RTX 5090) | observed: bound input, not read by the engine | `yu2026` §III-A, Table III: mma m16n8k16 f32.f16.f16 dependent latency 34.5 cycles |  |
+| `tensor.wgmmaIssueSharePermille` | 0 | documented | engine | `ptx-isa-9.5` §9.7.15: wgmma needs sm_90a |  |
+| `tensor.wgmmaPipeSharePermille` | 0 | documented | engine | `ptx-isa-9.5` §9.7.15: wgmma needs sm_90a |  |
 | `tensor.tcgen05Latency` | 0 | documented | engine | `ptx-isa-9.5` §9.7.18: tcgen05 needs sm_100a |  |
 | `tensor.tmemLatency` | 0 | documented | engine | `ptx-isa-9.5` §9.7.18: tcgen05 needs sm_100a |  |
 

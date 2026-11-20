@@ -111,15 +111,18 @@ inductive Stall where
   | fence
   /-- Eligible, but the scheduler issued another warp (`not_selected`). -/
   | notSelected
+  /-- A cycle the sub-partition lost to its tensor core (`dispatch_stall`;
+  `TensorParams.wgmmaIssueSharePermille`). -/
+  | dispatch
   deriving DecidableEq, Repr, Inhabited
 
 def Stall.index : Stall → Nat
   | .wait => 0 | .longScoreboard => 1 | .shortScoreboard => 2 | .pipe => 3 | .regRead => 4
-  | .mio => 5 | .fetch => 6 | .barrier => 7 | .fence => 8 | .notSelected => 9
+  | .mio => 5 | .fetch => 6 | .barrier => 7 | .fence => 8 | .notSelected => 9 | .dispatch => 10
 
 def Stall.all : List Stall :=
   [.wait, .longScoreboard, .shortScoreboard, .pipe, .regRead, .mio, .fetch, .barrier, .fence,
-   .notSelected]
+   .notSelected, .dispatch]
 
 /-- The launch's cluster shape: the attribute's, else the kernel's required one. -/
 def Launch.clusterShape (l : Launch) : Nat × Nat × Nat :=
@@ -133,7 +136,7 @@ structure Counters where
   hazards : Nat := 0
   /-- Warp-cycles each live warp spent not issuing, by reason (`Stall.index`): the sum over warps
   of the cycles between its issues, attributed to the reason that held it last. -/
-  stalls : Array Nat := Array.replicate 10 0
+  stalls : Array Nat := Array.replicate 11 0
   /-- `gpc__cycles_elapsed.max`: cycles from the first CTA's start to the last warp's exit or the
   last memory request's delivery, whichever is later. -/
   cycles : Nat := 0
@@ -391,6 +394,9 @@ private structure Sm where
   position: the warp and register it holds). -/
   rfRead : Array Port
   reuse : Array (Array (Option (Nat × Nat)))
+  /-- Per sub-partition: the fraction of a cycle its stretched work has carried
+  (`TensorParams.wgmmaPipeSharePermille`), in `1000 - share`ths. -/
+  stealCarry : Array Nat := #[]
   last : Array (Option Nat)
   resident : Nat := 0
   /-- CTAs this SM has placed this launch (`FrontEndParams.rotateCtaWarps`). -/
@@ -600,12 +606,23 @@ private def never : Nat := 1000000000
 /-- The release cycle a dependence counter holds for a memory request not yet delivered. -/
 private def pendingAt : Nat := 1000000000000000
 
+/-- Whether sub-partition `q`'s tensor core is running a warpgroup MMA at `t`: the
+sub-partition's other work slows (`TensorParams.wgmmaIssueSharePermille`, `wgmmaPipeSharePermille`). -/
+private def tensorBusy (p : Params) (au : AsyncUnit.State) (si q t : Nat) : Bool :=
+  (au.gmma[si * p.smsps.value + q]?.any (·.free > t))
+
+/-- Cycle `t` is one sub-partition `q` loses to its tensor core: `wgmmaIssueSharePermille` of the
+cycles it is busy, spread evenly. -/
+private def lostCycle (p : Params) (au : AsyncUnit.State) (si q t : Nat) : Bool :=
+  let share := p.tensor.wgmmaIssueSharePermille.value
+  share > 0 && (t + 1) * share / 1000 > t * share / 1000 && tensorBusy p au si q t
+
 /-- Whether slot `s` can issue at `t`, and if not, the earliest cycle it might and the reason
 holding it longest. -/
 private def readiness (k : Kernel) (timings : Array (Option OpTiming))
     (fps : Array NV.SASS.Footprint) (mem : MemSys)
     (au : AsyncUnit.State) (si : Nat) (sm : Sm) (q : Nat) (i : Nat) (s : Slot) (t : Nat)
-    (functional : Bool) : Bool × Nat × Stall := Id.run do
+    (functional : Bool) (p : Params) : Bool × Nat × Stall := Id.run do
   if s.readyAt > t then return (false, s.readyAt, s.why)
   let some (pc, _) := s.w.current | return (false, 0, s.why)
   let some ins := k.code[pc]? | return (true, t, s.why)
@@ -656,6 +673,8 @@ private def readiness (k : Kernel) (timings : Array (Option OpTiming))
       let next := max (t + 1) ((mem.nextSm si).getD (t + 1))
       if next > wait then wait := next; why := .mio
   if sm.rfRead[q]!.free > wait then wait := sm.rfRead[q]!.free; why := .regRead
+  -- A cycle the sub-partition's tensor core takes: a warp ready in it waits for the next.
+  if wait ≤ t && lostCycle p au si q t then return (false, t + 1, .dispatch)
   return (wait ≤ t, wait, why)
 
 /-- The regular-register sources of an instruction by operand position (a, b, c): the register
@@ -1100,7 +1119,7 @@ private def pass (kit : Kit) (focus : Nat) (stop : Nat) (st : St) :
               sm := { sm with constLines := lines.insert (bank, line) t,
                               constReady := sm.constReady.erase (bank, line) }
         let s := sm.slots[i]!
-        let (ok, at_, why) := readiness k timings fps mem asyncU si sm q i s t l.functional
+        let (ok, at_, why) := readiness k timings fps mem asyncU si sm q i s t l.functional p
         if ok then cands := cands.push i
         else if at_ > t then
           wake := min wake at_
@@ -1459,6 +1478,15 @@ private def pass (kit : Kit) (focus : Nat) (stop : Nat) (st : St) :
       let hold := if l.functional then sm.slots.size else
         (if ins.ctrl.yield then max ins.ctrl.stall 2 else max ins.ctrl.stall 1) +
         (if taken then p.frontEnd.takenBranchCycles.value else 0)
+      -- While the sub-partition's tensor core runs a warpgroup MMA, its pipes lose a share of
+      -- their time: the instruction's occupancy stretches (`TensorParams.wgmmaPipeSharePermille`).
+      let share := p.tensor.wgmmaPipeSharePermille.value
+      let mut interval := tm.interval
+      if share > 0 && !l.functional && tm.pipe != .gmma && tensorBusy p asyncU si q t then
+        let den := 1000 - share
+        let b := interval * share + sm.stealCarry[q]!
+        sm := { sm with stealCarry := sm.stealCarry.set! q (b % den) }
+        interval := interval + b / den
       s := { s with readyAt := max s.readyAt (t + hold), sb, live := s.live && !s.w.done,
                     interlock := ins.ctrl.stall == 0 && p.frontEnd.stallZeroInterlocks.value }
       if atomWb.isSome then s := { s with readyAt := pendingAt, atomWb }
@@ -1491,8 +1519,8 @@ private def pass (kit : Kit) (focus : Nat) (stop : Nat) (st : St) :
         sm := { sm with reuse := sm.reuse.set! q cache }
       sm := { sm with slots := sm.slots.set! pick { s.settle with issuedAt := t },
                       pipes := sm.pipes.modify (q * Pipe.count + tm.pipe.index)
-                        (fun (port : Port) => (port.reserve t tm.interval).2),
-                      pipeWork := sm.pipeWork.modify (q * Pipe.count + tm.pipe.index) (· + tm.interval),
+                        (fun (port : Port) => (port.reserve t interval).2),
+                      pipeWork := sm.pipeWork.modify (q * Pipe.count + tm.pipe.index) (· + interval),
                       issued := sm.issued.modify q (· + 1),
                       last := sm.last.set! q (if ins.ctrl.yield then none else some pick) }
       c := { c with instExecuted := c.instExecuted + 1 }
@@ -1900,7 +1928,7 @@ private def runOnWith {m : Type → Type} {σ : Type} [Monad m] (pool : Pool m �
   let sm0 : Sm :=
     { bySmsp := Array.replicate smsps #[], pipes := Array.replicate (smsps * Pipe.count) {},
       pipeWork := Array.replicate (smsps * Pipe.count) 0, issued := Array.replicate smsps 0,
-      rfRead := Array.replicate smsps {},
+      rfRead := Array.replicate smsps {}, stealCarry := Array.replicate smsps 0,
       reuse := Array.replicate smsps (Array.replicate (banks * slots) none), smspHold := Array.replicate smsps 0,
       code := #[], last := Array.replicate smsps none }
   let quantum := mem.quantum

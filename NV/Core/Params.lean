@@ -231,6 +231,14 @@ structure TensorParams where
   wgmmaLatencyRS : Fact (List (Nat × Nat))
   /-- `mma.sync` m16n8k16 FP16/BF16 into FP32: dependent issue distance. -/
   mmaSyncLatency : Fact Nat
+  /-- Per mille of a sub-partition's issue cycles its tensor core takes while it runs a warpgroup
+  MMA (spread evenly); 0 on a part without warpgroup MMA. -/
+  wgmmaIssueSharePermille : Fact Nat :=
+    { value := 0, kind := .documented, source := { ref := "ptx-isa-9.5", loc := "§9.7.15: wgmma needs sm_90a" } }
+  /-- Per mille of the sub-partition's pipes' time it takes meanwhile: an instruction's pipe
+  occupancy stretches by `1000 / (1000 - it)`; 0 on a part without warpgroup MMA. -/
+  wgmmaPipeSharePermille : Fact Nat :=
+    { value := 0, kind := .documented, source := { ref := "ptx-isa-9.5", loc := "§9.7.15: wgmma needs sm_90a" } }
   /-- `tcgen05.mma` (`sm_100a`): cycles from an MMA's start on the tensor core to its result, at
   the least (its operand reads may take longer); 0 on a part without tensor memory. -/
   tcgen05Latency : Fact Nat :=
