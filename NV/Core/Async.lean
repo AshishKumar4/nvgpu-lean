@@ -359,6 +359,12 @@ def readDone (st : State) (t a : Nat) (outs : Array Out) : State × Array Out :=
     if gr.onRead then (st, outs) := releaseFrom st gi t outs
   return (st, outs)
 
+/-- A done operation no later one starts from any more: its result and the writeback that lands
+it are let go (each holds what the operation computed; a run keeps every agent, by index, and an
+accumulating chain of MMAs kept every link's until the launch ended). -/
+def Agent.letGo (p : Agent) : Agent :=
+  if p.doneAt.isSome && !p.held then { p with task := none, wb := fun _ w => w } else p
+
 /-- Agent `a` completed at `t`: its group's bookkeeping, and the waiting agents now free to
 start. -/
 def finish (st : State) (t a : Nat) (outs : Array Out) : State × Array Out × Array Nat := Id.run do
@@ -452,8 +458,8 @@ def progress (st : State) (mem : MemSys) (t a : Nat) :
     let st := { st with agents := st.agents.modify a ({ · with task := some task }) }
     -- The predecessor's result is this task's to hold now; done, it lets it go.
     let st := match g.chained, g.source with
-      | true, some src => { st with agents := st.agents.modify src fun p =>
-          { p with held := false, task := if p.doneAt.isSome then none else p.task } }
+      | true, some src =>
+        { st with agents := st.agents.modify src (fun p => Agent.letGo { p with held := false }) }
       | _, _ => st
     let o := g.origin
     let tr := match g.tix with
@@ -485,8 +491,8 @@ def progress (st : State) (mem : MemSys) (t a : Nat) :
       let rs := m.stores res
       -- The predecessor's accumulator has been consumed, as for a register MMA above.
       let st := match g.chained, g.source with
-        | true, some src => { st with agents := st.agents.modify src fun p =>
-            { p with held := false, task := if p.doneAt.isSome then none else p.task } }
+        | true, some src =>
+          { st with agents := st.agents.modify src (fun p => Agent.letGo { p with held := false }) }
         | _, _ => st
       let mut st := { st with agents := st.agents.modify a ({ · with stored := true, task := some (Task.pure res) }) }
       let mut mem := mem
@@ -683,20 +689,21 @@ def start (p : Params) (st : State) (mem : MemSys) (t : Nat) (o : Origin) (op : 
   -- The source's result: held for this one, or, done and passed over, let go.
   let mut st := match source with
     | some src => { st with agents := st.agents.modify src fun p =>
-        if chained == true then { p with held := true }
-        else { p with task := if p.doneAt.isSome then none else p.task } }
+        if chained == true then { p with held := true } else p.letGo }
     | none => st
   st := { st with agents := st.agents.push { origin := o, body, wb, pc, group, deps, prev,
                                              source, chained, tix := trace.map (·.1),
                                              land := (trace.map (·.2)).getD 0 } }
   if let .mma m := op then
+    -- Writing D afresh retires its former result too, when this MMA does not accumulate from it.
+    if let some prev := st.lastByDst.get? (o.sm, o.slot, m.dst) then
+      if source != some prev then st := { st with agents := st.agents.modify prev Agent.letGo }
     st := { st with lastMma := st.lastMma.insert (o.sm, o.slot) a,
                     lastByDst := st.lastByDst.insert (o.sm, o.slot, m.dst) a }
   if let .mmaT m := op then
     -- Replacing D also retires its former result when this MMA does not accumulate from it.
     if let some prev := st.lastMmaTByD.get? (o.sm, o.slot, m.dKey) then
-      st := { st with agents := st.agents.modify prev fun p =>
-        if p.doneAt.isSome && !p.held then { p with task := none } else p }
+      st := { st with agents := st.agents.modify prev Agent.letGo }
     st := { st with lastMmaT := st.lastMmaT.insert (o.sm, o.slot) a,
                     lastMmaTByD := st.lastMmaTByD.insert (o.sm, o.slot, m.dKey) a }
   -- Operations join their warp's open group until a commit closes it (`tcgen05` operations have
