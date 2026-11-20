@@ -418,20 +418,87 @@ def Module.of (sass elf : String) (base : Nat := Elf.dataBase) : Module :=
   { sass, attrs, textBase := texts.foldl min (texts.head?.getD 0), hash := Hashable.hash sass,
     data := Elf.moduleData elf ls base, sm := (Elf.sm? elf ls).getD 90 }
 
+/-- A kernel's code with the module's device functions it calls appended (a relocatable module's
+`CALL.ABS.NOINC` to a function in its own section: `__cuda_sm20_div_rn_f64_full`, the binary64
+division's slow path), their code addresses relocated as the driver's linker does: each callee
+placed after the code before it, its branch targets moved with it, a `CALL.ABS`'s target
+(`R_CUDA_ABS55_16_34`, sm_80's `R_CUDA_ABS47_34`) its place, and the return address a caller loads into a register
+(`R_CUDA_ABS32_LO_32`, `_HI_32`) the code address of its place (`codeOffset` plus it, which
+`RET.ABS` reads back). -/
+def withCallees (m : Module) (name : String) (code : Array Instr) (codeOffset : Nat) :
+    Except String (Array Instr) := do
+  let relas := m.data.textRelas
+  if !relas.any (·.1 == name) then return code
+  -- The callees, transitively, in the order first referenced.
+  let mut order : Array String := #[name]
+  let mut i := 0
+  while i < order.size do
+    for (f, _, sym, _, _) in relas do
+      if f == order[i]! && !order.contains sym && !m.data.externs.any (·.2 == sym) then
+        order := order.push sym
+    i := i + 1
+  let callees := order.extract 1 order.size
+  let fns ← if callees.isEmpty then pure #[] else listing m.sass (callees.contains ·)
+  -- Each function's place: the kernel at 0, each callee after the code before it.
+  let mut base : Array (String × Nat) := #[(name, 0)]
+  let mut out := code
+  let mut next := (code.back?.map (·.pc + 16)).getD 0
+  for c in callees do
+    let some (_, cc) := fns.find? (·.1 == c) | throw s!"{name}: calls {c}, which the listing lacks"
+    base := base.push (c, next)
+    let b := next
+    let moved := cc.map fun ins =>
+      let absRet := ins.opcode == "RET" && ins.mods.contains "ABS"
+      { ins with pc := ins.pc + b,
+                 operands := if absRet then ins.operands else ins.operands.map fun
+                   | .target t => .target (t + b)
+                   | o => o }
+    out := out ++ moved
+    next := (moved.back?.map (·.pc + 16)).getD next
+  -- The relocations of every placed function, applied to its instructions.
+  for (f, off, sym, ty, add) in relas do
+    let some (_, fb) := base.find? (·.1 == f) | continue
+    let some (_, sb) := base.find? (·.1 == sym) | continue
+    let some k := out.findIdx? (·.pc == fb + off) | throw s!"{f}: a relocation at {off}, no instruction"
+    let ins := out[k]!
+    let addr := codeOffset + sb + add
+    let isImm : Operand → Bool := fun | .imm _ => true | _ => false
+    let lastImm : Option Nat := (ins.operands.size - 1 - ·) <$> ins.operands.reverse.findIdx? isImm
+    let ops ← match ty with
+      | "R_CUDA_ABS55_16_34" | "R_CUDA_ABS47_34" =>
+        if ins.operands.isEmpty then throw s!"{f}: {ins.opcode} at {off}: a call with no target"
+        pure (ins.operands.set! 0 (Operand.target (sb + add)))
+      | "R_CUDA_ABS32_LO_32" | "R_CUDA_ABS32_HI_32" =>
+        let some j := lastImm | throw s!"{f}: {ins.opcode} at {off}: no immediate to relocate"
+        let v := if ty == "R_CUDA_ABS32_LO_32" then addr % 2 ^ 32 else addr / 2 ^ 32
+        pure (ins.operands.set! j (Operand.imm v.toUInt64))
+      | _ => throw s!"{f}: relocation {ty} at {off} is not modelled"
+    out := out.set! k { ins with operands := ops }
+  return out
+
 /-- The module's kernels `want` accepts. -/
 def Module.kernels (m : Module) (want : String → Bool := fun _ => true) : Except String (Array Kernel) := do
   (← listing m.sass want).mapM fun (name, code) => do
     let some a := m.attrs.lookup name | throw s!"{name}: not in the ELF attributes"
+    let codeOffset := (a.textOffset.getD m.textBase) - m.textBase
+    let own := code.size
+    let code ← withCallees m name code codeOffset
+    -- A callee's registers count with the kernel's (the kernel's `EIATTR_REGCOUNT` in a
+    -- relocatable module is its own): the highest register each callee names, and its pair.
+    let calleeRegs := (code.extract own code.size).foldl (fun n i => i.operands.foldl (fun n o => match o with
+      | .reg ⟨.r, r⟩ _ => if r < 255 then max n (r + 2) else n
+      | _ => n) n) 0
     let params := (a.params.qsort (·.1 < ·.1)).map fun (_, off, n) => (off, n)
     -- `USETMAXREG.TRY_ALLOC UPd, n` raises the warp's allocation to n registers.
     let raised := code.foldl (fun m i => if i.opcode != "USETMAXREG" then m else
       i.operands.foldl (fun m o => match o with | .imm n => max m n.toNat | _ => m) m) 0
-    return { name, code, regs := a.regs, regFile := max a.regs raised, params, paramBytes := a.paramBytes,
+    let regs := max a.regs calleeRegs
+    return { name, code, regs, regFile := max regs raised, params, paramBytes := a.paramBytes,
              paramBase := a.paramBase, cluster := a.cluster,
              sharedBytes := a.sharedSection - Elf.reservedShared.value,
              sharedReserved := Elf.reservedShared.value, localBytes := a.minStackBytes,
              sm := m.sm, banks := a.banks.toArray ++ m.data.banks, data := m.data.data,
-             externs := m.data.externs, codeOffset := (a.textOffset.getD m.textBase) - m.textBase,
+             externs := m.data.externs, codeOffset,
              module := m.hash }
 
 /-- Kernels from a listing and the same cubin's `cuobjdump -elf` text: those named in `names`, or

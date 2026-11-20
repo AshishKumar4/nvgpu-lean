@@ -1,0 +1,39 @@
+// Binary64 division and reciprocal over edge operands (tests/diff/f64div.ptx), compared word by word between the PTX
+// interpreter and the SASS simulator (Tests/SassDiff.lean): thread t divides a = in[t % 16] by
+// b = in[16 + t / 16] (zeros, subnormals, the normal range's ends, near-cancelling values, infinities,
+// NaN), the quotients that leave the fast path. out[4t..4t+3]: div.rn.f64 a, b; rcp.rn.f64 b.
+// Compiled as a relocatable module (`ptxas -c`): its division's slow path is a function of its own
+// section, called with `CALL.ABS.NOINC` and returned from by `RET.ABS` to an address the caller
+// loads under relocations, which the loader applies (`Read.withCallees`).
+// ptxas-flags: -c
+.version 9.0
+.target sm_90a
+.address_size 64
+
+.visible .entry f64divrel(.param .u64 out, .param .u64 in)
+{
+  .reg .f64 a, b, r;
+  .reg .b32 t, i, j;
+  .reg .b64 o, x, rd, ro;
+  ld.param.u64 o, [out];
+  ld.param.u64 x, [in];
+  cvta.to.global.u64 o, o;
+  cvta.to.global.u64 x, x;
+  mov.u32 t, %tid.x;
+  and.b32 i, t, 15;
+  shr.u32 j, t, 4;
+  add.u32 j, j, 16;
+  mul.wide.u32 rd, i, 8;
+  add.s64 rd, x, rd;
+  ld.global.f64 a, [rd];
+  mul.wide.u32 rd, j, 8;
+  add.s64 rd, x, rd;
+  ld.global.f64 b, [rd];
+  mul.wide.u32 ro, t, 16;
+  add.s64 o, o, ro;
+  div.rn.f64 r, a, b;
+  st.global.f64 [o], r;
+  rcp.rn.f64 r, b;
+  st.global.f64 [o+8], r;
+  ret;
+}

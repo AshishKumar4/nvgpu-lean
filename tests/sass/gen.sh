@@ -27,8 +27,10 @@ for arch in sm_80 sm_120a sm_100a; do
     esac
     rm -f "$tmp/k.cubin"
     case "$src" in
+      # A source may name ptxas flags in a `// ptxas-flags:` line (`-c`: a relocatable module).
       *.ptx) sed -E "s/^\.target sm_90a?\b/.target $arch/" "$src" > "$tmp/k.ptx"
-             ptxas -arch=$arch -m64 "$tmp/k.ptx" -o "$tmp/k.cubin" > /dev/null 2>&1 || true ;;
+             ptxas -arch=$arch -m64 $(sed -n 's|^// ptxas-flags: ||p' "$src" | head -1) "$tmp/k.ptx" -o "$tmp/k.cubin" \
+               > /dev/null 2>&1 || true ;;
       *.cu) nvcc -arch=$arch -cubin -o "$tmp/k.cubin" "$src" \
               > /dev/null 2>&1 || true ;;
     esac
@@ -40,7 +42,7 @@ done
 for src in *.ptx *.cu; do
   name=${src%.*}
   case "$src" in
-    *.ptx) ptxas -arch=sm_90a -m64 "$src" -o "$tmp/$name.cubin" ;;
+    *.ptx) ptxas -arch=sm_90a -m64 $(sed -n 's|^// ptxas-flags: ||p' "$src" | head -1) "$src" -o "$tmp/$name.cubin" ;;
     *.cu) nvcc -arch=sm_90a -cubin -o "$tmp/$name.cubin" "$src" ;;
   esac
   cuobjdump -sass "$tmp/$name.cubin" > "$out/$name.sass"

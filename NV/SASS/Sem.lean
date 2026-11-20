@@ -860,7 +860,7 @@ def decodeCtrl (d : Dec) : Option Run :=
         if i.hasMod "ABS" then
           let a := toU64 (x.v.getR (match x.o 0 with | .reg ⟨.r, r⟩ _ => r | _ => 0) l)
             (x.v.getR (match x.o 0 with | .reg ⟨.r, r⟩ _ => r + 1 | _ => 0) l)
-          if a.toNat < x.k.codeOffset then .fault x.bad
+          if a.toNat < x.k.codeOffset then .fault s!"{x.i.full} at {x.i.pc}: a return to {a}, below the kernel's code"
           else x.jumpTo (.target (a.toNat - x.k.codeOffset + base)) x.on
         else match src x.env x.v l (x.o 0) with
         | some a => x.jumpTo (.target (base + a.toNat)) x.on

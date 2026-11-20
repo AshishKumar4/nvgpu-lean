@@ -280,6 +280,9 @@ structure ModuleData where
   /-- Where bank 3 (`__constant__` data) is placed among the data, if the module has one: a host
   copy to a `__constant__` variable writes there, and the device reads the bank from it. -/
   bank3 : Option Nat := none
+  /-- Relocations in functions' code (a relocatable module's calls to its own device functions, and
+  the return addresses it loads for them): function, offset in it, symbol, type, addend. -/
+  textRelas : Array (String × Nat × String × String × Nat) := #[]
   deriving Inhabited
 
 /-- The bytes a section dump shows: words, then a short tail byte by byte (`.nv.global.init` of
@@ -315,6 +318,7 @@ def moduleData (text : String) (ls : Array Substring.Raw := lines text) (base : 
   -- Relocations: section, offset, symbol, and the addend (`none` for a `.rel` section's, whose
   -- addend is the word already at the offset).
   let mut relas : Array (String × Nat × String × Option Nat) := #[]
+  let mut textRelas : Array (String × Nat × String × String × Nat) := #[]
   let mut mode : String := ""
   let mut cur : String := ""
   let te := tableEnd ls
@@ -355,6 +359,14 @@ def moduleData (text : String) (ls : Array Substring.Raw := lines text) (base : 
       if let (some o, some a) := (num? off, num? add) then relas := relas.push (cur, o, sym, some a)
     | "rela", [off, sym, "R_CUDA_64"] =>
       if let some o := num? off then relas := relas.push (cur, o, sym, none)
+    | "rela", [off, sym, ty, add] =>
+      if cur.startsWith ".text." && ty.startsWith "R_CUDA_ABS" then
+        if let (some o, some a) := (num? off, num? add) then
+          textRelas := textRelas.push ((cur.drop ".text.".length).toString, o, sym, ty, a)
+    | "rela", [off, sym, ty] =>
+      if cur.startsWith ".text." && ty.startsWith "R_CUDA_ABS" then
+        if let some o := num? off then
+          textRelas := textRelas.push ((cur.drop ".text.".length).toString, o, sym, ty, 0)
     | "dump", toks =>
       if toks.all (·.startsWith "0x") && !toks.isEmpty then
         let ns := (toks.filterMap num?).toArray
@@ -412,6 +424,6 @@ def moduleData (text : String) (ls : Array Substring.Raw := lines text) (base : 
   if let (some b3, some (_, ws)) := (bank3, banks.find? (·.1 == 3)) then
     data := data.push (b3, (ws.toList.flatMap fun w =>
       (List.range 4).map fun j => (w >>> (8 * j).toUInt32).toUInt8).toArray.extract 0 (sizeOf ".nv.constant3"))
-  return { data, banks, externs, symbols, bank3 }
+  return { data, banks, externs, symbols, bank3, textRelas }
 
 end NV.SASS.Elf

@@ -55,7 +55,10 @@ def compile (ptx : String) : IO (Array Kernel) := do
     if t.endsWith "a" && t != a then
       throw (IO.userError s!"the file's .target {t} is another architecture's")
   IO.FS.writeFile src text
-  discard <| tool "ptxas" #[s!"-arch={a}", "-m64", src, "-o", cubin]
+  -- Flags a source names in a `// ptxas-flags:` line (`-c`: a relocatable module).
+  let flags := ((text.splitOn "\n").findSome? (·.dropPrefix? "// ptxas-flags: ")).map
+    (fun r => (r.toString.splitOn " ").filter (!·.isEmpty)) |>.getD []
+  discard <| tool "ptxas" (#[s!"-arch={a}", "-m64"] ++ flags.toArray ++ #[src, "-o", cubin])
   IO.ofExcept (Read.kernels (← tool "cuobjdump" #["-sass", cubin]) (← tool "cuobjdump" #["-elf", cubin]))
 
 def kernel (ks : Array Kernel) (name : String) : IO Kernel :=
