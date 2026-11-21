@@ -632,6 +632,17 @@ private def route (m : SmMem) (t id : Nat) (dir : Directory) : Except String SmM
       if psm == m.sm then throw "tcgen05: a CTA pair on one SM"
       m := m.push t (.send { key := { key with part := i }, req := part, to := psm, cta := pcta, lanes := plns })
   | s => throw s!"{repr s} memory is not modelled yet"
+  -- A generic access's lanes into the CTA's shared memory (`Req.sharedPart`): one more part, at
+  -- the shared stage.
+  if !req.sharedPart.isEmpty then
+    let part : Req := { req with space := .shared, addrs := req.sharedPart, sharedPart := #[] }
+    let lanes := (List.range part.addrs.size).toArray.filter (part.addrs[·]!.isSome)
+    let pkey := { key with part := 1000 }
+    if !lanes.isEmpty then m := m.record t (.issue pkey (m.agent r) (m.sm, r.origin.cta) part)
+    -- The other space's path counted its parts (and finished the request if it had none).
+    let r' := m.reqs[id]!
+    m := m.modReq id ({ · with parts := r'.parts + 1, toOrder := r'.toOrder + 1 })
+    m := m.push t (.bank id r.origin.cta lanes pkey part)
   return m
 
 private def dispatch (m : SmMem) (t : Nat) (dir : Directory) : Except String SmMem := do

@@ -1,0 +1,63 @@
+// A generic pointer to a thread's local array (cvta.local): ptxas forms it from the stack pointer and
+// the local window's base in constant bank 0, and a generic load through it reads local memory.
+.version 9.0
+.target sm_90a
+.address_size 64
+
+// out[t] = 3 * t + 7, through a local array read back by a generic load at a thread-varying index.
+.visible .entry genlocal(.param .u64 out)
+{
+  .local .align 4 .b8 buf[64];
+  .reg .b32 t, v, i;
+  .reg .b64 rd<8>;
+  ld.param.u64 rd1, [out];
+  cvta.to.global.u64 rd1, rd1;
+  mov.u32 t, %tid.x;
+  mad.lo.u32 v, t, 3, 7;
+  and.b32 i, t, 15;
+  mov.u64 rd2, buf;
+  mul.wide.u32 rd3, i, 4;
+  add.s64 rd4, rd2, rd3;
+  st.local.u32 [rd4], v;
+  cvta.local.u64 rd5, rd4;
+  ld.u32 v, [rd5];
+  mul.wide.u32 rd6, t, 4;
+  add.s64 rd7, rd1, rd6;
+  st.global.u32 [rd7], v;
+  ret;
+}
+
+// out[t] = 5 * t + 1 for even t (from shared memory), 3 * t + 7 for odd t (from a local array),
+// through one generic load whose lanes split between the two windows (PyTorch's layer_norm).
+.visible .entry genmixed(.param .u64 out)
+{
+  .local .align 4 .b8 buf[64];
+  .shared .align 4 .b8 sm[256];
+  .reg .b32 t, v, w, i, odd;
+  .reg .pred p;
+  .reg .b64 rd<12>;
+  ld.param.u64 rd1, [out];
+  cvta.to.global.u64 rd1, rd1;
+  mov.u32 t, %tid.x;
+  mad.lo.u32 v, t, 3, 7;
+  mad.lo.u32 w, t, 5, 1;
+  and.b32 i, t, 15;
+  mov.u64 rd2, buf;
+  mul.wide.u32 rd3, i, 4;
+  add.s64 rd4, rd2, rd3;
+  st.local.u32 [rd4], v;
+  mov.u64 rd5, sm;
+  mul.wide.u32 rd6, t, 4;
+  add.s64 rd7, rd5, rd6;
+  st.shared.u32 [rd7], w;
+  bar.sync 0;
+  cvta.local.u64 rd8, rd4;
+  cvta.shared.u64 rd9, rd7;
+  and.b32 odd, t, 1;
+  setp.ne.u32 p, odd, 0;
+  selp.b64 rd10, rd8, rd9, p;
+  ld.u32 v, [rd10];
+  add.s64 rd11, rd1, rd6;
+  st.global.u32 [rd11], v;
+  ret;
+}

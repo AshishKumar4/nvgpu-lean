@@ -130,6 +130,9 @@ structure Req where
   addrs : Array (Option UInt64)
   /-- Store, atomic and `cas` operands, lane-major (`cas`: compare words then swap words). -/
   data : Array UInt32 := #[]
+  /-- A generic access whose lanes name both the issuing CTA's shared memory and `space`: per
+  lane, the shared address of a lane in shared memory (its `addrs` entry is then `none`). -/
+  sharedPart : Array (Option UInt64) := #[]
   deriving Repr, Inhabited
 
 /-- A request's answer: the loaded or old words, lane-major, `words bytes` per lane (inactive

@@ -366,7 +366,7 @@ no queues, no timing), and its response (`words bytes` per lane, lane-major, as 
 `shared::cluster` lane performs on the shared memory of the CTA its address names (the cluster
 `Directory`), a local lane on its own lane's store. Each store is taken out while written, so it
 is written in place. -/
-def performNow (m : MemSys) (sm cta slot : Nat) (r : Req) : Except String (MemSys × Resp) := do
+private def performOne (m : MemSys) (sm cta slot : Nat) (r : Req) : Except String (MemSys × Resp) := do
   let n := words r.bytes
   let mut m := m
   let mut out : Array UInt32 := Array.replicate (if r.op.returns then r.addrs.size * n else 0) 0
@@ -424,6 +424,18 @@ def performNow (m : MemSys) (sm cta slot : Nat) (r : Req) : Except String (MemSy
       m := { m with sms := m.sms.modify psm fun x => { x with tmem := st } }
   | sp => throw s!"{repr sp} memory is not modelled yet"
   return (m, out)
+
+@[inherit_doc performOne]
+def performNow (m : MemSys) (sm cta slot : Nat) (r : Req) : Except String (MemSys × Resp) := do
+  if r.sharedPart.isEmpty then return ← m.performOne sm cta slot r
+  -- A generic access into shared memory and another space: each part on its own.
+  let (m, a) ← m.performOne sm cta slot { r with sharedPart := #[] }
+  let (m, b) ← m.performOne sm cta slot { r with space := .shared, addrs := r.sharedPart, sharedPart := #[] }
+  let n := words r.bytes
+  return (m, (List.range r.sharedPart.size).foldl (fun out l =>
+    if (r.sharedPart[l]?.join).isSome && r.op.returns then
+      (List.range n).foldl (fun o j => o.set! (l * n + j) (b[l * n + j]?.getD 0)) out
+    else out) a)
 
 end MemSys
 

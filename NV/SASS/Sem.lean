@@ -1568,7 +1568,9 @@ def decodeMem (d : Dec) : Option Run :=
   | "LD" | "ST" =>
     -- Generic loads and stores (`LD.E`, `ST.E`): each lane's address resolved through the
     -- windows (`genericTarget`) at issue, from the address registers the read counter keeps
-    -- unchanged until they are read. Lanes into different spaces are not modelled.
+    -- unchanged until they are read. Lanes into the CTA's shared memory and one other space
+    -- (a select between a shared and a stack object) are one request (`Req.sharedPart`); other
+    -- mixes are not modelled.
     let ld := i.opcode == "LD"
     let (ao, vo) := if ld then (d.o 1, d.o 0) else (d.o 0, d.o 1)
     if !isAddr ao || !isReg vo then some d.fault else
@@ -1576,16 +1578,25 @@ def decodeMem (d : Dec) : Option Run :=
     some <| d.run fun x =>
       let targets := (List.range 32).filterMap fun l =>
         if Warp.laneOn x.on l then (addr x.v l a).map (genericTarget x.env d.k.sm) else none
-      match targets with
-      | [] => .next (x.fin x.w)
-      | (sp, _) :: _ =>
-        if targets.any (·.1 != sp) then
+      let others := targets.filter (·.1 != .shared)
+      match targets, others with
+      | [], _ => .next (x.fin x.w)
+      | (sp0, _) :: _, rest =>
+        let sp := (rest.head?.map (·.1)).getD sp0
+        if rest.any (·.1 != sp) then
           .fault s!"{i.full} at {i.pc}: lanes address different state spaces (not modelled)"
         else
+          let mixed := sp != .shared && targets.any (·.1 == .shared)
+          let at_ (w' : View) (l : Nat) : Option (Space × UInt64) :=
+            if Warp.laneOn x.on l then (addr w' l a).map (genericTarget x.env d.k.sm) else none
           let req (w' : View) : Req :=
             { space := sp, op := if ld then .ld else .st, bytes, sem, scope,
-              addrs := (List.range 32).toArray.map fun l =>
-                if Warp.laneOn x.on l then (addr w' l a).map (genericTarget x.env d.k.sm · |>.2) else none,
+              addrs := (List.range 32).toArray.map fun l => match at_ w' l with
+                | some (s, b) => if s == sp then some b else none
+                | none => none,
+              sharedPart := if !mixed then #[] else (List.range 32).toArray.map fun l => match at_ w' l with
+                | some (.shared, b) => some b
+                | _ => none,
               data := if ld then #[] else data [vo] n x.on w' }
           .mem req (x.fin x.w)
             (if ld then load vo n extend x.on else fun _ => [])

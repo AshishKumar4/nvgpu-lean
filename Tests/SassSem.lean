@@ -139,6 +139,21 @@ def checkJumps : IO (List String) := do
   | .ok bs => return compare "jumps" bs[0]! ((List.range n).map fun t =>
       (t, match t % 4 with | 0 => 10 | 1 => 3 * t | 2 => bxor t 0x5a | _ => t + 1000))
 
+/-- A generic load through a pointer to a thread's local array (`tests/sass/genlocal.ptx`): its
+address is the stack pointer over the local window's base in constant bank 0. -/
+def checkGenericLocal : IO (List String) := do
+  let k ← kernel (← compile "tests/sass/genlocal.ptx") "genlocal"
+  let n := 64
+  match ← run k 1 n [Array.replicate n 0] with
+  | .error e => return [s!"genlocal: {e}"]
+  | .ok bs =>
+    let ks ← compile "tests/sass/genlocal.ptx"
+    let mixed ← match ← run (← kernel ks "genmixed") 1 n [Array.replicate n 0] with
+      | .error e => pure [s!"genmixed: {e}"]
+      | .ok cs => pure (compare "genmixed" cs[0]! ((List.range n).map fun t =>
+          (t, if t % 2 == 1 then 3 * t + 7 else 5 * t + 1)))
+    return compare "genlocal" bs[0]! ((List.range n).map fun t => (t, 3 * t + 7)) ++ mixed
+
 /-- The same table on a warp-uniform index (`tests/sass/jumpsu.ptx`): `BRXU`, timed. -/
 def checkJumpsU : IO (List String) := do
   let k ← kernel (← compile "tests/sass/jumpsu.ptx") "jumpsu"
@@ -520,7 +535,7 @@ def main (args : List String) : IO UInt32 := do
   let fs ← if args.isEmpty || args.contains "compiled" then checkCompiled else pure []
   IO.println s!"compiled forms: {if fs.isEmpty then "ok" else s!"{fs.length} failures"}"
   failures := failures ++ fs
-  let fs ← if args.isEmpty || args.contains "jumps" then (do pure ((← checkJumps) ++ (← checkJumpsU))) else pure []
+  let fs ← if args.isEmpty || args.contains "jumps" then (do pure ((← checkJumps) ++ (← checkJumpsU) ++ (← checkGenericLocal))) else pure []
   IO.println s!"jumps: {if fs.isEmpty then "ok" else s!"{fs.length} failures"}"
   failures := failures ++ fs
   let fs ← if args.isEmpty || args.contains "timing" then checkTiming else pure []

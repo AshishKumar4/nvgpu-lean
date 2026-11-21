@@ -533,13 +533,16 @@ structure ConstLayout where
   sm_80's `cvta.param` adds the offset in the bank to the word at 0x40). -/
   paramAddr : List Nat := []
   bankAddr : List Nat := []
+  /-- A 64-bit word holding the shared window's base (`cvta.shared` on sm_80, at 0x18; later
+  targets read `SR_SWINHI`). -/
+  sharedWindow : Option Nat := none
 
 def ConstLayout.ofSm : Nat → ConstLayout
   | 100 | 103 | 120 =>
     { ntid := 0x360, nctaid := 0x370, stack := 0x37c, dynSmem := 0x2ac, reservedSmem := 0x16c,
       clusterTables := some (0x2a0, 0x2c0, 0x36c), paramAddr := [0x348] }
   | 80 => { ntid := 0x0, nctaid := 0xc, stack := 0x28, dynSmem := 0x2c, reservedSmem := 0x114,
-            bankAddr := [0x40] }
+            bankAddr := [0x40], sharedWindow := some 0x18 }
   | _ => { ntid := 0x0, nctaid := 0xc, stack := 0x28, dynSmem := 0x2c, reservedSmem := 0x114,
            cluster := some 0x140, paramAddr := [0x198] }
 
@@ -574,6 +577,14 @@ def constBank0 (l : Launch) : Store := Id.run do
       (expl, if explicit then 1 else 0)]
     for (off, n) in [(nctaid + 0x10, cx), (nctaid + 0x14, cy), (nctaid + 0x18, cz)] do
       s := s.writeWord off (Float32.ofNat 1 / Float32.ofNat n).toBits
+  -- The local window's base, where `cvta.local` reads it (a generic address of a thread's
+  -- local memory: the stack pointer over it).
+  let lw := ({} : NV.Windows).local.toNat
+  let lo := NV.SASS.Exec.localWindowAt k.sm
+  words := words ++ [(lo, lw % 2 ^ 32), (lo + 4, lw / 2 ^ 32)]
+  if let some sw := c.sharedWindow then
+    let b := ({} : NV.Windows).shared.toNat
+    words := words ++ [(sw, b % 2 ^ 32), (sw + 4, b / 2 ^ 32)]
   let pa := (paramAddrOf l).toNat
   for off in c.paramAddr do words := words ++ [(off, pa % 2 ^ 32), (off + 4, pa / 2 ^ 32)]
   for off in c.bankAddr do
