@@ -19,6 +19,8 @@ def setup():
     """Import JAX for the emulated devices, before its backend starts; return the jax module."""
     os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
     os.environ.setdefault("JAX_PLATFORMS", "cuda")
+    # The device has no profiler (CUPTI), whose version JAX's CUDA plugin checks at start.
+    os.environ.setdefault("JAX_SKIP_CUDA_CONSTRAINTS_CHECK", "1")
     # No autotuning: it times kernels with XLA's delay kernel, which spins on host memory (jax_check.py).
     flags = os.environ.get("XLA_FLAGS", "")
     if "xla_gpu_autotune_level" not in flags:

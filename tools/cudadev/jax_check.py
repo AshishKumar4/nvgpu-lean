@@ -18,6 +18,8 @@ import sys
 import time
 
 os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+# The device has no profiler (CUPTI), whose version JAX's CUDA plugin checks at start.
+os.environ.setdefault("JAX_SKIP_CUDA_CONSTRAINTS_CHECK", "1")
 # The CUDA device or nothing: JAX would otherwise fall back to the CPU and print a warning.
 os.environ.setdefault("JAX_PLATFORMS", "cuda")
 flags = os.environ.get("XLA_FLAGS", "")

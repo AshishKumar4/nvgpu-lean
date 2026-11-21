@@ -42,6 +42,7 @@ export LD_LIBRARY_PATH="$here/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export PATH="$here/bin:$here/cuda/bin:$PATH"
 export PYTHONPATH="$here/python${PYTHONPATH:+:$PYTHONPATH}"
 export NVGPU_LEAN_GPU="${NVGPU_LEAN_GPU:-h100x2}"
+export JAX_SKIP_CUDA_CONSTRAINTS_CHECK=1  # the device has no profiler (CUPTI), whose version JAX checks
 export NVGPU_LEAN_CUDA="$here/cuda"
 export NVGPU_LEAN_CUOBJDUMP_OLD="$here/cuobjdump-12.8/cuobjdump"
 export NVGPU_LEAN_CUOBJDUMP_NEW="$here/cuobjdump-13.5/cuobjdump"
