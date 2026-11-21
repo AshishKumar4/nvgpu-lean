@@ -2,9 +2,12 @@
 // simulator exported (`lake exe sim SPEC --export DIR`), compare its global memory afterwards with
 // the simulator's byte for byte, and time it.
 //
-// Usage: lifted EXPORT_DIR [REPS]
+// Usage: lifted EXPORT_DIR [REPS] [--helpers N]
 //   EXPORT_DIR holds meta.txt, const0.bin, global.bin (before) and final.bin (the simulator's after).
-// Prints the mismatching bytes (0 means bit-exact), the first ones, and the kernel's time.
+// Prints the mismatching bytes (0 means bit-exact), the first ones, and the kernel's time. A
+// kernel that reads the clock and differs is CLOCK-DEPENDENT (exit 5), not a mismatch.
+//   --helpers N: at most N helper CTAs (rt.cuh's work pool; default, every one the GPU holds
+//   beside the launch's CTAs; 0, none).
 //        lifted EXPORT_DIR --out
 //   An accelerated backend's run: one run, its global memory
 //   after it written to out.bin, and to out-module.bin the module segment's (meta.txt's moduleBase
@@ -46,10 +49,17 @@ static std::map<std::string, std::vector<unsigned long long>> readMeta(const std
 }
 
 int main(int argc, char** argv) {
-  if (argc < 2) { fprintf(stderr, "usage: lifted EXPORT_DIR [REPS | --out]\n"); return 2; }
+  if (argc < 2) { fprintf(stderr, "usage: lifted EXPORT_DIR [REPS | --out] [--helpers N]\n"); return 2; }
   std::string dir = argv[1];
-  bool out1 = argc > 2 && std::string(argv[2]) == "--out";
-  int reps = argc > 2 && !out1 ? atoi(argv[2]) : 20;
+  bool out1 = false;
+  int reps = 20;
+  long long helpersMax = -1;
+  for (int i = 2; i < argc; ++i) {
+    std::string a = argv[i];
+    if (a == "--out") out1 = true;
+    else if (a == "--helpers" && i + 1 < argc) helpersMax = atoll(argv[++i]);
+    else reps = atoi(argv[i]);
+  }
   auto meta = readMeta(dir + "/meta.txt");
   auto const0 = readFile(dir + "/const0.bin");
   auto global = readFile(dir + "/global.bin");
@@ -94,20 +104,37 @@ int main(int argc, char** argv) {
   // A cluster's CTAs wait on each other (its barrier, its peers' shared memory): the whole grid is
   // launched cooperatively, so every CTA is resident at once, or the run refuses.
   uint64_t clusters = ctas / csize;
-  size_t dyn = 0;
+  const size_t dyn = (size_t)LIFT_WARPS * lift::WARP_SMEM;
+  CK(cudaFuncSetAttribute(lifted, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)dyn));
   std::vector<unsigned long long> bars0(clusters, (unsigned long long)(csize * LIFT_WARPS) << 20);
   unsigned long long* dBars; CK(cudaMalloc(&dBars, 8 * clusters));
   ctx.clusterBars = dBars;
   uint8_t* dTmem; CK(cudaMalloc(&dTmem, lift::TMEM_BYTES * ctas));
   ctx.tmemAll = dTmem;
-  if (csize > 1) {
-    int perSM = 0;
-    CK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&perSM, lifted, LIFT_THREADS, dyn));
-    if ((uint64_t)perSM * prop.multiProcessorCount < ctas) {
-      fprintf(stderr, "a clustered grid of %llu CTAs does not fit at once (%d per SM)\n", (unsigned long long)ctas, perSM);
-      return 1;
-    }
+  int perSM = 0;
+  CK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&perSM, lifted, LIFT_THREADS, dyn));
+  const uint64_t resident = (uint64_t)perSM * prop.multiProcessorCount;
+  if (csize > 1 && resident < ctas) {
+    fprintf(stderr, "a clustered grid of %llu CTAs does not fit at once (%d per SM)\n", (unsigned long long)ctas, perSM);
+    return 1;
   }
+  // The work pool's helpers: the CTAs the GPU holds beside the launch's, which then must all be
+  // resident (a cooperative launch); a grid that fills the GPU runs without.
+  uint64_t helpers = resident > ctas ? resident - ctas : 0;
+  if (helpersMax >= 0) helpers = std::min(helpers, (uint64_t)helpersMax);
+  if (ctas + helpers > 0x7fffffffull) { fprintf(stderr, "a grid of %llu CTAs\n", (unsigned long long)(ctas + helpers)); return 1; }
+  const uint64_t slots = helpers ? ctas * LIFT_WARPS : 0;
+  ctx.ctas = (uint32_t)ctas; ctx.helpers = (uint32_t)helpers;
+  ctx.ringSize = (uint32_t)std::max<uint64_t>(2 * slots, 1);
+  lift::Pool* dPool; CK(cudaMalloc(&dPool, sizeof(lift::Pool)));
+  lift::Slot* dSlots; CK(cudaMalloc(&dSlots, sizeof(lift::Slot) * std::max<uint64_t>(slots, 1)));
+  uint32_t* dAcc; CK(cudaMalloc(&dAcc, 4ull * lift::ACC_WORDS * std::max<uint64_t>(slots, 1)));
+  unsigned long long* dRing; CK(cudaMalloc(&dRing, 8ull * ctx.ringSize));
+  ctx.pool = dPool; ctx.slots = dSlots; ctx.acc = dAcc; ctx.ring = dRing;
+  lift::Pool pool0{};
+  pool0.live = (unsigned)(ctas * LIFT_WARPS);
+  const bool cooperative = csize > 1 || helpers > 0;
+  printf("%llu CTAs, %llu helper CTAs (%d per SM)\n", (unsigned long long)ctas, (unsigned long long)helpers, perSM);
 
   auto run = [&](float* ms) {
     CK(cudaMemset(dShared, 0, sharedBytes * ctas));
@@ -125,13 +152,18 @@ int main(int argc, char** argv) {
     CK(cudaMemset(dFault, 0, 4));
     CK(cudaMemcpy(dBars, bars0.data(), 8 * clusters, cudaMemcpyHostToDevice));
     CK(cudaMemset(dTmem, 0, lift::TMEM_BYTES * ctas));
+    // The pool empty: no job published (no ring entry's position matches), every slot at generation 0.
+    CK(cudaMemcpy(dPool, &pool0, sizeof pool0, cudaMemcpyHostToDevice));
+    CK(cudaMemset(dSlots, 0, sizeof(lift::Slot) * std::max<uint64_t>(slots, 1)));
+    CK(cudaMemset(dRing, 0xff, 8ull * ctx.ringSize));
     cudaEvent_t a, b; CK(cudaEventCreate(&a)); CK(cudaEventCreate(&b));
     CK(cudaEventRecord(a));
-    if (csize > 1) {
+    const dim3 all((unsigned)(ctas + helpers));
+    if (cooperative) {
       void* args[] = {&ctx};
-      CK(cudaLaunchCooperativeKernel((void*)lifted, grid, block, args, dyn, 0));
+      CK(cudaLaunchCooperativeKernel((void*)lifted, all, block, args, dyn, 0));
     } else {
-      lifted<<<grid, block, dyn>>>(ctx);
+      lifted<<<all, block, dyn>>>(ctx);
     }
     CK(cudaEventRecord(b));
     CK(cudaGetLastError());
@@ -173,6 +205,7 @@ int main(int argc, char** argv) {
   for (int k = 0; k < reps; ++k) { float ms; run(&ms); t.push_back(ms); }
   std::sort(t.begin(), t.end());
   printf("kernel time: first %.3f ms, median of %d %.3f ms, min %.3f ms\n", first, reps, t[t.size() / 2], t[0]);
-  printf("%s\n", bad == 0 && fault == 0 ? "BIT-EXACT" : "MISMATCH");
-  return bad == 0 && fault == 0 ? 0 : 3;
+  const bool exact = bad == 0 && fault == 0;
+  printf("%s\n", exact ? "BIT-EXACT" : LIFT_CLOCK && fault == 0 ? "CLOCK-DEPENDENT" : "MISMATCH");
+  return exact ? 0 : LIFT_CLOCK && fault == 0 ? 5 : 3;
 }

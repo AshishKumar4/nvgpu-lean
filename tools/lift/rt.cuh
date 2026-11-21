@@ -3,9 +3,11 @@
 //
 // - The tensor cores' datapath on words (NV.Num.TensorModel's `Datapath`, NV/Num/Tensor.lean) and
 //   warpgroup MMAs on it (NV.Async.Wgmma: descriptors, swizzle, the accumulator fragment; the
-//   Hopper bf16/f16 → f32 model), each thread computing its own accumulator values.
-// - TMA tiled copies (NV.Async.Tma: `TensorMap.tile`), done by the issuing lane; tensor maps in the
-//   simulator's encoding (NV.Async.TensorMap.encode), from the parameter block or global memory.
+//   Hopper bf16/f16 → f32 model), in tiles of 16 output rows (the work pool, below).
+// - TMA tiled copies (NV.Async.Tma: `TensorMap.tile`); tensor maps in the simulator's encoding
+//   (NV.Async.TensorMap.encode), from the parameter block or global memory.
+// - The work pool: one instruction's work (an MMA's output tiles, a copy's rows) spread over the
+//   issuing warp and helper CTAs, which run on the SMs the launch leaves idle.
 // - mbarriers in the simulator's word (NV.Async.MBarrierWord), by atomic read-modify-writes.
 // - A CTA's shared memory is a window of device global memory (`Ctx`), so a Hopper CTA's 227 KB
 //   fit on any GPU and cluster peers' windows are plain addresses.
@@ -39,6 +41,14 @@ struct Ctx {
   uint8_t* tmemAll;        // every CTA's tensor memory (`NV.Async.Tcgen05`), TMEM_BYTES apart
   uint8_t* tmem;           // this CTA's
   uint32_t* fault;         // set nonzero on behaviour the model faults on
+  // The work pool (`Pool`): the launch's CTAs, then its helper CTAs; this CTA's index.
+  uint32_t ctas, helpers, cta;
+  struct Pool* pool;
+  struct Slot* slots;      // one per lifted warp (`cta * LIFT_WARPS + warp`), with helpers only
+  uint32_t* acc;           // per slot, a warpgroup MMA's 16 x 256 accumulator words for its helpers
+  unsigned long long* ring;  // published jobs, `ringSize` positions
+  uint32_t ringSize;
+  uint32_t* stage;         // this warp's (the issuer's) stage in shared memory (`STAGE_WORDS`)
 };
 
 __device__ __forceinline__ uint64_t U64(uint32_t lo, uint32_t hi) { return (uint64_t)lo | ((uint64_t)hi << 32); }
@@ -494,94 +504,12 @@ __device__ __forceinline__ uint32_t descAddr(uint64_t desc, bool kMajor, int mn,
   return descSwizzle(mode, start + off);
 }
 
-// One thread's share of `HGMMA.64xNx16.F32[.BF16]` from shared memory: its `N/2` accumulator
-// words `acc`, updated in place (`scaleD` false: from zero). Thread `t` of the warpgroup holds
-// row `16·(t/32) + (t%32)/4 + 8·((v/2) mod 2)`, column `2·(t%4) + v mod 2 + 8·(v/4)` of its value v
-// (`accPos`). Hopper's datapath for f16/bf16 inputs and an f32 accumulator: blocks of 16, 25
-// fraction bits aligned, exponent floor -133, the sum truncated to binary32 (`Hopper.f16f32`).
-template <int N>
-__device__ inline void hgmma16(const Ctx& x, InType ty, uint64_t da, uint64_t db, bool aKMajor, bool bKMajor,
-                               bool negA, bool negB, bool scaleD, uint32_t* acc, uint32_t tid) {
-  const int man = ty == BF16 ? 7 : 10;
-  const Codec c = ty == BF16 ? codecIeee(8, 7) : codecIeee(5, 10);
-  const Datapath dp = prepareF32(25, -133, 23, false, man, man);
-  const int w = (tid / 32) % 4, l = tid % 32;
-  uint32_t ea[2][16];
-  for (int h = 0; h < 2; ++h) {
-    int row = 16 * w + l / 4 + 8 * h;
-    for (int k = 0; k < 16; ++k) {
-      uint16_t v = __ldca((const unsigned short*)(x.shared + descAddr(da, aKMajor, row, k, x.fault)));
-      if (negA) v ^= 0x8000;
-      ea[h][k] = encode(c, v);
-    }
-  }
-  for (int cb = 0; cb < N / 8; ++cb) {
-    for (int j = 0; j < 2; ++j) {
-      int col = 8 * cb + 2 * (l % 4) + j;
-      uint32_t eb[16];
-      for (int k = 0; k < 16; ++k) {
-        uint16_t u = __ldca((const unsigned short*)(x.shared + descAddr(db, bKMajor, col, k, x.fault)));
-        if (negB) u ^= 0x8000;
-        eb[k] = encode(c, u);
-      }
-      for (int h = 0; h < 2; ++h) {
-        int v = 4 * cb + 2 * h + j;
-        acc[v] = (uint32_t)blockAt(dp, ea[h], eb, 16, scaleD ? acc[v] : 0u);
-      }
-    }
-  }
-}
-
 // ---------------------------------------------------------------------------------------------
 // 5th-generation tensor cores (`NV.Async.Tcgen05`, `NV.SASS.Async`).
 
 // `Tcgen05.rowLane`: the lane of row `i` of an M-row operand from lane `l0`.
 __device__ __forceinline__ uint32_t rowLane(uint32_t m, uint32_t l0, uint32_t i) {
   return m == 128 ? l0 + i : l0 + 32 * (i / 16) + i % 16;
-}
-
-// `UTCHMMA[.2CTA]`: one `tcgen05.mma` of `.kind::f16` (f16 or bf16 inputs into f32), A and B from
-// shared memory, run by one thread when it issues (`Tcgen05.Inst.op`): D = A·B (+ D), the B200's
-// datapath (`NV.Num.Blackwell.f16f32`: Hopper's). `pair`: `.cta_group::2`, M 256, rows and
-// columns 128/N2 on the peer (the next rank). Others set the fault flag.
-__device__ inline void utcmma(const Ctx& x, uint64_t da, uint64_t db, uint32_t d, uint32_t idesc, bool accumulate,
-                              bool pair) {
-  auto f = [&](int lo, int w) { return (idesc >> lo) & ((1u << w) - 1); };
-  uint32_t dtype = f(4, 2), atype = f(7, 3), btype = f(10, 3);
-  bool negA = f(13, 1), negB = f(14, 1), transA = f(15, 1), transB = f(16, 1);
-  uint32_t N = f(17, 6) << 3, M = f(24, 5) << 4;
-  bool bad = f(2, 1) || f(30, 2) || dtype != 1 || atype > 1 || btype != atype ||
-             (pair ? M != 256 : (M != 64 && M != 128)) || N < 8 || N > 256 || ((da >> 61) & 1) || ((db >> 61) & 1) ||
-             ((da >> 46) & 7) != 1 || ((db >> 46) & 7) != 1;
-  uint32_t dl = d >> 16, dc = d & 0xffffu;
-  if (bad || dc + N > 512 || (M == 64 ? (dl != 0 && dl != 16) : dl != 0)) { atomicOr(x.fault, 32u); return; }
-  InType ty = atype == 1 ? BF16 : F16;
-  const int man = ty == BF16 ? 7 : 10;
-  const Codec c = ty == BF16 ? codecIeee(8, 7) : codecIeee(5, 10);
-  const Datapath dp = prepareF32(25, -133, 23, false, man, man);
-  uint32_t peer = x.clusterRank + 1;
-  // A row's or B column's shared memory: this CTA's for the first half of a pair, the peer's after.
-  auto elem = [&](uint64_t desc, bool kMajor, uint32_t n, uint32_t half, uint32_t mn, int k, bool neg) {
-    uint32_t r = mn, rank = x.clusterRank;
-    if (pair && mn >= half) { r = mn - half; rank = peer; }
-    uint32_t a = descAddr(desc, kMajor, r, k, x.fault);
-    uint16_t v = *(volatile uint16_t*)sharedAt(x, (rank << 24) | a);
-    if (neg) v ^= 0x8000;
-    return encode(c, v);
-  };
-  for (uint32_t i = 0; i < M; ++i) {
-    uint32_t ea[16];
-    for (int k = 0; k < 16; ++k) ea[k] = elem(da, !transA, M, 128, i, k, negA);
-    for (uint32_t j = 0; j < N; ++j) {
-      uint32_t eb[16];
-      for (int k = 0; k < 16; ++k) eb[k] = elem(db, !transB, N, N / 2, j, k, negB);
-      uint32_t b = pair && i >= 128 ? ((peer + 1) << 24) + tmemByte(i - 128, dc + j)
-                                    : tmemByte(pair ? i : rowLane(M, dl, i), dc + j);
-      uint32_t* w = (uint32_t*)tmemAt(x, b);
-      *w = (uint32_t)blockAt(dp, ea, eb, 16, accumulate ? *w : 0u);
-    }
-  }
-  __threadfence();
 }
 
 // `UTCATOMSWS.FIND_AND_SET.ALIGN`: claim `n` granules of 32 columns at a multiple of `n` in the
@@ -755,68 +683,31 @@ __device__ __forceinline__ uint32_t tmaSwizzle(int mode, uint32_t a) {
   }
 }
 
-// The box at `coords`, element by element: `f(global address or 0 when outside, shared offset)`
-// with the shared offsets swizzled from `smemOff` (`TensorMap.tile`). Returns the box's bytes.
-template <class F>
-__device__ inline uint32_t tile(const TensorMapView& m, const int32_t* coords, uint32_t smemOff, F f) {
-  int r = m.rank;
-  uint32_t cnt[5];
-  for (int i = 0; i < 5; ++i) cnt[i] = i < r ? (m.box[i] + m.es[i] - 1) / (m.es[i] ? m.es[i] : 1) : 1;
-  uint32_t rowBytes = cnt[0] * m.esz;
-  uint32_t rows = 1;
-  for (int i = 1; i < r; ++i) rows *= cnt[i];
-  for (uint32_t row = 0; row < rows; ++row) {
-    uint32_t rest = row; bool inb = true; int64_t base = (int64_t)m.addr;
-    for (int i = 1; i < r; ++i) {
-      uint32_t j = rest % cnt[i]; rest /= cnt[i];
-      int64_t xi = (int64_t)coords[i] + (int64_t)j * m.es[i];
-      inb = inb && xi >= 0 && xi < (int64_t)m.dims[i];
-      base += xi * (int64_t)m.strides[i - 1];
-    }
-    for (uint32_t e = 0; e < cnt[0]; ++e) {
-      int64_t xe = (int64_t)coords[0] + e;
-      bool in = inb && xe >= 0 && xe < (int64_t)m.dims[0];
-      f(in ? (uint64_t)(base + xe * m.esz) : 0ull, tmaSwizzle(m.swizzle, smemOff + row * rowBytes + e * m.esz), in);
-    }
+// A box's shape (`TensorMap.tile`): its rows (every dimension past the first) of `rowBytes`.
+struct BoxShape { uint32_t cnt[5]; uint32_t rowBytes, rows; };
+
+__device__ inline BoxShape boxShape(const TensorMapView& m) {
+  BoxShape b;
+  for (int i = 0; i < 5; ++i) b.cnt[i] = i < m.rank ? (m.box[i] + m.es[i] - 1) / (m.es[i] ? m.es[i] : 1) : 1;
+  b.rowBytes = b.cnt[0] * m.esz;
+  b.rows = 1;
+  for (int i = 1; i < m.rank; ++i) b.rows *= b.cnt[i];
+  return b;
+}
+
+// Row `row` of the box at `coords`: its global address at element 0 of the box (`base`), and
+// whether it lies inside the tensor in every dimension past the first.
+__device__ inline bool boxRow(const TensorMapView& m, const BoxShape& b, const int32_t* coords, uint32_t row,
+                              int64_t* base) {
+  uint32_t rest = row; bool inb = true; int64_t a = (int64_t)m.addr;
+  for (int i = 1; i < m.rank; ++i) {
+    uint32_t j = rest % b.cnt[i]; rest /= b.cnt[i];
+    int64_t xi = (int64_t)coords[i] + (int64_t)j * m.es[i];
+    inb = inb && xi >= 0 && xi < (int64_t)m.dims[i];
+    a += xi * (int64_t)m.strides[i - 1];
   }
-  return rows * rowBytes;
-}
-
-// `UTMALDG`: the box into shared memory at `smem` (zeros outside the tensor), then a complete-tx
-// of its bytes on the mbarrier at `mbar`.
-__device__ inline void tmaLoad(const Ctx& x, const TensorMapView& m, const int32_t* coords, uint32_t smem,
-                               uint32_t mbar, uint32_t* fault) {
-  if (!m.ok) return;
-  uint8_t* win = sharedAt(x, smem) - (smem & 0xffffffu);
-  int esz = m.esz;
-  uint32_t bytes = tile(m, coords, smem & 0xffffffu, [&](uint64_t g, uint32_t off, bool in) {
-    for (int b = 0; b < esz; ++b) win[off + b] = in ? gptr(x, g)[b] : 0;
-  });
-  __threadfence();
-  mbAtomic(MB(x, mbar), 2, 0, (int64_t)bytes, false, fault);
-}
-
-// Bulk copies (`UBLKCP`, `NV.SASS.Async.ublkcp`): `size` bytes, complete when issued.
-// `.S.G`: global to shared, then a complete-tx of the bytes on the mbarrier at `mbar`.
-__device__ inline void bulkLoad(const Ctx& x, uint32_t smem, uint64_t g, uint32_t size, uint32_t mbar, uint32_t* fault) {
-  uint8_t* d = sharedAt(x, smem);
-  for (uint32_t i = 0; i < size; ++i) d[i] = gptr(x, g)[i];
-  __threadfence();
-  mbAtomic(MB(x, mbar), 2, 0, (int64_t)size, false, fault);
-}
-// `.G.S`: shared to global.
-__device__ inline void bulkStore(const Ctx& x, uint64_t g, uint32_t smem, uint32_t size) {
-  const uint8_t* s = sharedAt(x, smem);
-  for (uint32_t i = 0; i < size; ++i) gptr(x, g)[i] = s[i];
-  __threadfence();
-}
-// `.S.S`: this CTA's shared memory into a cluster CTA's at `dst`, its mbarrier at `mbar` signalled.
-__device__ inline void bulkPeer(const Ctx& x, uint32_t dst, uint32_t src, uint32_t size, uint32_t mbar, uint32_t* fault) {
-  uint8_t* d = sharedAt(x, dst);
-  const uint8_t* s = sharedAt(x, src);
-  for (uint32_t i = 0; i < size; ++i) d[i] = s[i];
-  __threadfence();
-  mbAtomic(MB(x, mbar), 2, 0, (int64_t)size, false, fault);
+  *base = a;
+  return inb;
 }
 
 // One element of a bulk reduction (`UBLKRED`): `op` 0 add, 1 min, 2 max, 3 inc, 4 dec, 5 and,
@@ -848,16 +739,439 @@ __device__ inline void bulkRed(const Ctx& x, uint8_t* d, uint32_t src, uint32_t 
   __threadfence();
 }
 
-// `UTMASTG`: the box's elements inside the tensor from shared memory at `smem`.
-__device__ inline void tmaStore(const Ctx& x, const TensorMapView& m, const int32_t* coords, uint32_t smem,
-                                uint32_t* fault) {
-  if (!m.ok) return;
-  const uint8_t* win = sharedAt(x, smem) - (smem & 0xffffffu);
-  int esz = m.esz;
-  tile(m, coords, smem & 0xffffffu, [&](uint64_t g, uint32_t off, bool in) {
-    if (in) for (int b = 0; b < esz; ++b) gptr(x, g)[b] = win[off + b];
+
+// ---------------------------------------------------------------------------------------------
+// The work pool. An instruction whose work the simulator does in one step (a warpgroup or
+// tensor-memory MMA, a TMA or bulk copy) is a job of independent tasks: an MMA's tiles of 16 output
+// rows, a copy's 4 KB of rows. With no helpers the issuer runs every task itself. With helpers (CTAs
+// appended to the grid on the SMs the launch leaves idle; main.cu launches the grid cooperatively,
+// so they are all resident) the issuer publishes the job on the ring, works its tasks beside them
+// when it is a whole warp, and waits for all of them, so the instruction still completes when it
+// issues. Every output word or byte is one task's, computed from the same inputs by the same
+// functions wherever it runs, so the results do not depend on who ran which task.
+
+constexpr uint32_t NONE = 0xffffffffu;
+// Per warp, in dynamic shared memory: an MMA task's operands decoded once (A and B, 16 rows or
+// columns of 16), and a helper's copy of the job it works on.
+constexpr uint32_t STAGE_WORDS = 512, JOB_WORDS = 192;
+constexpr uint32_t WARP_SMEM = 4 * (STAGE_WORDS + JOB_WORDS);
+constexpr uint32_t COPY_TASK_BYTES = 4096;
+// A warpgroup MMA's accumulator words per warp, for its helpers (16 rows of N <= 256).
+constexpr uint32_t ACC_WORDS = 16 * 256;
+
+// An MMA: `rows x cols` outputs, each a 16-term dot product (`Datapath.blockAt`) onto its
+// accumulator, in tiles of 16 rows by `tileCols`.
+struct MmaJob {
+  uint64_t da, db;
+  uint32_t aRow0;           // the first A row (a warpgroup MMA: the warp's 16 of the 64)
+  uint32_t aSplit, bSplit;  // A rows, B columns from these on are the next cluster rank's (`.2CTA`); NONE
+  uint32_t rows, cols, tileCols;
+  uint32_t dl, dc, M;       // into tensor memory (`toTmem`): its lane and column, the MMA's M
+  uint8_t ty, aK, bK, negA, negB, acc, toTmem, pair;
+};
+
+// A copy: a TMA box (`kind` 0 load, 1 store) or bytes (`kind` 2).
+struct CopyJob {
+  TensorMapView m;
+  int32_t c[5];
+  uint32_t kind;
+  uint32_t smem;            // the box's shared address
+  uint32_t ranks;           // a load's destinations: with bit 16 (`.MULTICAST`), bit k names cluster
+                            // rank k, at `smem`'s offset; else `smem` itself
+  uint8_t* dst;             // kind 2
+  const uint8_t* src;
+  uint32_t size;
+};
+
+struct Job {
+  Ctx x;                    // the issuer's
+  uint32_t kind, tasks;     // kind 0 MMA, 1 copy
+  uint32_t* buf;            // an MMA's outputs outside tensor memory: `cols` words a row
+  union { MmaJob mma; CopyJob copy; };
+};
+static_assert(sizeof(Job) <= 4 * JOB_WORDS && sizeof(Job) % 8 == 0, "a job fits a warp's copy");
+
+// One per lifted warp: its job; the job's claims, `(generation << 32) | next task`; the tasks
+// others finished.
+struct Slot {
+  unsigned long long claim;
+  unsigned done, pad;
+  Job job;
+};
+
+// The launch's pool: the ring's head (the first position no helper has passed) and tail, each
+// entry `position << 20 | slot`; the lifted warps not yet exited. Each on its own line.
+struct Pool {
+  unsigned long long head, pad0[15];
+  unsigned long long tail, pad1[15];
+  unsigned live, pad2[31];
+};
+
+__device__ __forceinline__ unsigned long long ldAcq(const unsigned long long* p) {
+  unsigned long long v;
+  asm volatile("ld.acquire.gpu.global.u64 %0, [%1];" : "=l"(v) : "l"(p) : "memory");
+  return v;
+}
+__device__ __forceinline__ unsigned ldAcq(const unsigned* p) {
+  unsigned v;
+  asm volatile("ld.acquire.gpu.global.u32 %0, [%1];" : "=r"(v) : "l"(p) : "memory");
+  return v;
+}
+__device__ __forceinline__ void stRel(unsigned long long* p, unsigned long long v) {
+  asm volatile("st.release.gpu.global.u64 [%0], %1;" :: "l"(p), "l"(v) : "memory");
+}
+
+// A lifted warp's exit: out of its cluster's live warps and the pool's.
+__device__ inline void warpExit(const Ctx& x) {
+  clusterExit(x);
+  if (x.helpers) atomicSub(&x.pool->live, 1u);
+}
+
+// Element (mn, k) of an MMA's A or B (`Desc.addr`), encoded for the datapath (`Codec.encode`):
+// from the issuer's CTA's shared memory or, past the split, the next cluster rank's.
+__device__ inline uint32_t mmaElem(const Ctx& x, const MmaJob& j, bool isA, uint32_t mn, int k, const Codec& c) {
+  uint32_t split = isA ? j.aSplit : j.bSplit, rank = x.clusterRank;
+  if (mn >= split) { mn -= split; rank += 1; }
+  uint32_t a = descAddr(isA ? j.da : j.db, isA ? j.aK : j.bK, (int)mn, k, x.fault);
+  uint16_t v = __ldcg((const unsigned short*)sharedAt(x, (rank << 24) | a));
+  if (isA ? j.negA : j.negB) v ^= 0x8000;
+  return encode(c, v);
+}
+
+// Output `o` of a tile, as row `i` and column `k`: in each 16 x 8 block the warpgroup MMA's
+// accumulator fragment (`accPos`), so a warp running a block computes each lane's own values (lane
+// `o % 32`, its value `4 · block + o / 32 % 4`); a 16 x 16 tile is two blocks.
+__device__ __forceinline__ void tilePos(uint32_t o, uint32_t* i, uint32_t* k) {
+  uint32_t l = o % 32, q = (o / 32) % 4;
+  *i = l / 4 + 8 * (q / 2);
+  *k = 2 * (l % 4) + q % 2 + 8 * (o / 128);
+}
+
+// The word output (row, col) of an MMA lands in: `buf`'s, or tensor memory's (`UTCHMMA`'s rows:
+// a pair's rows from 128 on in the peer's).
+__device__ inline uint32_t* mmaOut(const Ctx& x, const MmaJob& j, uint32_t* buf, uint32_t row, uint32_t col) {
+  if (!j.toTmem) return buf + row * j.cols + col;
+  uint32_t b = j.pair && row >= 128 ? ((x.clusterRank + 2) << 24) + tmemByte(row - 128, j.dc + col)
+                                    : tmemByte(j.pair ? row : rowLane(j.M, j.dl, row), j.dc + col);
+  return (uint32_t*)tmemAt(x, b);
+}
+
+// MMA task `t`, a tile, run by `n` lanes of one warp (`r` this lane's rank, `sync` the warp's
+// barrier) with its operands decoded once into the warp's stage `st`. `own`: the lanes'
+// accumulators, when the issuing warp runs a warpgroup MMA's task whole (its outputs are the lanes'
+// own values, `tilePos`).
+template <class Sync>
+__device__ inline void mmaTask(const Ctx& x, const MmaJob& j, uint32_t* buf, uint32_t t, uint32_t r, uint32_t n,
+                               uint32_t* st, Sync sync, uint32_t* own) {
+  const int man = j.ty == BF16 ? 7 : 10;
+  const Codec c = j.ty == BF16 ? codecIeee(8, 7) : codecIeee(5, 10);
+  const Datapath dp = prepareF32(25, -133, 23, false, man, man);
+  const uint32_t blocks = (j.cols + j.tileCols - 1) / j.tileCols;
+  const uint32_t row0 = 16 * (t / blocks), col0 = j.tileCols * (t % blocks);
+  const uint32_t nr = min(16u, j.rows - row0), nc = min(j.tileCols, j.cols - col0);
+  uint32_t* A = st;
+  uint32_t* B = st + 256;
+  sync();
+  for (uint32_t e = r; e < 16 * (nr + nc); e += n) {
+    if (e < 16 * nr) A[e] = mmaElem(x, j, true, j.aRow0 + row0 + e / 16, (int)(e % 16), c);
+    else B[e - 16 * nr] = mmaElem(x, j, false, col0 + (e - 16 * nr) / 16, (int)((e - 16 * nr) % 16), c);
+  }
+  sync();
+  for (uint32_t o = r; o < 16 * j.tileCols; o += n) {
+    uint32_t i, k;
+    tilePos(o, &i, &k);
+    if (i >= nr || k >= nc) continue;
+    if (own) {
+      uint32_t v = 4 * ((col0 + k) / 8) + (o / 32) % 4;
+      own[v] = (uint32_t)blockAt(dp, A + 16 * i, B + 16 * k, 16, j.acc ? own[v] : 0u);
+    } else {
+      uint32_t* d = mmaOut(x, j, buf, row0 + i, col0 + k);
+      *d = (uint32_t)blockAt(dp, A + 16 * i, B + 16 * k, 16, j.acc ? __ldcg(d) : 0u);
+    }
+  }
+}
+
+// Up to 16 bytes from `s` to `d`: one move when whole and both are aligned, else byte by byte.
+// Loads from the L2 (another SM may have written them, the issuer's or a helper's); plain stores,
+// which keep this SM's L1 coherent with them.
+__device__ __forceinline__ void copy16(uint8_t* d, const uint8_t* s, uint32_t n) {
+  if (n == 16 && ((uintptr_t)d & 15) == 0 && ((uintptr_t)s & 15) == 0) *(uint4*)d = __ldcg((const uint4*)s);
+  else for (uint32_t b = 0; b < n; ++b) d[b] = __ldcg(s + b);
+}
+
+// A box copy's rows per task: about 4 KB of them, at least one.
+__device__ __forceinline__ uint32_t rowsPerTask(const BoxShape& b) { return max(1u, COPY_TASK_BYTES / max(b.rowBytes, 1u)); }
+
+// Copy task `t` by `n` lanes (`r` this lane's rank): 4 KB of bytes, or the box's rows in as many
+// bytes, a lane a 16-byte unit of a row at a time (`TensorMap.tile`: elements outside the tensor
+// read as zeros and are not stored; the swizzle permutes whole 16-byte units).
+__device__ inline void copyTask(const Ctx& x, const CopyJob& j, uint32_t t, uint32_t r, uint32_t n) {
+  if (j.kind == 2) {
+    const uint32_t lo = t * COPY_TASK_BYTES, hi = min(j.size, lo + COPY_TASK_BYTES);
+    for (uint32_t b = lo + 16 * r; b < hi; b += 16 * n) copy16(j.dst + b, j.src + b, min(16u, hi - b));
+    return;
+  }
+  const TensorMapView& m = j.m;
+  const BoxShape bs = boxShape(m);
+  const uint32_t per = rowsPerTask(bs), units = (bs.rowBytes + 15) / 16;
+  const uint32_t row0 = t * per, rows = min(per, bs.rows - row0), off0 = j.smem & 0xffffffu;
+  uint8_t* own = sharedAt(x, j.smem) - off0;  // the window holding the box
+  // A load's destination windows.
+  auto each = [&](auto f) {
+    if (j.kind != 0 || !(j.ranks & 0x10000u)) { f(own); return; }
+    for (uint32_t k = 0; k < 16; ++k)
+      if ((j.ranks >> k) & 1u) f(sharedAt(x, (k << 24) | off0) - off0);
+  };
+  for (uint32_t u = r; u < rows * units; u += n) {
+    const uint32_t row = row0 + u / units, b0 = 16 * (u % units), nb = min(16u, bs.rowBytes - b0);
+    int64_t base;
+    const bool inb = boxRow(m, bs, j.c, row, &base);
+    const uint32_t lin = off0 + row * bs.rowBytes + b0;
+    const int64_t x0 = (int64_t)j.c[0] + b0 / m.esz, x1 = x0 + nb / m.esz;
+    if (inb && x0 >= 0 && x1 <= (int64_t)m.dims[0] && (lin & 15) == 0) {
+      uint8_t* g = gptr(x, (uint64_t)(base + x0 * m.esz));
+      const uint32_t off = tmaSwizzle(m.swizzle, lin);
+      if (j.kind == 0) each([&](uint8_t* w) { copy16(w + off, g, nb); });
+      else copy16(g, own + off, nb);
+      continue;
+    }
+    for (uint32_t e = b0 / m.esz; e < (b0 + nb) / m.esz; ++e) {
+      const int64_t xe = (int64_t)j.c[0] + e;
+      const bool in = inb && xe >= 0 && xe < (int64_t)m.dims[0];
+      const uint32_t off = tmaSwizzle(m.swizzle, off0 + row * bs.rowBytes + e * m.esz);
+      uint8_t* g = in ? gptr(x, (uint64_t)(base + xe * m.esz)) : nullptr;
+      for (int b = 0; b < m.esz; ++b) {
+        if (j.kind == 0) {
+          const uint8_t v = in ? __ldcg(g + b) : 0;
+          each([&](uint8_t* w) { w[off + b] = v; });
+        } else if (in) {
+          g[b] = __ldcg(own + off + b);
+        }
+      }
+    }
+  }
+}
+
+template <class Sync>
+__device__ inline void runTask(const Job& j, uint32_t t, uint32_t r, uint32_t n, uint32_t* st, Sync sync,
+                               uint32_t* own) {
+  if (j.kind == 0) mmaTask(j.x, j.mma, j.buf, t, r, n, st, sync, own);
+  else copyTask(j.x, j.copy, t, r, n);
+}
+
+// The next task of slot `s`'s job of generation `gen`, if one is left.
+__device__ inline int claimTask(Slot* s, unsigned long long gen, uint32_t tasks) {
+  unsigned long long c = ldAcq(&s->claim);
+  while ((c >> 32) == gen && (uint32_t)c < tasks) {
+    unsigned long long old = atomicCAS(&s->claim, c, c + 1);
+    if (old == c) return (int)(uint32_t)c;
+    c = old;
+  }
+  return -1;
+}
+
+// The issuer runs job `j`, which each of its `n` lanes (`mask`; `r`, this lane's rank) built alike
+// in warp `warp`: with no helpers, every task itself; else published on the ring, its tasks claimed
+// beside the helpers when `work`, and waited for. `back(mine)` then runs on every lane, `mine`
+// the tasks below 64 the issuer ran itself.
+template <class Sync, class Back>
+__device__ inline void runJob(const Ctx& x, const Job& j, uint32_t warp, uint32_t r, uint32_t n, uint32_t mask,
+                              Sync sync, uint32_t* own, bool work, Back back) {
+  if (x.helpers == 0) {
+    for (uint32_t t = 0; t < j.tasks; ++t) runTask(j, t, r, n, x.stage, sync, own);
+    return;
+  }
+  const uint32_t slot = x.cta * LIFT_WARPS + warp, leader = __ffs(mask) - 1;
+  Slot* s = x.slots + slot;
+  unsigned long long gen = 0;
+  if (r == 0) {
+    s->job = j;
+    s->done = 0;
+    gen = (ldAcq(&s->claim) >> 32) + 1;
+    stRel(&s->claim, gen << 32);
+    const unsigned long long pos = atomicAdd(&x.pool->tail, 1ull);
+    for (unsigned ns = 32; pos - ldAcq(&x.pool->head) >= x.ringSize; ns = min(2 * ns, 1024u)) __nanosleep(ns);
+    stRel(&x.ring[pos % x.ringSize], (pos << 20) | slot);
+  }
+  gen = __shfl_sync(mask, gen, leader);
+  uint32_t self = 0;
+  unsigned long long mine = 0;
+  while (work) {
+    int t = 0;
+    if (r == 0) t = claimTask(s, gen, j.tasks);
+    t = __shfl_sync(mask, t, leader);
+    if (t < 0) break;
+    runTask(j, (uint32_t)t, r, n, x.stage, sync, own);
+    self += 1;
+    if (t < 64) mine |= 1ull << t;
+  }
+  if (r == 0)
+    for (unsigned ns = 32; ldAcq(&s->done) + self < j.tasks; ns = min(2 * ns, 256u)) __nanosleep(ns);
+  sync();
+  back(mine);
+}
+
+// A helper CTA's warps: the job at the ring's head, its tasks claimed one by one until none is
+// left, then passed; asleep while the ring is empty; gone once every lifted warp has exited.
+__device__ inline void serve(const Ctx& x, uint32_t* smem) {
+  const uint32_t threads = blockDim.x * blockDim.y * blockDim.z;
+  const uint32_t flat = threadIdx.x + blockDim.x * (threadIdx.y + blockDim.y * threadIdx.z);
+  const uint32_t lane = flat % 32, warp = flat / 32, n = min(32u, threads - 32 * warp);
+  const uint32_t mask = n == 32 ? 0xffffffffu : (1u << n) - 1u;
+  uint32_t* st = smem + warp * (STAGE_WORDS + JOB_WORDS);
+  Job& jc = *(Job*)(st + STAGE_WORDS);
+  auto sync = [&]() { __syncwarp(mask); };
+  unsigned ns = 64;
+  while (true) {
+    unsigned long long h = 0, e = 0;
+    unsigned live = 1;
+    if (lane == 0) {
+      h = ldAcq(&x.pool->head);
+      e = ldAcq(&x.ring[h % x.ringSize]);
+      if ((e >> 20) != h) live = ldAcq(&x.pool->live);
+    }
+    h = __shfl_sync(mask, h, 0);
+    e = __shfl_sync(mask, e, 0);
+    live = __shfl_sync(mask, live, 0);
+    if ((e >> 20) != h) {
+      if (live == 0) return;
+      __nanosleep(ns);
+      ns = min(2 * ns, 4096u);
+      continue;
+    }
+    ns = 64;
+    Slot* s = x.slots + (uint32_t)(e & 0xfffffu);
+    unsigned long long c = 0;
+    if (lane == 0) c = ldAcq(&s->claim);
+    c = __shfl_sync(mask, c, 0);
+    sync();
+    for (uint32_t w = lane; w < sizeof(Job) / 8; w += n)
+      ((unsigned long long*)&jc)[w] = __ldcg((const unsigned long long*)&s->job + w);
+    sync();
+    while (true) {
+      int t = 0;
+      if (lane == 0) t = claimTask(s, c >> 32, jc.tasks);
+      t = __shfl_sync(mask, t, 0);
+      if (t < 0) break;
+      runTask(jc, (uint32_t)t, lane, n, st, sync, (uint32_t*)nullptr);
+      __threadfence();
+      sync();
+      if (lane == 0) atomicAdd(&s->done, 1u);
+    }
+    if (lane == 0) atomicCAS(&x.pool->head, h, h + 1);
+  }
+}
+
+// `HGMMA.64xNx16.F32[.BF16]` from shared memory, by the whole warp (`wgmma.mma_async.sync
+// .aligned`), each of the warpgroup's warps its 16 rows: one job of N/8 tiles of 16 x 8, whose
+// outputs are the lanes' own values (`tilePos`). Thread `t` of the warpgroup holds row
+// `16·(t/32) + (t%32)/4 + 8·((v/2) mod 2)`, column `2·(t%4) + v mod 2 + 8·(v/4)` of its value v
+// (`accPos`), in `acc`, updated in place (`scaleD` false: from zero). Hopper's datapath for
+// f16/bf16 inputs and an f32 accumulator: blocks of 16, 25 fraction bits aligned, exponent floor
+// -133, the sum truncated to binary32 (`Hopper.f16f32`).
+template <int N>
+__device__ inline void hgmma(const Ctx& x, InType ty, uint64_t da, uint64_t db, bool aK, bool bK, bool negA,
+                             bool negB, bool scaleD, uint32_t* acc, uint32_t lane, uint32_t warp) {
+  const uint32_t mask = __activemask();
+  if (mask != 0xffffffffu) { if (lane == __ffs(mask) - 1) atomicOr(x.fault, 32u); return; }
+  Job j;
+  j.x = x; j.kind = 0; j.tasks = N / 8;
+  j.buf = x.helpers ? x.acc + (x.cta * LIFT_WARPS + warp) * ACC_WORDS : nullptr;
+  MmaJob& m = j.mma;
+  m.da = da; m.db = db; m.aRow0 = 16 * (warp % 4); m.aSplit = NONE; m.bSplit = NONE;
+  m.rows = 16; m.cols = N; m.tileCols = 8; m.dl = 0; m.dc = 0; m.M = 64;
+  m.ty = (uint8_t)ty; m.aK = aK; m.bK = bK; m.negA = negA; m.negB = negB; m.acc = scaleD; m.toTmem = 0; m.pair = 0;
+  // Value v of this lane is output `lane + 32·(v mod 4)` of block `v/4`.
+  auto at = [&](uint32_t v) {
+    uint32_t i, k;
+    tilePos(lane + 32 * (v % 4), &i, &k);
+    return j.buf + i * N + 8 * (v / 4) + k;
+  };
+  // The helpers' tiles start from the accumulators in `buf`.
+  if (x.helpers && scaleD)
+    for (uint32_t v = 0; v < N / 2; ++v) *at(v) = acc[v];
+  auto sync = [&]() { __syncwarp(mask); };
+  runJob(x, j, warp, lane, 32, mask, sync, acc, true, [&](unsigned long long mine) {
+    for (uint32_t v = 0; v < N / 2; ++v)
+      if (!((mine >> (v / 4)) & 1ull)) acc[v] = __ldcg(at(v));
   });
+}
+
+// `UTCHMMA[.2CTA]`: one `tcgen05.mma` of `.kind::f16` (f16 or bf16 inputs into f32), A and B from
+// shared memory, issued by one thread (`Tcgen05.Inst.op`): D = A·B (+ D), the B200's datapath
+// (`NV.Num.Blackwell.f16f32`: Hopper's), in tiles of 16 x 16. `pair`: `.cta_group::2`, M 256, rows
+// and columns 128/N2 on the peer (the next rank). Others set the fault flag.
+__device__ inline void utcmma(const Ctx& x, uint64_t da, uint64_t db, uint32_t d, uint32_t idesc, bool accumulate,
+                              bool pair, uint32_t lane, uint32_t warp) {
+  auto f = [&](int lo, int w) { return (idesc >> lo) & ((1u << w) - 1); };
+  uint32_t dtype = f(4, 2), atype = f(7, 3), btype = f(10, 3);
+  bool negA = f(13, 1), negB = f(14, 1), transA = f(15, 1), transB = f(16, 1);
+  uint32_t N = f(17, 6) << 3, M = f(24, 5) << 4;
+  bool bad = f(2, 1) || f(30, 2) || dtype != 1 || atype > 1 || btype != atype ||
+             (pair ? M != 256 : (M != 64 && M != 128)) || N < 8 || N > 256 || ((da >> 61) & 1) || ((db >> 61) & 1) ||
+             ((da >> 46) & 7) != 1 || ((db >> 46) & 7) != 1;
+  uint32_t dl = d >> 16, dc = d & 0xffffu;
+  if (bad || dc + N > 512 || (M == 64 ? (dl != 0 && dl != 16) : dl != 0)) { atomicOr(x.fault, 32u); return; }
+  Job j;
+  j.x = x; j.kind = 0; j.buf = nullptr; j.tasks = (M / 16) * ((N + 15) / 16);
+  MmaJob& m = j.mma;
+  m.da = da; m.db = db; m.aRow0 = 0; m.aSplit = pair ? 128u : NONE; m.bSplit = pair ? N / 2 : NONE;
+  m.rows = M; m.cols = N; m.tileCols = 16; m.dl = dl; m.dc = dc; m.M = M;
+  m.ty = (uint8_t)(atype == 1 ? BF16 : F16); m.aK = !transA; m.bK = !transB; m.negA = negA; m.negB = negB;
+  m.acc = accumulate; m.toTmem = 1; m.pair = pair;
+  runJob(x, j, warp, 0, 1, 1u << lane, [] {}, (uint32_t*)nullptr, false, [](unsigned long long) {});
   __threadfence();
+}
+
+// `UTMALDG`: the box into shared memory at `smem` (zeros outside the tensor), of this CTA or, with
+// bit 16 of `ranks` (`.MULTICAST`), of each cluster rank its bits 0-15 name, at `smem`'s offset; then
+// a complete-tx of its bytes on the mbarrier at `mbar` (at its offset in each). Issued by one lane.
+__device__ inline void tmaLoad(const Ctx& x, const TensorMapView& m, const int32_t* coords, uint32_t smem,
+                               uint32_t mbar, uint32_t ranks, uint32_t lane, uint32_t warp) {
+  if (!m.ok) return;
+  const BoxShape b = boxShape(m);
+  Job j;
+  j.x = x; j.kind = 1; j.buf = nullptr;
+  j.tasks = (b.rows + rowsPerTask(b) - 1) / rowsPerTask(b);
+  CopyJob& c = j.copy;
+  c.m = m; c.kind = 0; c.smem = smem; c.ranks = ranks;
+  for (int i = 0; i < 5; ++i) c.c[i] = coords[i];
+  runJob(x, j, warp, 0, 1, 1u << lane, [] {}, (uint32_t*)nullptr, true, [](unsigned long long) {});
+  __threadfence();
+  const int64_t bytes = (int64_t)b.rows * b.rowBytes;
+  if (!(ranks & 0x10000u)) mbAtomic(MB(x, mbar), 2, 0, bytes, false, x.fault);
+  else
+    for (uint32_t k = 0; k < 16; ++k)
+      if ((ranks >> k) & 1u) mbAtomic(MB(x, (k << 24) | (mbar & 0xffffffu)), 2, 0, bytes, false, x.fault);
+}
+
+// `UTMASTG`: the box's elements inside the tensor from shared memory at `smem`. Issued by one lane.
+__device__ inline void tmaStore(const Ctx& x, const TensorMapView& m, const int32_t* coords, uint32_t smem,
+                                uint32_t lane, uint32_t warp) {
+  if (!m.ok) return;
+  const BoxShape b = boxShape(m);
+  Job j;
+  j.x = x; j.kind = 1; j.buf = nullptr;
+  j.tasks = (b.rows + rowsPerTask(b) - 1) / rowsPerTask(b);
+  CopyJob& c = j.copy;
+  c.m = m; c.kind = 1; c.smem = smem; c.ranks = 0;
+  for (int i = 0; i < 5; ++i) c.c[i] = coords[i];
+  runJob(x, j, warp, 0, 1, 1u << lane, [] {}, (uint32_t*)nullptr, true, [](unsigned long long) {});
+  __threadfence();
+}
+
+// Bulk copies (`UBLKCP`, `NV.SASS.Async.ublkcp`): `size` bytes from `src` to `dst` (shared to shared
+// across the cluster, global to shared, or shared to global), complete when issued; then, unless
+// `mbar` is NONE, a complete-tx of the bytes on the mbarrier at `mbar`. Issued by one lane.
+__device__ inline void bulkCopy(const Ctx& x, uint8_t* dst, const uint8_t* src, uint32_t size, uint32_t mbar,
+                                uint32_t lane, uint32_t warp) {
+  Job j;
+  j.x = x; j.kind = 1; j.buf = nullptr; j.tasks = (size + COPY_TASK_BYTES - 1) / COPY_TASK_BYTES;
+  CopyJob& c = j.copy;
+  c.kind = 2; c.dst = dst; c.src = src; c.size = size;
+  runJob(x, j, warp, 0, 1, 1u << lane, [] {}, (uint32_t*)nullptr, true, [](unsigned long long) {});
+  __threadfence();
+  if (mbar != NONE) mbAtomic(MB(x, mbar), 2, 0, (int64_t)size, false, x.fault);
 }
 
 }  // namespace lift
@@ -865,19 +1179,25 @@ __device__ inline void tmaStore(const Ctx& x, const TensorMapView& m, const int3
 // ---------------------------------------------------------------------------------------------
 // The lifted kernel's frame.
 
+// The launch's CTAs come first in the (one-dimensional) grid, its helper CTAs after (`serve`); a
+// CTA's coordinates are its index's in the launch's grid (`Ctx.gx`, `gy`).
 #define PROLOGUE                                                                                 \
+  extern __shared__ uint32_t lift_dyn[];                                                         \
+  if (blockIdx.x >= ctx0.ctas) { lift::serve(ctx0, lift_dyn); return; }                         \
   __shared__ uint32_t s_live[LIFT_WARPS];                                                        \
   const uint32_t tidx = threadIdx.x, tidy = threadIdx.y, tidz = threadIdx.z;                     \
   const uint32_t flat = tidx + blockDim.x * (tidy + blockDim.y * tidz);                          \
   const uint32_t lane = flat % 32, warp = flat / 32;                                             \
-  const uint32_t cta = blockIdx.x + gridDim.x * (blockIdx.y + gridDim.y * blockIdx.z);           \
+  const uint32_t cta = blockIdx.x;                                                               \
+  const uint32_t ctaX = cta % ctx0.gx, ctaY = (cta / ctx0.gx) % ctx0.gy, ctaZ = cta / (ctx0.gx * ctx0.gy); \
   lift::Ctx ctx = ctx0;                                                                          \
+  ctx.cta = cta;                                                                                 \
+  ctx.stage = lift_dyn + warp * (lift::STAGE_WORDS + lift::JOB_WORDS);                           \
   ctx.shared = ctx0.sharedAll + (uint64_t)cta * ctx0.sharedBytes;                                \
   {                                                                                              \
-    uint32_t _bx = blockIdx.x - blockIdx.x % ctx0.cx, _by = blockIdx.y - blockIdx.y % ctx0.cy;     \
-    uint32_t _bz = blockIdx.z - blockIdx.z % ctx0.cz;                                            \
-    ctx.clusterRank = blockIdx.x % ctx0.cx + ctx0.cx * (blockIdx.y % ctx0.cy + ctx0.cy * (blockIdx.z % ctx0.cz)); \
-    ctx.clusterBase = _bx + gridDim.x * (_by + gridDim.y * _bz);                                   \
+    uint32_t _bx = ctaX - ctaX % ctx0.cx, _by = ctaY - ctaY % ctx0.cy, _bz = ctaZ - ctaZ % ctx0.cz; \
+    ctx.clusterRank = ctaX % ctx0.cx + ctx0.cx * (ctaY % ctx0.cy + ctx0.cy * (ctaZ % ctx0.cz));    \
+    ctx.clusterBase = _bx + ctx0.gx * (_by + ctx0.gy * _bz);                                       \
   }                                                                                              \
   uint32_t cgaPhase = 0;                                                                         \
   ctx.tmem = ctx0.tmemAll + (uint64_t)cta * lift::TMEM_BYTES;                                    \
@@ -895,6 +1215,8 @@ __device__ inline void tmaStore(const Ctx& x, const TensorMapView& m, const int3
   __syncthreads();
 
 #define EPILOGUE return;
+// A thread's exit; the warp's last lane out takes the warp out of the live warps (`warpExit`).
+#define LIFT_EXIT { if (atomicAnd(&LIVE, ~(1u << lane)) == (1u << lane)) lift::warpExit(ctx); return; }
 
 // Uniform registers and predicates: each thread's own copy, written by every executing lane with
 // the same value (a lane that does not execute a uniform write keeps its old value).

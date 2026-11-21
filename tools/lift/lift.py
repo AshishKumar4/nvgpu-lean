@@ -14,7 +14,9 @@ registers and the warp's live lanes. A real warp runs the lifted warp, so diverg
 GPU's; `BSSY` records the executing lanes and `BSYNC`/`WARPSYNC` are `__syncwarp` on them.
 Instructions the simulator runs once per warp (`UTMALDG`, `UTMASTG`, `SYNCS.EXCH`) run on the
 lowest executing lane. Warpgroup MMAs and TMA copies complete when issued (their waits are then
-no-ops); the simulator's results do not depend on when they complete.
+no-ops); the simulator's results do not depend on when they complete. Their work is spread over
+the issuing warp and the helper CTAs on the GPU's idle SMs (rt.cuh's work pool), and the issuer
+waits for it. The lifted CTAs are the grid's first; a CTA's coordinates are `ctaX`, `ctaY`, `ctaZ`.
 
 Usage: lift.py [--threads N] KERNEL.jsonl > lifted.cu   (N: the launch's threads per CTA, 384 if not given)
        lift.py --tables mufu_tables.cuh   (the special-function unit's tables, beside rt.cuh)
@@ -59,8 +61,7 @@ def rhi(r):
 
 SPECIAL = {
     "SR_TID.X": "tidx", "SR_TID.Y": "tidy", "SR_TID.Z": "tidz",
-    "SR_CTAID.X": "(uint32_t)blockIdx.x", "SR_CTAID.Y": "(uint32_t)blockIdx.y",
-    "SR_CTAID.Z": "(uint32_t)blockIdx.z", "SR_LANEID": "lane",
+    "SR_CTAID.X": "ctaX", "SR_CTAID.Y": "ctaY", "SR_CTAID.Z": "ctaZ", "SR_LANEID": "lane",
     "SR_CgaCtaId": "ctx.clusterRank", "SR_SWINHI": "SWINHI", "SRZ": "0u",
     "SR_LTMASK": "((1u << lane) - 1u)", "SR_EQMASK": "(1u << lane)",
     "SR_LEMASK": "(uint32_t)((2ull << lane) - 1ull)", "SR_GEMASK": "(~((1u << lane) - 1u))",
@@ -274,8 +275,9 @@ def f_nop(i):
 
 @form("EXIT")
 def f_exit(i):
-    # The warp's last lane out takes the warp out of its cluster barrier's live warps.
-    return "{ if (atomicAnd(&LIVE, ~(1u << lane)) == (1u << lane)) clusterExit(ctx); return; }"
+    # The warp's last lane out takes the warp out of its cluster barrier's and the work pool's
+    # live warps.
+    return "LIFT_EXIT"
 
 
 @form("UCGABAR_ARV")
@@ -298,11 +300,11 @@ def f_ublkcp(i):
     c = ops[2]["r"]["i"]
     size = f"16u * UR({c})"
     if mods == ["S", "S"]:
-        call = f"bulkPeer(ctx, UR({a}), UR({b}), {size}, UR({a + 1}), &FAULT)"
+        call = f"bulkCopy(ctx, sharedAt(ctx, UR({a})), sharedAt(ctx, UR({b})), {size}, UR({a + 1}), lane, warp)"
     elif mods[:1] == ["S"]:
-        call = f"bulkLoad(ctx, UR({a}), U64(UR({b}), UR({b + 1})), {size}, UR({a + 1}), &FAULT)"
+        call = f"bulkCopy(ctx, sharedAt(ctx, UR({a})), gptr(ctx, U64(UR({b}), UR({b + 1}))), {size}, UR({a + 1}), lane, warp)"
     elif mods[:2] == ["G", "S"]:
-        call = f"bulkStore(ctx, U64(UR({a}), UR({a + 1})), UR({b}), {size})"
+        call = f"bulkCopy(ctx, gptr(ctx, U64(UR({a}), UR({a + 1}))), sharedAt(ctx, UR({b})), {size}, NONE, lane, warp)"
     else:
         raise Lift(f"UBLKCP {mods}")
     return f"if (lane == __ffs(__activemask()) - 1) {{ {call}; }}"
@@ -477,6 +479,8 @@ def f_cs2r(i):
     ops = i["ops"]
     if ops[1] in ({"k": "name", "s": "SR_CLOCKLO"}, {"k": "name", "s": "SR_GLOBALTIMERLO"}):
         # A clock: the host GPU's, which a result compared with the simulator's cannot match.
+        global READS_CLOCK
+        READS_CLOCK = True
         src = "clock64()" if ops[1]["s"] == "SR_CLOCKLO" else "globaltimer()"
         return wr(ops[0], f"(uint32_t){src}") if "32" in i["mods"] else wr64(ops[0], f"(uint64_t){src}")
     if ops[1] != {"k": "name", "s": "SRZ"}:
@@ -1119,7 +1123,7 @@ def f_redux(i):
 @form("BPT")
 def f_bpt(i):
     # `BPT.TRAP`: the simulator faults the run.
-    return "{ atomicOr(&FAULT, 64u); return; }"
+    return "{ atomicOr(&FAULT, 64u); LIFT_EXIT }"
 
 
 # Memory
@@ -1235,9 +1239,12 @@ def f_syncs(i):
         return (f"if (lane == __ffs(__activemask()) - 1) mbExch(ctx, UR({r}) + {off & 0xffffffff:#x}u, "
                 f"U64(UR({v}), UR({v + 1})));")
     if "PHASECHK" in mods:
+        # Polled plainly; once the phase has completed, read again with acquire (the copies that
+        # completed it may have been written from other SMs: the work pool's helpers).
         return (f"{{ unsigned long long* _w = MB(ctx, (uint32_t){addr(ops[1])}); "
-                f"uint32_t _ph = (uint32_t)(*(volatile unsigned long long*)_w >> 63); __threadfence(); "
-                + wrP(ops[0], f"_ph != ({val(ops[2])} >> 31)") + " }")
+                f"bool _done = (uint32_t)(*(volatile unsigned long long*)_w >> 63) != ({val(ops[2])} >> 31); "
+                f"if (_done) (void)ldAcq(_w); "
+                + wrP(ops[0], "_done") + " }")
     if "ARRIVE" in mods:
         tx = f"{val(ops[2])}" if ops[2]["k"] == "reg" and ops[2]["r"]["i"] != 255 else "0u"
         drop = "true" if "OPTOUT" in mods else "false"
@@ -1285,7 +1292,7 @@ def f_utchmma(i):
     acc = pred(ops[5]) if len(ops) > 5 else "true"
     pair = "true" if "2CTA" in mods else "false"
     return (f"if (lane == __ffs(__activemask()) - 1) {{ if (UR({x}) != 0u) atomicOr(&FAULT, 32u); "
-            f"else utcmma(ctx, U64(UR({a}), UR({a + 1})), U64(UR({b}), UR({b + 1})), {d}, UR({idx}), {acc}, {pair}); }}")
+            f"else utcmma(ctx, U64(UR({a}), UR({a + 1})), U64(UR({b}), UR({b + 1})), {d}, UR({idx}), {acc}, {pair}, lane, warp); }}")
 
 
 @form("UTCBAR")
@@ -1390,11 +1397,10 @@ def f_utma(i):
         # `.MULTICAST`: the box into each cluster CTA the mask (the third operand's high half)
         # names, at the same shared offset, and its mbarrier at the same offset signalled.
         mreg = i["ops"][2]["r"]["i"]
-        call = (f"for (uint32_t _k = 0; _k < 16; ++_k) if ((UR({mreg}) >> (16 + _k)) & 1u) "
-                f"tmaLoad(ctx, _m, _c, (_k << 24) | (UR({a}) & 0xffffffu), (_k << 24) | (UR({a + 1}) & 0xffffffu), &FAULT)")
+        call = f"tmaLoad(ctx, _m, _c, UR({a}), UR({a + 1}), 0x10000u | (UR({mreg}) >> 16), lane, warp)"
     else:
-        call = (f"tmaLoad(ctx, _m, _c, UR({a}), UR({a + 1}), &FAULT)" if load
-                else f"tmaStore(ctx, _m, _c, UR({a}), &FAULT)")
+        call = (f"tmaLoad(ctx, _m, _c, UR({a}), UR({a + 1}), 0u, lane, warp)" if load
+                else f"tmaStore(ctx, _m, _c, UR({a}), lane, warp)")
     return (f"if (lane == __ffs(__activemask()) - 1) {{ int32_t _c[5] = {{{coords}}}; "
             f"TensorMapView _m = mapAt(ctx, U64(UR({b}), UR({b + 1}))); {call}; }}")
 
@@ -1422,10 +1428,10 @@ def f_hgmma(i):
     words = n // 2
     load = " ".join(f"_acc[{k}] = r[{d + k}];" for k in range(words))
     store = " ".join(f"r[{d + k}] = _acc[{k}];" for k in range(words))
-    return (f"{{ uint32_t _acc[{words}]; {load} hgmma16<{n}>(ctx, {ty}, U64(UR({u}), UR({u + 1})), "
+    return (f"{{ uint32_t _acc[{words}]; {load} hgmma<{n}>(ctx, {ty}, U64(UR({u}), UR({u + 1})), "
             f"U64(UR({u + 2}), UR({u + 3})), {'false' if 'tnspA' in dm else 'true'}, "
             f"{'false' if 'tnspB' in dm else 'true'}, {'true' if 'negA' in dm else 'false'}, "
-            f"{'true' if 'negB' in dm else 'false'}, {scale}, _acc, tidx % 128u); {store} }}")
+            f"{'true' if 'negB' in dm else 'false'}, {scale}, _acc, lane, warp); {store} }}")
 
 
 # ---------------------------------------------------------------------------------------------
@@ -1469,6 +1475,8 @@ def main():
     print(f"// Lifted from {meta['kernel']} (sm_{meta['sm']}), {len(prog)} instructions, by tools/lift/lift.py.")
     print(f"#define LIFT_LOCAL {max(meta.get('localBytes', 0), 4)}")
     print(f"#define LIFT_THREADS {THREADS}")
+    # A kernel that reads the clock writes what no simulator's run can match (main.cu reports it).
+    print(f"#define LIFT_CLOCK {int(READS_CLOCK)}")
     # `Exec.localWindowAt`: the local window's base in constant bank 0 (sm_100 on: 0x2f8).
     print(f"#define LIFT_LOCALWIN {0x2f8 if meta['sm'] >= 100 else 0x20:#x}")
     print('#include "rt.cuh"')
@@ -1503,6 +1511,7 @@ if __name__ == "__main__":
         tables(sys.argv[2])
         sys.exit(0)
     THREADS = 384
+    READS_CLOCK = False
     if sys.argv[1:2] == ["--threads"]:
         THREADS = int(sys.argv[2])
         del sys.argv[1:3]
