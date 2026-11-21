@@ -449,10 +449,13 @@ def f_bar(i):
     if "SYNC" not in i["mods"]:
         raise Lift("BAR form")
     # `barrier.sync`, not `bar.sync` (which is `.aligned`): a lifted warp may arrive with its lanes
-    # apart.
+    # apart. Lanes leave a barrier as they arrived, so the warp's live lanes are then made one again,
+    # as `BAR.SYNC`'s warp leaves it: the warp-wide instructions after it (`VOTEU`, `REDUX`, an
+    # election) see every lane, as the kernel's do.
+    sync = "__syncwarp(LIVE);"
     if len(ops) > 1:
-        return f'asm volatile("barrier.sync %0, %1;" :: "r"({bid}), "r"({val(ops[1])}) : "memory");'
-    return f'asm volatile("barrier.sync %0;" :: "r"({bid}) : "memory");'
+        return f'asm volatile("barrier.sync %0, %1;" :: "r"({bid}), "r"({val(ops[1])}) : "memory"); {sync}'
+    return f'asm volatile("barrier.sync %0;" :: "r"({bid}) : "memory"); {sync}'
 
 
 @form("MOV", "UMOV")
