@@ -69,6 +69,25 @@ def regsWithoutAttribute : IO (List (String × Bool)) := do
       (s!"{k.name} registers without EIATTR_REGCOUNT", k.regs > 0 && (find ks' k.name).map (·.regs) == some k.regs)
   | _, _ => return [("diff-f32 read", false)]
 
+/-- The same fixture without its `EIATTR_CBANK_PARAM_SIZE` records (as an sm_90 cubin in
+PyTorch 2.9's wheel has none): each kernel's parameter block still covers its parameters. -/
+def paramBytesWithoutAttribute : IO (List (String × Bool)) := do
+  let dir := "tests/sass/sm_80"
+  let sass ← IO.FS.readFile s!"{dir}/diff-f32.sass"
+  let elf ← IO.FS.readFile s!"{dir}/diff-f32.elf"
+  let ls := elf.splitOn "\n"
+  let keep := (List.range ls.length).filter fun i =>
+    !((ls[i]!.splitOn "EIATTR_CBANK_PARAM_SIZE").length > 1 ||
+      (i ≥ 1 && (ls[i - 1]!.splitOn "EIATTR_CBANK_PARAM_SIZE").length > 1) ||
+      (i ≥ 2 && (ls[i - 2]!.splitOn "EIATTR_CBANK_PARAM_SIZE").length > 1))
+  let stripped := "\n".intercalate (keep.map (ls[·]!))
+  match Read.kernels sass elf, Read.kernels sass stripped with
+  | .ok ks, .ok ks' =>
+    return ks.toList.map fun k =>
+      (s!"{k.name} parameter block without EIATTR_CBANK_PARAM_SIZE",
+       k.paramBytes > 0 && (find ks' k.name).map (·.paramBytes) == some k.paramBytes)
+  | _, _ => return [("diff-f32 read", false)]
+
 /-- Expectations read off the listings: (description, holds). -/
 def golden (all : List (String × Array Kernel)) : List (String × Bool) :=
   let kernel (src name : String) : Option Kernel := (all.lookup src).bind (find · name)
@@ -151,7 +170,7 @@ def main : IO UInt32 := do
         | some k' => failures := failures ++ kernelProblems k k'
         | none => failures := failures ++ [s!"{f}: {k.name} missing from the nvdisasm listing"]
     | .error e, _ | _, .error e => failures := failures ++ [s!"{f}: {e}"]
-  for (what, ok) in golden all ++ (← regsWithoutAttribute) do
+  for (what, ok) in golden all ++ (← regsWithoutAttribute) ++ (← paramBytesWithoutAttribute) do
     if !ok then failures := failures ++ [s!"golden: {what}"]
   for (_, ks) in all do
     for k in ks do

@@ -489,11 +489,14 @@ def Module.kernels (m : Module) (want : String → Bool := fun _ => true) : Exce
       | .reg ⟨.r, r⟩ _ => if r < 255 then max n (r + 2) else n
       | _ => n) n) 0
     let params := (a.params.qsort (·.1 < ·.1)).map fun (_, off, n) => (off, n)
+    -- The parameter block covers every parameter, `EIATTR_CBANK_PARAM_SIZE` or not (an sm_90
+    -- cubin in PyTorch 2.9's wheel has only `EIATTR_KPARAM_INFO`).
+    let paramBytes := params.foldl (fun m (off, n) => max m (off + n)) a.paramBytes
     -- `USETMAXREG.TRY_ALLOC UPd, n` raises the warp's allocation to n registers.
     let raised := code.foldl (fun m i => if i.opcode != "USETMAXREG" then m else
       i.operands.foldl (fun m o => match o with | .imm n => max m n.toNat | _ => m) m) 0
     let regs := max a.regs calleeRegs
-    return { name, code, regs, regFile := max regs raised, params, paramBytes := a.paramBytes,
+    return { name, code, regs, regFile := max regs raised, params, paramBytes,
              paramBase := a.paramBase, cluster := a.cluster,
              sharedBytes := a.sharedSection - Elf.reservedShared.value,
              sharedReserved := Elf.reservedShared.value, localBytes := a.minStackBytes,
