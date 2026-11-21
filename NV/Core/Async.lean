@@ -210,6 +210,12 @@ structure State where
   lastMmaTByD : Std.HashMap (Nat × Nat × Nat) Nat := {}
   /-- Per issuer and first destination register: its latest MMA writing there. -/
   lastByDst : Std.HashMap (Nat × Nat × Nat) Nat := {}
+  /-- Per agent: how many entries of `lastByDst` and `lastMmaTByD` name it (absent: none), so
+  whether a later MMA may start from its result is one lookup. -/
+  latestOf : Std.HashMap Nat Nat := {}
+  /-- `(sm, slot, group kind)` ↦ the issuer's operations of that kind, in issue order, among them
+  every one not yet done (`earlier`): those done are dropped as they are read. -/
+  byGroup : Std.HashMap (Nat × Nat × Nat) (Array Nat) := {}
   /-- Per SM, the TMA unit's request generation. -/
   tma : Array Port
   /-- Per sub-partition, the GMMA pipe. -/
@@ -374,8 +380,7 @@ def finish (st : State) (t a : Nat) (outs : Array Out) : State × Array Out × A
   -- and their data grew with the run's work). An MMA's result, and the writeback that lands it,
   -- stay while a later MMA may start from it: the latest to its accumulator, or one a pending MMA
   -- chained onto.
-  let source := st.agents[a]!.held || st.lastByDst.fold (fun b _ v => b || v == a) false ||
-    st.lastMmaTByD.fold (fun b _ v => b || v == a) false
+  let source := st.agents[a]!.held || st.latestOf.contains a
   let mut st := { st with agents := st.agents.modify a fun g =>
     let spent := { g with doneAt := some t, resps := #[], moveResps := #[], sigResps := #[], desc := none,
                           task := if source then g.task else none, body := g.body.spent }
@@ -646,6 +651,15 @@ def commit (st : State) (t sm slot : Nat) (g : Group) (bar : Option (Fin 6)) (on
     let st := if g == .wgmma then { st with wgmma := st.wgmma.insert (sm, slot) (live.push gi) } else st
     (st, none, #[])
 
+/-- `latestOf` once an entry naming `old` (if any) names `new` instead. -/
+def latestSwap (m : Std.HashMap Nat Nat) (old : Option Nat) (new : Nat) : Std.HashMap Nat Nat :=
+  let m := match old with
+    | some p => match m.get? p with
+      | some 1 | none => m.erase p
+      | some k => m.insert p (k - 1)
+    | none => m
+  m.insert new (m.getD new 0 + 1)
+
 /-- Hand operation `op` from warp `o` to its agent at `t`. -/
 def start (p : Params) (st : State) (mem : MemSys) (t : Nat) (o : Origin) (op : Op)
     (wb : Resp → Warp → Warp) (pc : Nat := 0) (trace : Option (Nat × Nat) := none) :
@@ -659,8 +673,9 @@ def start (p : Params) (st : State) (mem : MemSys) (t : Nat) (o : Origin) (op : 
     | .fault msg => throw msg
   let a := st.agents.size
   let group := op.group
-  let earlier (g : Group) : Array Nat := (Array.range a).filter fun i => let x := st.agents[i]!
-    x.origin.sm == o.sm && x.origin.slot == o.slot && x.group == some g && x.doneAt.isNone
+  -- The issuer's operations of kind `g` not yet done, in issue order.
+  let earlier (g : Group) : Array Nat :=
+    (st.byGroup.getD (o.sm, o.slot, g.index) #[]).filter (st.agents[·]!.doneAt.isNone)
   let deps := match op, group with
     | .copy c, some g => if c.afterGroup then earlier g else #[]
     -- A warp's tensor-memory MMAs start at once, in issue order on its tensor core (`prev`), after
@@ -695,18 +710,23 @@ def start (p : Params) (st : State) (mem : MemSys) (t : Nat) (o : Origin) (op : 
   st := { st with agents := st.agents.push { origin := o, body, wb, pc, group, deps, prev,
                                              source, chained, tix := trace.map (·.1),
                                              land := (trace.map (·.2)).getD 0 } }
+  if let some g := group then
+    let key := (o.sm, o.slot, g.index)
+    st := { st with byGroup := st.byGroup.insert key (earlier g |>.push a) }
   if let .mma m := op then
     -- Writing D afresh retires its former result too, when this MMA does not accumulate from it.
     if let some prev := st.lastByDst.get? (o.sm, o.slot, m.dst) then
       if source != some prev then st := { st with agents := st.agents.modify prev Agent.letGo }
     st := { st with lastMma := st.lastMma.insert (o.sm, o.slot) a,
-                    lastByDst := st.lastByDst.insert (o.sm, o.slot, m.dst) a }
+                    lastByDst := st.lastByDst.insert (o.sm, o.slot, m.dst) a,
+                    latestOf := latestSwap st.latestOf (st.lastByDst.get? (o.sm, o.slot, m.dst)) a }
   if let .mmaT m := op then
     -- Replacing D also retires its former result when this MMA does not accumulate from it.
     if let some prev := st.lastMmaTByD.get? (o.sm, o.slot, m.dKey) then
       st := { st with agents := st.agents.modify prev Agent.letGo }
     st := { st with lastMmaT := st.lastMmaT.insert (o.sm, o.slot) a,
-                    lastMmaTByD := st.lastMmaTByD.insert (o.sm, o.slot, m.dKey) a }
+                    lastMmaTByD := st.lastMmaTByD.insert (o.sm, o.slot, m.dKey) a,
+                    latestOf := latestSwap st.latestOf (st.lastMmaTByD.get? (o.sm, o.slot, m.dKey)) a }
   -- Operations join their warp's open group until a commit closes it (`tcgen05` operations have
   -- no commit-group: `tcgen05.commit` tracks them as their dependents, `deps`).
   if let some g := group then
