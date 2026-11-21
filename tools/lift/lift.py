@@ -285,12 +285,13 @@ def f_exit(i):
 
 @form("UCGABAR_ARV")
 def f_cgaarv(i):
-    return "cgaPhase = clusterArrive(ctx);"
+    return "cgaPhase = clusterArrive(ctx, LIVE);"
 
 
 @form("UCGABAR_WAIT")
 def f_cgawait(i):
-    return "clusterWait(ctx, cgaPhase);"
+    # The warp leaves together, as it arrived (`UCGABAR_ARV`).
+    return "clusterWait(ctx, cgaPhase); __syncwarp(LIVE);"
 
 
 @form("UBLKCP")

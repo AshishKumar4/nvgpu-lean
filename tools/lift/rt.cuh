@@ -112,13 +112,15 @@ __device__ __forceinline__ unsigned long long* clusterBar(const Ctx& x) {
   return x.clusterBars + (bx / x.cx + ngx * (by / x.cy + ngy * (bz / x.cz)));
 }
 
-// `UCGABAR_ARV`: release, then the warp's arrival (its lowest executing lane's); returns the phase
-// it arrived in, to every executing lane.
-__device__ inline uint32_t clusterArrive(const Ctx& x) {
+// `UCGABAR_ARV`: release, then the warp's arrival (its lowest live lane's); returns the phase it
+// arrived in, to every live lane. The live lanes `live` arrive together, once: `UCGABAR_ARV` is a
+// warp-wide instruction, and lanes that reached it apart would each arrive.
+__device__ inline uint32_t clusterArrive(const Ctx& x, uint32_t live) {
+  __syncwarp(live);
   __threadfence();
-  uint32_t m = __activemask(), ph = 0;
-  if (threadIdx.x % 32 == __ffs(m) - 1) ph = clusterStep(clusterBar(x), true);
-  return __shfl_sync(m, ph, __ffs(m) - 1);
+  uint32_t ph = 0;
+  if (threadIdx.x % 32 == __ffs(live) - 1) ph = clusterStep(clusterBar(x), true);
+  return __shfl_sync(live, ph, __ffs(live) - 1);
 }
 
 // `UCGABAR_WAIT`: until the phase arrived in has completed, then acquire.
