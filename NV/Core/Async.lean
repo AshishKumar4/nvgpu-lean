@@ -263,10 +263,11 @@ def mmaLatency (p : Params) (m : Mma) : Nat :=
 /-- Issue request `r` of agent `a` for `role` at `t`: through the LSU (`viaLsu`) or the async
 path. -/
 def send (st : State) (mem : MemSys) (t : Nat) (a : Nat) (role : Role) (r : Req)
-    (viaLsu : Bool := false) (credit : Nat := 0) (tensor : Bool := false) (tensorShares : Nat := 1) :
+    (viaLsu : Bool := false) (credit : Nat := 0) (tensor : Bool := false) (tensorShares : Nat := 1)
+    (wgmma : Bool := false) :
     Except String (State × MemSys) := do
   let o := st.agents[a]!.origin
-  let (mem, id) ← if viaLsu then pure (mem.issue t o r) else mem.issueAsync t o r a tensor tensorShares
+  let (mem, id) ← if viaLsu then pure (mem.issue t o r) else mem.issueAsync t o r a tensor tensorShares wgmma
   -- The bulk engine reads its source only as fast as it sends it on: a source is read once the
   -- data stored from it has left the SM (`readDone`), and once the L2 has answered the SM's writes
   -- sent `credit` bytes before it.
@@ -569,7 +570,7 @@ def startOne (p : Params) (st : State) (mem : MemSys) (t a : Nat) :
     -- warpgroup: a quarter of its port time to each share (`Mma.bFrom`).
     for i in [0:m.loads.size] do
       (st, mem) ← send st mem s a (.mmaLoad i) m.loads[i]! (tensor := m.loads[i]!.space == .shared)
-        (tensorShares := if m.bFrom.any (· ≤ i) then 4 else 1)
+        (tensorShares := if m.bFrom.any (· ≤ i) then 4 else 1) (wgmma := true)
     progress st mem t a
   | .mmaT m =>
     -- The SM's tensor core (sub-partition 0's port): its multiply-adds at the SM's peak for its

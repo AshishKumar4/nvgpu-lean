@@ -101,6 +101,9 @@ structure Config where
   smemAtomInterval : Nat
   /-- `tcgen05.ld`/`st` to their data (`TensorParams.tmemLatency`). -/
   tmemLatency : Nat := 0
+  /-- A warpgroup MMA's operand reads take the data stage at this many per mille of a cycle a
+  wavefront; 0, the tensor core's own port (`TensorParams.wgmmaOperandDataPermille`). -/
+  wgmmaOperandData : Nat := 0
   /-- An unfinished `try_wait`'s hold (`SyncParams.tryWaitLimit`). -/
   tryWaitLimit : Nat := 0
   /-- A held `try_wait`'s wake (`SyncParams.tryWaitWake`). -/
@@ -194,6 +197,7 @@ def Config.ofParams (p : Params) (smemDemand : Nat) : Config :=
     dsmemBack := dsExtra - dsExtra / 2
     smemAtomInterval := m.smemAtomicInterval.value
     tmemLatency := p.tensor.tmemLatency.value
+    wgmmaOperandData := p.tensor.wgmmaOperandDataPermille.value
     tryWaitLimit := p.sync.tryWaitLimit.value
     tryWaitWake := p.sync.tryWaitWake.value }
 

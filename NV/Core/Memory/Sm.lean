@@ -45,6 +45,8 @@ structure ReqState where
   /-- The warpgroup MMA's shares that read this operand together (B: the four warps'), each
   charged its share of the port time. -/
   tensorShares : Nat := 1
+  /-- A warpgroup MMA's operand read (not `tcgen05.mma`'s). -/
+  wgmma : Bool := false
   /-- For an async request, the async unit's operation it belongs to. -/
   op : Nat := 0
   /-- The cycle its instruction issued, which the pipeline's latencies count from. -/
@@ -673,9 +675,9 @@ request goes to the data port, contending with the LSU's wavefronts. It delivers
 request; the warp's fences do not wait for it (the async proxy is ordered by mbarriers and proxy
 fences, PTX ISA §8.6). -/
 def issueAsync (m : SmMem) (t : Nat) (o : Origin) (r : Req) (dir : Directory) (op : Nat)
-    (tensor : Bool := false) (tensorShares : Nat := 1) : Except String (SmMem × Nat) := do
+    (tensor : Bool := false) (tensorShares : Nat := 1) (wgmma : Bool := false) : Except String (SmMem × Nat) := do
   let (m, id) := m.alloc { origin := o, req := r, resp := Array.replicate (r.addrs.size * words r.bytes) 0,
-                           async := true, op, tensor, tensorShares }
+                           async := true, op, tensor, tensorShares, wgmma }
   -- The race check: the operation's writes, and the release its signals carry.
   let m := if !m.cfg.races then m else match r.op with
     | .mbar (.arrive ..) | .mbar (.completeTx _) => { m with race := m.race.agentSignal op id }
@@ -824,6 +826,11 @@ private def bankStage (m : SmMem) (t id cta : Nat) (lanes : Array Nat) (key : Ke
     let busy := ((w - conflicts) * c.wavefrontCycles + m.reqs[id]!.tensorShares - 1) / max m.reqs[id]!.tensorShares 1
     let m := { m with counters := { m.counters with tensorPortMax := m.counters.tensorPortMax + busy } }
     let (_, last, m) := m.take .tensor t busy
+    -- On a part where a warpgroup MMA's reads share the data stage with the warps' accesses
+    -- (`Config.wgmmaOperandData`), they take it too, first: the loads, stores and copies' writes
+    -- after them wait, they wait for none (wgmma beside a TMA stream runs at its rate).
+    let m := if c.wgmmaOperandData > 0 && m.reqs[id]!.wgmma then
+      (m.take .data t ((busy * c.wgmmaOperandData + 999) / 1000)).2.2 else m
     let (m, _) ← m.performShared t cta id key r lanes
     return (m.passed id).complete id (last + c.backShared)
   let (_, last, m) := m.take .data t cost

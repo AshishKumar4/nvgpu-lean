@@ -68,7 +68,7 @@ def h200 : Params := {
       "" },
   tensor := {
     fmaPerCycle16, fmaPerCycle8, fmaPerCycleTF32, fmaPerCycleF64, wgmmaLatency, wgmmaLatencyRS,
-    wgmmaIssueSharePermille, wgmmaPipeSharePermille, mmaSyncLatency },
+    wgmmaOperandDataPermille, wgmmaIssueSharePermille, wgmmaPipeSharePermille, mmaSyncLatency },
   sync := {
     mbarrierLatency, clusterMbarrierLatency, clusterBarrierCycles, namedBarrierLatency, barSync, fenceProxyAsync,
     fenceAcqRelCta, fenceAcqRelGpu, fenceScGpu, fenceAcqRelSys, fenceCycles, redReleaseGpu,

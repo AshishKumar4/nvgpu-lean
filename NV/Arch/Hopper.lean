@@ -611,6 +611,10 @@ def wgmmaLatencyRS : Fact (List (Nat × Nat)) :=
     "Table X: wgmma m64nNk16 f32.f16.f16, dense, RS" "H800 PCIe"
     ""
 
+def wgmmaOperandDataPermille : Fact Nat :=
+  inferred 1000 "meas-gh200" ""
+    "" (some "GH200")
+
 def wgmmaIssueSharePermille : Fact Nat :=
   inferred 500 "meas-gh200" ""
     "" (some "GH200")

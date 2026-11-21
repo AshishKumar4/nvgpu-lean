@@ -169,10 +169,10 @@ def issue (m : MemSys) (t : Nat) (o : Origin) (r : Req) (issued : Nat := t) : Me
   (m', m.globalId o.sm id)
 
 def issueAsync (m : MemSys) (t : Nat) (o : Origin) (r : Req) (op : Nat) (tensor : Bool := false)
-    (tensorShares : Nat := 1) : Except String (MemSys × Nat) := do
+    (tensorShares : Nat := 1) (wgmma : Bool := false) : Except String (MemSys × Nat) := do
   let s := m.sms[o.sm]!
   let m := { m with sms := m.sms.set! o.sm default }
-  let (s, id) ← s.issueAsync t o r m.dir op tensor tensorShares
+  let (s, id) ← s.issueAsync t o r m.dir op tensor tensorShares wgmma
   return ({ m with sms := m.sms.set! o.sm s }, m.globalId o.sm id)
 
 /-- When request `id` (as `issue` and `issueAsync` number it) of SM `sm` sent its last data to

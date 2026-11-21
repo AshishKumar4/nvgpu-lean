@@ -311,6 +311,7 @@ The role column says who reads a fact (`NV/Core/Roles.lean`): only `engine` fact
 | `tensor.wgmmaLatency` | 8: 18, 16: 20, 32: 24, 64: 32, 128: 64, 256: 128 | published (H800 PCIe) | engine | `luo2024` Table X: wgmma m64nNk16 f32.f16.f16, dense, SS |  |
 | `tensor.wgmmaLatencyRS` | 8: 13, 16: 13, 32: 16, 64: 32, 128: 64, 256: 128 | published (H800 PCIe) | engine | `luo2024` Table X: wgmma m64nNk16 f32.f16.f16, dense, RS |  |
 | `tensor.mmaSyncLatency` | 24 | measured | observed: bound input, not read by the engine | `meas-h200`  |  |
+| `tensor.wgmmaOperandDataPermille` | 1000 | inferred (GH200) | engine | `meas-gh200`  |  |
 | `tensor.wgmmaIssueSharePermille` | 500 | inferred (GH200) | engine | `meas-gh200`  |  |
 | `tensor.wgmmaPipeSharePermille` | 200 | inferred (GH200) | engine | `meas-gh200`  |  |
 | `tensor.tcgen05Latency` | 0 | documented | engine | `ptx-isa-9.5` §9.7.18: tcgen05 needs sm_100a |  |

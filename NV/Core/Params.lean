@@ -231,6 +231,11 @@ structure TensorParams where
   wgmmaLatencyRS : Fact (List (Nat × Nat))
   /-- `mma.sync` m16n8k16 FP16/BF16 into FP32: dependent issue distance. -/
   mmaSyncLatency : Fact Nat
+  /-- Where a warpgroup MMA's shared-memory operands are read: 0, the tensor core's own port into
+  shared memory; otherwise the L1 data stage the warps' loads and stores take, at this many per mille
+  of a cycle a wavefront. -/
+  wgmmaOperandDataPermille : Fact Nat :=
+    { value := 0, kind := .documented, source := { ref := "ptx-isa-9.5", loc := "§9.7.15: wgmma needs sm_90a" } }
   /-- Per mille of a sub-partition's issue cycles its tensor core takes while it runs a warpgroup
   MMA (spread evenly); 0 on a part without warpgroup MMA. -/
   wgmmaIssueSharePermille : Fact Nat :=
