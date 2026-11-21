@@ -343,6 +343,21 @@ def sameCycleWrites : Kernel :=
     ins 0x60 "STG" #["E"] #[gaddr 4, r 3] (ctrl 1),
     ins 0x70 "EXIT" #[] #[] (ctrl 5)] }
 
+/-- `out[0] = 100`, every other thread exited first: `@P0 EXIT P1` (P0 holding everywhere, P1 for
+threads past the first) leaves thread 0 to store, as ptxas's reduction epilogues do. -/
+def exitPred : Kernel :=
+  let pr (i : Nat) : Operand := .reg ⟨.p, i⟩
+  { name := "exitpred", sm := 90, regs := 8, params := #[(0, 8)], paramBytes := 8, code := #[
+    ins 0x00 "S2R" #[] #[r 0, .name "SR_TID.X"] (ctrl 1 (some 0)),
+    ins 0x10 "LDC" #["64"] #[r 4, .cbank 0 none 0x210] (ctrl 1 (some 1)),
+    ins 0x20 "ISETP" #["NE", "AND"] #[pr 1, .reg Reg.PT, r 0, .reg Reg.RZ, .reg Reg.PT] (ctrl 4 none 0b01),
+    ins 0x30 "ISETP" #["EQ", "AND"] #[pr 0, .reg Reg.PT, .reg Reg.RZ, .reg Reg.RZ, .reg Reg.PT] (ctrl 4),
+    { (ins 0x40 "EXIT" #[] #[pr 1] (ctrl 5 none 0b10)) with guard := some (⟨.p, 0⟩, false) },
+    ins 0x50 "IMAD" #["WIDE", "U32"] #[r 4, r 0, .imm 4, r 4] (ctrl 4),
+    ins 0x60 "IADD3" #[] #[r 6, .reg Reg.RZ, .imm 100, .reg Reg.RZ] (ctrl 4),
+    ins 0x70 "STG" #["E"] #[gaddr 4, r 6] (ctrl 1),
+    ins 0x80 "EXIT" #[] #[] (ctrl 5)] }
+
 /-- `out[t] = t` after `NANOSLEEP ns`: the warp sleeps about `ns` ns before its store. -/
 def sleeper (ns : UInt64) : Kernel :=
   { name := "sleeper", sm := 90, regs := 8, params := #[(0, 8)], paramBytes := 8, code := #[
@@ -386,6 +401,11 @@ def checkTiming : IO (List String) := do
     if c.cycles < c0.cycles + want then
       out := out ++ [s!"NANOSLEEP 1000 ns: {c.cycles} cycles against {c0.cycles} for 0 ns, under {want} more"]
   | .error e, _ | _, .error e => out := out ++ [s!"NANOSLEEP: {e}"]
+  match ← run exitPred 1 n [Array.replicate n 0] with
+  | .error e => out := out ++ [s!"EXIT with a predicate operand: {e}"]
+  | .ok bs =>
+    let want := (List.range n).map fun t => (t, if t == 0 then 100 else 0)
+    out := out ++ compare "EXIT with a predicate operand" bs[0]! want
   match ← runWith sameCycleWrites 1 n [Array.replicate n 0] with
   | .error e => out := out ++ [s!"writes landing in one cycle: {e}"]
   | .ok (bs, c) =>

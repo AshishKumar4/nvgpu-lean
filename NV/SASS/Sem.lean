@@ -724,9 +724,15 @@ def decodeCtrl (d : Dec) : Option Run :=
   let i := d.i
   let barReg : Option Nat := match d.o 0 with | .reg ⟨.b, n⟩ _ => some n | _ => none
   match i.opcode with
-  | "EXIT" => some <| d.run fun x =>
-    let w := x.w.advance x.m x.pc
-    .next { w with live := w.live &&& ~~~x.on, waiting := w.waiting &&& ~~~x.on }
+  | "EXIT" =>
+    -- `@P EXIT [Q]`: a predicate operand also has to hold for a lane to exit (ptxas's
+    -- `@P0 EXIT P1`: every lane but those where `P1` fails).
+    let preds := i.operands.toList.filter isPred
+    some <| d.run fun x =>
+      let out := if preds.isEmpty then x.on else (lanes x.on).foldl (fun acc l =>
+        if preds.all (fun o => (pred x.v l o).getD false) then acc ||| ((1 : UInt32) <<< l.toUInt32) else acc) 0
+      let w := x.w.advance x.m x.pc
+      .next { w with live := w.live &&& ~~~out, waiting := w.waiting &&& ~~~out }
   | "BRA" =>
     let t := i.operands.toList.getLast?.getD (.name "?")
     if i.hasMod "DIV" then
