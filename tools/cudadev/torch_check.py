@@ -11,12 +11,13 @@ a float32 matmul is a float32 one on every part. A run prints the device and, pe
 shape, dtype and SHA-256.
 """
 import hashlib
+import os
 import sys
 import time
 
 import numpy as np
 
-sys.path.insert(0, __file__.rsplit("/", 1)[0])
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from jax_check import B, D, F, H, T, V, inputs  # noqa: E402  (the same shapes and inputs)
 
 
