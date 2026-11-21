@@ -4,8 +4,9 @@
     python jax_check.py compare A.npz B.npz         # bit-compare two runs' outputs (shared with JAX)
 
 The cases mirror jax_check.py's on the same inputs (NumPy's generator, seeded): a float32 and a
-bfloat16 matmul, a softmax, and a one-layer transformer's loss and gradients, each through
-torch.cuda (NVIDIA's math libraries for the matmuls, PyTorch's own kernels for the rest). TF32 is off, so
+bfloat16 matmul, a softmax, reductions and elementwise maths, and a one-layer transformer's loss
+and gradients, each through torch.cuda (NVIDIA's math libraries for the matmuls, PyTorch's own
+kernels for the rest). TF32 is off, so
 a float32 matmul is a float32 one on every part. A run prints the device and, per output, its
 shape, dtype and SHA-256.
 """
@@ -36,6 +37,20 @@ def case_softmax(torch, dev):
     return {"softmax": torch.softmax(torch.from_numpy(x).to(dev), dim=-1)}
 
 
+def case_reductions(torch, dev):
+    """PyTorch's own kernels, no BLAS: reductions and elementwise maths."""
+    (x,) = inputs(6, (96, 333), scale=3.0)
+    t = torch.from_numpy(x).to(dev)
+    return {"sum": t.sum(), "sum_rows": t.sum(-1), "mean_cols": t.mean(0), "max_rows": t.max(-1).values,
+            "argmax_rows": t.argmax(-1), "var_rows": t.var(-1), "logsumexp_rows": torch.logsumexp(t, -1),
+            "cumsum_rows": t.cumsum(-1), "gelu": torch.nn.functional.gelu(t), "exp_tanh": torch.exp(t) * torch.tanh(t)}
+
+
+def case_layer_norm(torch, dev):
+    (x,) = inputs(6, (96, 333), scale=3.0)
+    return {"layer_norm": torch.nn.functional.layer_norm(torch.from_numpy(x).to(dev), (333,))}
+
+
 def case_transformer(torch, dev):
     from jax_check import params
 
@@ -64,7 +79,7 @@ def case_transformer(torch, dev):
 
 
 CASES = {"matmul_f32": case_matmul_f32, "matmul_bf16": case_matmul_bf16, "softmax": case_softmax,
-         "transformer": case_transformer}
+         "reductions": case_reductions, "layer_norm": case_layer_norm, "transformer": case_transformer}
 
 
 def run(path, names):

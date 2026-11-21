@@ -108,7 +108,10 @@ simulated time (a step's time is the largest).
 ## Not provided
 
 JAX's CUDA 13 plugin (its runtime asks the driver for a table not provided; the CUDA 12 plugin,
-`jax[cuda12]`, runs). Managed memory, IPC, CUDA arrays and texture objects created through the driver, kernels
+`jax[cuda12]`, runs). PyTorch's matmuls: NVIDIA's math libraries, as PyTorch 2.9's CUDA 12
+wheels load them, ask the runtime for a table entry the device does not provide
+(`runtime_tables.h` has only ZLUDA's), and stop; PyTorch's own kernels run (the `device-torch`
+row). Managed memory, IPC, CUDA arrays and texture objects created through the driver, kernels
 reading a peer device's memory,
 conditional graph nodes (they need the device runtime's `cudaGraphSetConditional`), batch
 memory-operation nodes, external memory and semaphores, and kernels dereferencing host memory:
