@@ -248,12 +248,17 @@ private def dropCopies (m : L2Mem) (x : LineReq) : L2Mem := Id.run do
 /-- Perform the request's lanes on the request machine, keeping their answers. -/
 private def performLanes (m : L2Mem) (id : Nat) : Except String L2Mem := do
   let y := m.txns[id]!
-  let mut m := m
-  let mut resp := #[]
-  for lane in y.x.lanes do
-    let (m', read) ← m.deliver y.x.key lane
-    m := m'
-    if y.x.req.op.returns then resp := resp.push (lane, laneWords y.x.req read)
+  if y.x.lanes.isEmpty then return { m with txns := m.txns.modify id ({ · with resp := #[] }) }
+  let some (slot, rid) := m.keys.get? y.x.key | throw s!"request {repr y.x.key} is not in flight"
+  -- Its lanes to the request machine together (`Flat.deliverLanes`: one after another).
+  let (m, f) := m.takeFlat
+  let (flat, reads) ← f.deliverLanes slot rid y.x.lanes.toList
+  let m := { m with flat }
+  -- Forget the part once its last lane has performed.
+  let m := if (flat.find slot rid).isNone then { m with keys := m.keys.erase y.x.key } else m
+  let resp := if y.x.req.op.returns then
+      (y.x.lanes.zip reads.toArray).map fun (lane, read) => (lane, laneWords y.x.req read)
+    else #[]
   return { m with txns := m.txns.modify id ({ · with resp }) }
 
 /-- A far read at its copy slice: served there if every sector is present, held there if the

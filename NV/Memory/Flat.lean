@@ -201,6 +201,79 @@ def deliver (m : Flat) (slot id lane : Nat) : Except String (Flat × List UInt8)
   | none => .error s!"request {id} is not in flight"
   | some (i, q) => deliverAt m slot i q lane
 
+/-! ## A request's lanes delivered together
+
+The timing core delivers the lanes of a request part one after another (`deliverSeq`).
+`deliverLanes` does the same at once: the request found once, the earlier requests that may hold
+one of its lanes back picked once (`mayBlock`), and its issuer's queue rebuilt once at the end.
+`NV.Memory.SoundLanes.deliverLanes_eq` proves it equal to `deliverSeq`, so a run that uses it is
+still a sequence of `deliver` steps (`Mem.sound`). -/
+
+/-- Lanes `ls` of request `id` of issuer slot `slot` delivered one after another (`deliver`): the
+bytes each lane's reads returned, in order. -/
+def deliverSeq (m : Flat) (slot id : Nat) : List Nat → Except String (Flat × List (List UInt8))
+  | [] => .ok (m, [])
+  | l :: ls => match m.deliver slot id l with
+    | .error e => .error e
+    | .ok (m', b) => match deliverSeq m' slot id ls with
+      | .error e => .error e
+      | .ok (m'', bs) => .ok (m'', b :: bs)
+
+/-- Request `p` once lanes `ls` of request `id` have performed, one after another (`retireOne`). -/
+def retireLanes (id : Nat) (ls : List Nat) (p : InFlight) : Option InFlight :=
+  if p.id == id then ls.foldlM (fun p l => retireOne id l p) p else some p
+
+/-- Whether `p`, issued before `q` by the same issuer, may hold back one of lanes `ls` of `q`
+(`blocker`). -/
+def mayBlock (ls : List Nat) (p q : InFlight) : Bool :=
+  q.req.releases || p.req.acquires || ls.any fun l => p.lanes.contains l && overlap p q l
+
+/-- Lane `lane` of `q` performed on `m`'s stores as `deliverAt` performs it, none of `cand` (the
+requests before `q` that may hold one of its lanes back) holding it back; `none` where it would
+not perform. -/
+def performLane (m : Flat) (cand : List InFlight) (q : InFlight) (lane : Nat) :
+    Option (Flat × List UInt8) :=
+  if !q.lanes.contains lane then none else
+  match cand.findSome? (blocker · q lane), loc q.cta q.req lane with
+  | none, some l =>
+    match m.store? l with
+    | none => none
+    | some s =>
+      -- Detached from the machine, so the store is updated in place.
+      let m := m.setStore l default
+      match perform q.req lane l s with
+      | .ok (s', bytes) => some (m.setStore l s', bytes)
+      | .error _ => none
+  | _, _ => none
+
+/-- `m` once lanes `done` of request `id` of slot `slot`, whose queue was `qs`, have performed. -/
+def withRetired (m : Flat) (slot id : Nat) (qs : List InFlight) (done : List Nat) : Flat :=
+  if done.isEmpty then m else { m with queues := m.queues.set! slot (qs.filterMap (retireLanes id done)) }
+
+/-- `deliverLanes`' loop: `m` the machine with the stores the lanes `done` wrote and slot `slot`'s
+queue still `qs`, `q` the request without those lanes, `acc` their bytes, latest first. -/
+def deliverLanesGo (slot id : Nat) (qs cand : List InFlight) (m : Flat) (q : InFlight) (done : List Nat)
+    (acc : List (List UInt8)) : List Nat → Except String (Flat × List (List UInt8))
+  | [] => .ok (m.withRetired slot id qs done, acc.reverse)
+  | l :: ls =>
+    match m.performLane cand q l with
+    | none => (deliverSeq (m.withRetired slot id qs done) slot id (l :: ls)).map
+        fun (m, bs) => (m, acc.reverse ++ bs)
+    | some (m', b) =>
+      match retireOne id l q with
+      | some q' => deliverLanesGo slot id qs cand m' q' (done ++ [l]) (b :: acc) ls
+      | none => (deliverSeq (m'.withRetired slot id qs (done ++ [l])) slot id ls).map
+          fun (m, bs) => (m, acc.reverse ++ b :: bs)
+
+/-- `deliverSeq` at once (`deliverLanes_eq`); a lane that would not perform, or a request left with
+no lanes, hands the rest to `deliverSeq`. -/
+def deliverLanes (m : Flat) (slot id : Nat) (lanes : List Nat) : Except String (Flat × List (List UInt8)) :=
+  match m.find slot id with
+  | none => deliverSeq m slot id lanes
+  | some (i, q) =>
+    let qs := m.queue slot
+    deliverLanesGo slot id qs ((qs.take i).filter (mayBlock lanes · q)) m q [] [] lanes
+
 /-- A new issuer slot, with nothing in flight. -/
 def addSlot (m : Flat) : Flat × Nat := ({ m with queues := m.queues.push [] }, m.queues.size)
 

@@ -41,6 +41,7 @@ import NV.Memory.Events
 import NV.Memory.Flat
 import NV.Memory.Performed
 import NV.Memory.Sound
+import NV.Memory.SoundLanes
 import NV.SASS.Syntax
 import NV.SASS.Opcodes
 import NV.SASS.Text
