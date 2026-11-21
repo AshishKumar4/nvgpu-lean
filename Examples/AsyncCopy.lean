@@ -804,14 +804,14 @@ theorem WY_val (h : (sr 0 0).length = 4) : (WY L sr).val = sr 0 0 := by
   match hb : sr 0 0, h with
   | [b₀, b₁, b₂, b₃], _ =>
     simp [WY, aft, oneEv, Req.written, storeReq, Move.store, Move.data, theMove, dstReq, srcReq,
-      asyncReq, Req.storeBytes, Req.operands, Req.resp, Req.laneResp, words, MemOp.returns, hb, toWords,
+      asyncReq, Req.storeSlice_eq, Req.storeBytes, Req.operands, Req.resp, Req.laneResp, words, MemOp.returns, hb, toWords,
       toBytes]
     rw [wordBytes_leNat rfl]; rfl
 
 theorem WO_val (h : (ry 0).length = 4) : (WO L ws ry ro).val = ry 0 := by
   match hb : ry 0, h with
   | [b₀, b₁, b₂, b₃], _ =>
-    simp [WO, oneEv, Req.written, stO, Req.storeBytes, Req.operands, Req.resp, Req.laneResp, ldY,
+    simp [WO, oneEv, Req.written, stO, Req.storeSlice_eq, Req.storeBytes, Req.operands, Req.resp, Req.laneResp, ldY,
       words, MemOp.returns, hb, toWords, toBytes]
     rw [wordBytes_leNat rfl]; rfl
 

@@ -95,6 +95,43 @@ theorem leNat_wordBytes (w : UInt32) : leNat (wordBytes w) = w.toNat := by
   simp only [leNat, wordBytes, List.foldr, Nat.toUInt8, UInt8.toNat_ofNat']
   omega
 
+theorem length_toBytes (ws : List UInt32) : (toBytes ws).length = 4 * ws.length := by
+  induction ws with
+  | nil => rfl
+  | cons w ws ih =>
+    simp only [toBytes, List.flatMap_cons, List.length_append, List.length_cons] at ih ⊢
+    rw [ih]; simp [wordBytes]; omega
+
+/-- Byte `k` of `toBytes ws`: byte `k % 4` of word `k / 4`. -/
+theorem getElem_toBytes (ws : List UInt32) (k : Nat) (h : k < (toBytes ws).length) :
+    (toBytes ws)[k] = ((ws[k / 4]'(by rw [length_toBytes] at h; omega)).toNat / 2 ^ (8 * (k % 4))).toUInt8 := by
+  induction ws generalizing k with
+  | nil => simp [toBytes] at h
+  | cons w ws ih =>
+    have hw : (wordBytes w).length = 4 := rfl
+    by_cases hk : k < 4
+    · simp only [toBytes, List.flatMap_cons]
+      rw [List.getElem_append_left (by rw [hw]; exact hk)]
+      have h0 : k / 4 = 0 := by omega
+      have h1 : k % 4 = k := by omega
+      simp only [h0, h1, List.getElem_cons_zero]
+      match k, hk with
+      | 0, _ => simp [wordBytes]
+      | 1, _ => rfl
+      | 2, _ => rfl
+      | 3, _ => rfl
+    · have hl : (toBytes (w :: ws)).length = 4 + (toBytes ws).length := by
+        rw [length_toBytes, length_toBytes, List.length_cons]; omega
+      have h' : k - 4 < (toBytes ws).length := by omega
+      have e := ih (k - 4) h'
+      simp only [toBytes, List.flatMap_cons] at e ⊢
+      rw [List.getElem_append_right (by rw [hw]; omega)]
+      simp only [hw]
+      rw [e]
+      have h2 : k / 4 = (k - 4) / 4 + 1 := by omega
+      have h3 : k % 4 = (k - 4) % 4 := by omega
+      simp only [h2, h3, List.getElem_cons_succ]
+
 theorem toWords_wordBytes (w : UInt32) : toWords (wordBytes w) = [w] := by
   obtain ⟨b₀, b₁, b₂, b₃, hb⟩ : ∃ b₀ b₁ b₂ b₃, wordBytes w = [b₀, b₁, b₂, b₃] := ⟨_, _, _, _, rfl⟩
   have hl := leNat_wordBytes w
@@ -212,10 +249,20 @@ def atomNew (lane : Nat) (old : List UInt8) : Option (List UInt8) :=
     | .error _ => none
   | _ => none
 
+/-- Bytes `off` to `off + size` of `storeBytes lane` (`storeSlice_eq`), each read off its operand
+word: a piece's bytes without the lane's whole byte list (a 16-byte store's four pieces built it
+four times). -/
+def storeSlice (lane off size : Nat) : List UInt8 :=
+  let ws := r.operands lane
+  let len := min r.bytes (4 * ws.length)
+  (List.range (min size (len - off))).map fun j =>
+    let k := off + j
+    (ws[k / 4]!.toNat / 2 ^ (8 * (k % 4))).toUInt8
+
 /-- The value piece `p` of lane `lane` writes, given the bytes the lane's reads returned. -/
 def written (lane : Nat) (p : Piece) (read : List UInt8) : Option (List UInt8) :=
   match r.op with
-  | .st => some ((r.storeBytes lane).extract p.off (p.off + p.size))
+  | .st => some (r.storeSlice lane p.off p.size)
   | _ => r.atomNew lane read
 
 /-- The lane's response words to the issuer: the bytes its reads returned, for `ld` and `atom`. -/
@@ -249,6 +296,17 @@ def unsupported (read : Nat → List UInt8) : Bool :=
   r.op.writes && r.op != .st &&
     (List.range r.addrs.size).any fun l => r.active l && (r.atomNew l (read l)).isNone
 
+theorem storeSlice_eq (lane off size : Nat) :
+    r.storeSlice lane off size = (r.storeBytes lane).extract off (off + size) := by
+  apply List.ext_getElem
+  · simp [storeSlice, storeBytes, length_toBytes]
+  · intro j h₁ h₂
+    simp only [storeSlice, List.getElem_map, List.getElem_range]
+    simp only [storeBytes, List.extract_eq_take_drop, List.getElem_take, List.getElem_drop]
+    rw [getElem_toBytes]
+    congr 3
+    have hb : (off + j) / 4 < (r.operands lane).length := by simp [storeSlice] at h₁; omega
+    exact getElem!_pos (r.operands lane) ((off + j) / 4) hb
 
 end Req
 

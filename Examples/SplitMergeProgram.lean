@@ -571,7 +571,7 @@ def total (K : Nat) (part : Nat → UInt32) : UInt32 := UInt32.ofNat (sumBelow K
 
 theorem st_written {L : Layout} (v : UInt32) (bs : List UInt8) :
     (stReq L v).written 0 ⟨true, 0, 4, false⟩ bs = some (wordBytes v) := by
-  simp [Req.written, Req.storeBytes, Req.operands, stReq, wordReq, toBytes, words, wordBytes]
+  simp [Req.written, Req.storeSlice_eq, Req.storeBytes, Req.operands, stReq, wordReq, toBytes, words, wordBytes]
 
 theorem word_wordBytes (w : UInt32) : word (wordBytes w) = w := by
   rw [word, leNat_wordBytes, UInt32.ofNat_toNat]

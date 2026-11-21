@@ -6,50 +6,48 @@ numbers below come from that row on one CI container (AMD EPYC 9684X; default wo
 
 | kernel | simulated | wall | peak memory | warp instructions per second |
 |---|---|---|---|---|
-| axpy, 65 536 elements (`examples/axpy`) | 26 831 cycles, 744 585 warp instructions | 2.6 s (0.58 s simulating) | 189 MB | 67 000 |
-| TMA + wgmma GEMM 1024³, H100, timed (`gemm_tma_wgmma.json`) | 16 446 cycles, 786 744 warp instructions | 118 s | 697 MB | 6 700 |
-| the same GEMM, functional | — | 20 s | 184 MB | — |
-| tcgen05 GEMM, B200, timed (`tcgen05_gemm.json`) | — | 1.1 s | 102 MB | — |
+| axpy, 65 536 elements (`examples/axpy`) | — | 2.6 s (0.58 s simulating) | 189 MB | 67 000 |
+| TMA + wgmma GEMM 1024³, H100, timed (`gemm_tma_wgmma.json`) | 26 831 cycles, 744 585 warp instructions | 118 s | 697 MB | 6 300 |
+| the same GEMM, functional | 786 744 warp instructions | 20 s | 184 MB | 40 000 |
+| tcgen05 GEMM, B200, timed (`tcgen05_gemm.json`) | 16 387 cycles, 3 513 warp instructions | 1.1 s | 102 MB | 3 200 |
 
 These are far from the target of 10⁶ warp instructions per second. On the timed GEMM, most of
 the time goes to the memory system rather than to executing instructions.
 
 ## Where the time goes
 
-Measured with callgrind on the timed GEMM (H100, one worker), over its first 6 000 of 16 446
-cycles (`--until 6000`) and over cycles 6 000 to 7 000 (the difference of runs to 6 000 and to
-7 000). Percentages are inclusive instructions, so nested frames overlap. On one worker the
-first 6 000 cycles take 7.6 s and the first 7 000 18 s of the run's 249 s, so the time is in the
-later cycles, and from cycle 6 000 on it goes mostly to shared-memory accesses (38 G instructions
-for the first 6 000 cycles, 79 G for the next 1 000).
+The timed GEMM (H100, one worker, 250 s), sampled: its stacks every 0.6 s with gdb, 357
+samples over the run (`ci/rows/speed.sh`'s kernel; inclusive shares, so nested frames overlap):
 
-Cycles 6 000 to 7 000:
+| frame | share |
+|---|---|
+| the SMs' memory pipelines (`MemSys.advanceSm`, `SmMem.advance`) | 32% |
+| of which the shared-memory bank stage (`SmMem.bankStage`) | 22% |
+| of which performing shared accesses on the store (`SmMem.performShared`, `Flat.perform`) | 19% |
+| the L2's quantum (`L2Mem.run`) | 28% |
+| of which replaying the SMs' accesses on the request machine (`L2Mem.replay`, `Flat.deliverAt`) | 16% |
+| of which the L2's own requests (`L2Mem.performLanes`, `Flat.deliverLanes`) | 8% |
+| warpgroup MMAs (`Wgmma.Share.plan`, `Datapath.dot`) | 11% |
+| the async units (`AsyncUnit.progress`, `deliver`, `send`) | 9% |
+| decoding and executing instructions (`decodeGeneral`, `Op.run`) | 5% |
+| allocation and reference counting (self time) | 40% |
 
-- Performing shared-memory accesses on the store (`Flat.perform`): 44%. A lane's store is written
-  byte by byte (`performWrites`, `Store.writeByte`), its bytes built as a list from its operand
-  words (`Req.storeBytes`, `toBytes`).
-- The L2 replaying the SMs' shared-memory accesses on the request machine (`L2Mem.replay`,
-  `Flat.deliver`, one lane at a time): 32%. This is what keeps the whole run a sequence of
-  request-machine steps (`Mem.sound`). Delivering a run of consecutive lanes of one request
-  together (`deliverLanes`) was measured 4% slower over the whole GEMM, so the replay stays per lane.
-- The SMs' memory pipelines (`SmMem.advance`, bank stage): 34%, mostly the same shared performs.
+Every shared-memory access is performed twice: on its SM, and again when the L2 replays the
+SMs' records on the request machine, which keeps the whole run a sequence of request-machine
+steps (`Mem.sound`). Bytes go through `List UInt8` all along, a store's bytes built from its
+operand words, written byte by byte, its reads turned back into words (`laneResp`, `toWords`).
+So the time is spread over the memory system's per-byte work and its allocations; no single
+frame holds a large share. Reaching 10⁶ warp instructions per second needs the shared-memory
+path to work on words or byte arrays instead of lists, with the request machine's proofs carried
+over, which this does not attempt yet.
 
-Cycles 0 to 6 000:
+Changes so far, each measured over the whole timed GEMM in one container (wall time; one worker,
+then the default workers):
 
-- The L2's request machine (`L2Mem.performLanes`, `Flat.deliver`): 36%. Before `Flat.deliverLanes`,
-  each lane of a request part found its request again, scanned every earlier request of its
-  issuer for one that holds it back (`blocker`, `overlap`), and rebuilt the issuer's queue
-  (`retire`). Now a part's lanes go to the request machine together (25%, and 14% fewer
-  instructions over the first 6 000 cycles: 44.4 G to 38.2 G; over the whole GEMM the wall time
-  drops from 252 s to 249 s on one worker and from 122 s to 116 s on the default workers, measured
-  in the same container). `NV.Memory.SoundLanes` proves `deliverLanes` equal to delivering the
-  lanes one after another, so `Mem.sound` still covers the run. What remains is the scan for
-  earlier requests that may hold a lane back (`mayBlock`, 12%), which runs over every earlier
-  request of the issuer in flight.
-- The async units: delivering copies' data (`AsyncUnit.deliver`, 18%) and starting operations
-  (`startAll`, 12%). A TMA copy's box is computed element by element with `Int` addresses
-  (`TensorMap.tile`), and addresses above 2³¹ are big integers.
-- The SMs' memory pipelines (`MemSys.advanceSm`, 17%).
-- Allocation and reference counting: about 20% of self time (`lean_copy_expand_array`,
-  `lean_del_core_other`, `mi_free`). Part of it is arrays and hash maps copied because they are
-  shared when updated, for example `SmMem.countSectors`'s pending-sector maps and `SmMem.modReq`.
+- `Flat.deliverLanes`: a part's lanes go to the request machine together (the request found
+  once, the requests that may hold one back picked once, the queue rebuilt once), proved equal
+  to delivering them one by one (`NV.Memory.SoundLanes.deliverLanes_eq`): 252 s to 249 s, 122 s
+  to 116 s. Replaying the SMs' runs of lanes the same way was slower (235 s to 245 s) and was not
+  kept.
+- `Req.storeSlice`: a store piece's bytes read off its operand words, without building the lane's
+  whole byte list once per piece (`Req.storeSlice_eq`): 255 s to 251 s, 139 s to 137 s.

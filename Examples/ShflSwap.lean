@@ -228,7 +228,7 @@ theorem st_val {t : Nat} {rd ro : Nat → List UInt8} (h : (rd 0).length = 4) (t
     (stE L t ((ldReq L t').resp rd)[0]! ro).val = rd 0 := by
   match hb : rd 0, h with
   | [b₀, b₁, b₂, b₃], _ =>
-    simp [stE, oneEv, Req.written, stReq, Req.storeBytes, Req.operands, Req.resp, Req.laneResp, ldReq,
+    simp [stE, oneEv, Req.written, stReq, Req.storeSlice_eq, Req.storeBytes, Req.operands, Req.resp, Req.laneResp, ldReq,
       words, MemOp.returns, hb, toWords, toBytes]
     rw [wordBytes_leNat rfl]; rfl
 

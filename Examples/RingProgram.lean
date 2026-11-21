@@ -2419,14 +2419,14 @@ theorem wY_val {q : Nat} (h : ((pcs q).sr 0 0).length = 4) : (wYe L pcs q).val =
   match hb : (pcs q).sr 0 0, h with
   | [b₀, b₁, b₂, b₃], _ =>
     simp [wYe, aft, oneEv, Req.written, storeReq, Move.store, Move.data, theMove, dstReq, srcReq,
-      asyncReq, Req.storeBytes, Req.operands, Req.resp, Req.laneResp, words, MemOp.returns, hb, toWords,
+      asyncReq, Req.storeSlice_eq, Req.storeBytes, Req.operands, Req.resp, Req.laneResp, words, MemOp.returns, hb, toWords,
       toBytes]
     rw [wordBytes_leNat rfl]; rfl
 
 theorem st_val {q : Nat} (h : ((ccs q).ry 0).length = 4) : (stE L ccs q).val = (ccs q).ry 0 := by
   match hb : (ccs q).ry 0, h with
   | [b₀, b₁, b₂, b₃], _ =>
-    simp [stE, oneEv, Req.written, Layout.stOut, Req.storeBytes, Req.operands, Req.resp, Req.laneResp,
+    simp [stE, oneEv, Req.written, Layout.stOut, Req.storeSlice_eq, Req.storeBytes, Req.operands, Req.resp, Req.laneResp,
       Layout.ldSlot, words, MemOp.returns, hb, toWords, toBytes]
     rw [wordBytes_leNat rfl]; rfl
 
