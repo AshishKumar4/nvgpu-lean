@@ -38,9 +38,10 @@ counters, register banks, code caches, L1/shared memory, L2, DRAM, TMA, wgmma, t
 its SMs simulated in parallel on worker threads; a hazard check that flags any instruction issuing
 over a pending writeback, and static checks of warpgroup MMA code (`sass-ctrl`); a data-race check
 over a CTA's threads and the async proxy's copies (`--races`) and an unwritten-output check
-(`--unwritten`); a functional mode, also on worker threads; and the accelerated mode
+(`--unwritten`); a functional mode, also on worker threads; the accelerated mode
 (`tools/lift`: a kernel's SASS lifted to CUDA C and run on a GPU, bit for bit equal to the
-simulator).
+simulator); and the emulated CUDA device (`tools/cudadev`: a `libcuda.so.1`, NVML and NCCL that
+run CUDA programs, and JAX on them, on the simulator).
 
 ## Running a kernel
 
@@ -78,6 +79,7 @@ the cycles (launch, active, drain), instruction and memory counters, and where w
 | `NV/Arch` | parts, every number a fact |
 | `NV/Formal` | outcomes, DRF-SC, simulator soundness |
 | `Examples/` | proofs about kernels |
+| `Device/`, `tools/cudadev` | the emulated CUDA device: its Lean C ABI and the driver over it |
 | `Tests/`, `tests/` | tests and their kernels |
 | `docs/` | per-layer documentation and the generated fact tables |
 

@@ -10,6 +10,11 @@ lean_lib NV
 @[default_target]
 lean_lib Examples
 
+/-- The emulated device's C ABI (`tools/cudadev`): a shared library the driver shim loads. -/
+lean_lib Device where
+  roots := #[`Device.Api, `Device.Cache]
+  defaultFacets := #[LeanLib.sharedFacet]
+
 lean_exe audit where
   root := `Tools.Audit
   supportInterpreter := true
