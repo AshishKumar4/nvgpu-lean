@@ -83,7 +83,9 @@ def transformer_loss(jnp, jax, p, tokens):
     def norm(x, g):
         return x * jax.lax.rsqrt(jnp.mean(x * x, axis=-1, keepdims=True) + 1e-6) * g
 
-    x = p["emb"][tokens[:, :-1]]
+    # The embedding as a one-hot matmul: its gradient is then a matmul, not a scatter-add whose
+    # atomic accumulation order differs from run to run on a GPU.
+    x = jax.nn.one_hot(tokens[:, :-1], V, dtype=p["emb"].dtype) @ p["emb"]
     h = norm(x, p["g1"])
     q, k, v = jnp.split(h @ p["qkv"], 3, axis=-1)
     split = lambda t: t.reshape(B, T, H, D // H).transpose(0, 2, 1, 3)
