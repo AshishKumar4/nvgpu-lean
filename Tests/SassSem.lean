@@ -329,6 +329,20 @@ def shuffleAfterStore : Kernel :=
     ins 0xa0 "STG" #["E"] #[gaddr 4, r 3] (ctrl 1),
     ins 0xb0 "EXIT" #[] #[] (ctrl 5)] }
 
+/-- `out[t] = 100 + t` on sm_100: an LEA writes R3, and an IMAD.MOV one cycle later overwrites it
+with `100 + t`; the B200's IMAD lands one cycle sooner than its LEA, so both land in one cycle, in
+issue order (a pattern compiled sm_100 code has). -/
+def sameCycleWrites : Kernel :=
+  { name := "samecycle", sm := 100, regs := 8, params := #[(0, 8)], paramBytes := 8, code := #[
+    ins 0x00 "S2R" #[] #[r 0, .name "SR_TID.X"] (ctrl 1 (some 0)),
+    ins 0x10 "LDC" #["64"] #[r 4, .cbank 0 none 0x210] (ctrl 1 (some 1)),
+    ins 0x20 "IADD3" #[] #[r 6, r 0, .imm 100, .reg Reg.RZ] (ctrl 4 none 0b01),
+    ins 0x30 "LEA" #[] #[r 3, r 0, r 0, .imm 1] (ctrl 1),
+    ins 0x40 "IMAD" #["MOV"] #[r 3, .reg Reg.RZ, .reg Reg.RZ, r 6] (ctrl 4),
+    ins 0x50 "IMAD" #["WIDE", "U32"] #[r 4, r 0, .imm 4, r 4] (ctrl 4 none 0b10),
+    ins 0x60 "STG" #["E"] #[gaddr 4, r 3] (ctrl 1),
+    ins 0x70 "EXIT" #[] #[] (ctrl 5)] }
+
 def checkTiming : IO (List String) := do
   let n := 32
   let mut out := []
@@ -353,6 +367,11 @@ def checkTiming : IO (List String) := do
   | .ok (bs, c) =>
     out := out ++ compare "shuffle after a store" bs[0]! ((List.range n).map fun t => (t, 100 + t))
     if c.hazards != 0 then out := out ++ [s!"shuffle after a store: {c.hazards} hazards"]
+  match ← runWith sameCycleWrites 1 n [Array.replicate n 0] with
+  | .error e => out := out ++ [s!"writes landing in one cycle: {e}"]
+  | .ok (bs, c) =>
+    out := out ++ compare "writes landing in one cycle" bs[0]! ((List.range n).map fun t => (t, 100 + t))
+    if c.hazards != 0 then out := out ++ [s!"writes landing in one cycle: {c.hazards} hazards"]
   match ← run shuffleBehindLoad 1 n [Array.replicate n 0] with
   | .error e => out := out ++ [s!"shuffle behind a shared load: {e}"]
   | .ok bs => out := out ++ compare "shuffle behind a shared load" bs[0]! ((List.range n).map fun t => (t, 100 + t))

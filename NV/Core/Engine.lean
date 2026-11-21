@@ -1235,8 +1235,10 @@ private def pass (kit : Kit) (focus : Nat) (stop : Nat) (st : St) :
         | .reg .. => if behindShared.isEmpty then shflLands else pendingAt
         | _ => pendingAt
       -- Pending entries are per lane: an instruction conflicts only on lanes it runs.
+      -- Two writes landing in one cycle land in issue order (an LEA's result overwritten one cycle
+      -- later by an IMAD, whose latency is one less, as compiled sm_100 code does).
       let waw (l : NV.SASS.Loc) : Bool :=
-        s.pw.hasFor on l && lands ≤ s.pw.landing l pendingAt && !chained l
+        s.pw.hasFor on l && lands < s.pw.landing l pendingAt && !chained l
       -- A late-reading instruction reads after its pending writebacks land by then; a request
       -- reading its vector registers when its read counter releases reads them after the
       -- warp's earlier loads have written them (`readsBehindLoad`).
