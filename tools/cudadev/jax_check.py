@@ -155,7 +155,7 @@ def compare(pa, pb):
             print(f"{k}: only in {'first' if k in a.files else 'second'}")
             bad += 1
             continue
-        x, y = a[k], b[k]
+        x, y = np.atleast_1d(a[k]), np.atleast_1d(b[k])
         if x.shape != y.shape or x.dtype != y.dtype:
             print(f"{k}: {x.shape} {x.dtype} vs {y.shape} {y.dtype}")
             bad += 1
