@@ -195,6 +195,9 @@ structure SmMem where
   reserved : Array Nat
   armed : Bool := false
   rr : Nat := 0
+  /-- When the shared stores dispatched so far leave the data stage: a store waits in its queue
+  behind them, not behind the loads' and the tensor core's backlog there. -/
+  storesFree : Nat := 0
   warps : Std.HashMap Nat WarpMem := {}
   ports : Array Port
   l1 : Tags
@@ -644,7 +647,13 @@ private def dispatch (m : SmMem) (t : Nat) (dir : Directory) : Except String SmM
     let q := (m.rr + k) % c.smsps
     if let some id := m.mio[q]![0]? then
       if !m.gated id then
-        let ready := max t m.ports[(SmRes.addr q).index c]!.free
+        -- A shared-memory store leaves its queue once the stores before it would have left the
+        -- data stage as it arrives (`front` later): their backlog holds the queue, and through it
+        -- the warps' issue (four warps streaming STS.128 run at the stage's rate). A store beside
+        -- a load stream or the tensor core's operand reads is not held, nor are loads.
+        let r := m.reqs[id]!.req
+        let data := if r.space == .shared && r.op == .st then m.storesFree - min c.front m.storesFree else t
+        let ready := max (max t data) m.ports[(SmRes.addr q).index c]!.free
         if pick.isNone || ready < best then
           pick := some q; best := ready
   -- Every head waits on its warp: a delivery re-arms the LSU.
@@ -834,6 +843,7 @@ private def bankStage (m : SmMem) (t id cta : Nat) (lanes : Array Nat) (key : Ke
     let (m, _) ← m.performShared t cta id key r lanes
     return (m.passed id).complete id (last + c.backShared)
   let (_, last, m) := m.take .data t cost
+  let m := if r.op == .st then { m with storesFree := max m.storesFree last } else m
   -- `try_wait` (SASS `SYNCS.PHASECHK.TRANS64.TRYWAIT`, marked by `SASS.phaseChk`): while its
   -- barrier is in the phase it waits past, held until a write to the barrier or its time limit
   -- (GH200, B200: a waiter resumes 93 cycles after a late arrival, an unfinished wait returns
