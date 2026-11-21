@@ -83,6 +83,10 @@ libraries and frameworks built on it load them where they would load NVIDIA's, a
   (`jax[cuda12]`), all 11 outputs of the emulated H100 equal a GH200's bit for bit, and all 11 of
   the emulated A100 an A100-SXM4-40GB's (2026-11-21; the device-jax row's outputs against
   `jax_check.py run` on each GPU).
+* `torch_check.py` runs the same kind of programs through PyTorch. Its softmax and reductions
+  cases (PyTorch 2.9.1, CUDA 12.9 wheels: sums, max, argmax, variance, logsumexp, cumsum, GELU,
+  exp and tanh) on the emulated H100 and A100 equal a GH200's bit for bit, 11 of 11 outputs each
+  (the device-torch row's outputs against `torch_check.py run` on the GPU).
 
 ## A mesh
 
