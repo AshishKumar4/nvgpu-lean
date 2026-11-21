@@ -1232,10 +1232,15 @@ __device__ inline void bulkCopy(const Ctx& x, uint8_t* dst, const uint8_t* src, 
 // A shared address names the CTA by its cluster rank in bits 24 and up (`Exec.sharedAt`): the
 // executing CTA's own rank for its own memory.
 #define SH(a) (lift::sharedAt(ctx, (uint32_t)(a)))
-// A CTA's shared window is touched by the CTA alone, on one SM: its accesses are relaxed at CTA
-// scope, which the SM's L1 serves (volatile accesses would go to the L2 every time).
-#define LD_SH(T, PT, p) ([&]() { T _v; asm volatile("ld.relaxed.cta.global." PT " %0, [%1];" : "=r"(_v) : "l"(p) : "memory"); return _v; }())
-#define ST_SH(PT, p, v) asm volatile("st.relaxed.cta.global." PT " [%0], %1;" :: "l"(p), "r"(v) : "memory")
+// A CTA's own shared window is touched by the CTA alone, on one SM: its accesses are relaxed at CTA
+// scope, which the SM's L1 serves (volatile accesses would go to the L2 every time). A cluster
+// peer's window (distributed shared memory) is written from another SM: accesses to it are at GPU
+// scope, so a load does not read a line the L1 kept from before the peer wrote it.
+#define LIFT_OWN(p) ((uint64_t)((const uint8_t*)(p) - ctx.shared) < ctx.sharedBytes)
+#define LD_SH(T, PT, p) ([&]() { T _v; if (LIFT_OWN(p)) asm volatile("ld.relaxed.cta.global." PT " %0, [%1];" : "=r"(_v) : "l"(p) : "memory"); \
+  else asm volatile("ld.relaxed.gpu.global." PT " %0, [%1];" : "=r"(_v) : "l"(p) : "memory"); return _v; }())
+#define ST_SH(PT, p, v) do { if (LIFT_OWN(p)) asm volatile("st.relaxed.cta.global." PT " [%0], %1;" :: "l"(p), "r"(v) : "memory"); \
+  else asm volatile("st.relaxed.gpu.global." PT " [%0], %1;" :: "l"(p), "r"(v) : "memory"); } while (0)
 // Local memory: the thread's own window, from address 0 (the simulator's per-thread store).
 #define LOC(a) (lmem + (a))
 // `Exec.genericTarget`: a generic address in the shared window (SWINHI over a shared address), the
