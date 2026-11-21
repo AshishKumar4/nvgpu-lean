@@ -34,10 +34,12 @@ def setup():
             flags += f" --{timeout}=86400"
     os.environ["XLA_FLAGS"] = flags.strip()
     import jax
-    from jax._src import hardware_utils
 
     # The driver's state file stands for the device nodes JAX looks for (jax_check.py says why).
-    hardware_utils._NVIDIA_GPU_DEVICES.append(f"/dev/shm/nvgpu-lean-{os.getuid()}")
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from jax_check import emulated_device_visible
+
+    emulated_device_visible()
     # The emulated NCCL (nccl.c), loaded before the backend starts: XLA's dlopen("libnccl.so.2")
     # then finds it loaded. Local, as XLA loads its libraries: the Lean runtime under it stays out
     # of the global namespace.

@@ -104,7 +104,8 @@ simulated time (a step's time is the largest).
 
 ## Not provided
 
-Managed memory, IPC, CUDA arrays and texture objects created through the driver, kernels
+JAX's CUDA 13 plugin (its runtime asks the driver for a table not provided; the CUDA 12 plugin,
+`jax[cuda12]`, runs). Managed memory, IPC, CUDA arrays and texture objects created through the driver, kernels
 reading a peer device's memory,
 conditional graph nodes (they need the device runtime's `cudaGraphSetConditional`), batch
 memory-operation nodes, external memory and semaphores, and kernels dereferencing host memory:

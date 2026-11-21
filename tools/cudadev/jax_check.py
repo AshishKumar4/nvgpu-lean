@@ -32,11 +32,17 @@ import numpy as np  # noqa: E402
 def emulated_device_visible():
     """JAX initializes its CUDA backend only where an NVIDIA device node exists (`/dev/nvidia0`,
     `/dev/nvidiactl`: jax._src.hardware_utils). The emulated device has none; its driver's state
-    file (`/dev/shm/nvgpu-lean-$UID`, tools/cudadev/state.h), which the driver writes when JAX's
-    CUDA plugin first initializes it, stands for one. Nothing changes on a machine with a GPU."""
+    file (`/dev/shm/nvgpu-lean-$UID`, tools/cudadev/state.h), which the driver writes when it is
+    initialized (here, before JAX's backend starts), stands for one. Nothing changes on a machine
+    with a GPU."""
+    import ctypes
+
     from jax._src import hardware_utils
 
-    hardware_utils._NVIDIA_GPU_DEVICES.append(f"/dev/shm/nvgpu-lean-{os.getuid()}")
+    state = f"/dev/shm/nvgpu-lean-{os.getuid()}"
+    if not os.path.exists(state) and not hardware_utils.has_visible_nvidia_gpu():
+        ctypes.CDLL("libcuda.so.1").cuInit(0)
+    hardware_utils._NVIDIA_GPU_DEVICES.append(state)
 
 
 def inputs(seed, *shapes, dtype=np.float32, scale=1.0):

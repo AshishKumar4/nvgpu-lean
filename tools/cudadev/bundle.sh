@@ -33,7 +33,7 @@ cp -L "$cuda/bin/ptxas" "$cuda/bin/cuobjdump" "$cuda/bin/nvdisasm" "$b/cuda/bin/
 old=$(sh "$root/tools/cudadev/cuobjdump.sh" 12.8 "$stage/fetch"); new=$(sh "$root/tools/cudadev/cuobjdump.sh" 13.5 "$stage/fetch")
 mkdir -p "$b/cuobjdump-12.8" "$b/cuobjdump-13.5"
 cp "$old" "$b/cuobjdump-12.8/"; cp "$new" "$b/cuobjdump-13.5/"
-cp "$root/tools/cudadev/jax_mesh.py" "$b/python/"
+cp "$root/tools/cudadev/jax_mesh.py" "$root/tools/cudadev/jax_check.py" "$b/python/"
 cat > "$b/env.sh" <<'ENV'
 # The emulated device from this directory: `. nvgpu-lean/env.sh` (bash, sh, zsh).
 here=$(cd "$(dirname "${BASH_SOURCE:-${ZSH_ARGZERO:-$0}}")" 2>/dev/null && pwd)
