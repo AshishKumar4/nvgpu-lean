@@ -994,6 +994,14 @@ static CUresult kernelOp(Op **out, CUfunction f, const unsigned grid[3], const u
       note("%s: grid not a whole number of clusters", f->name);
       return CUDA_ERROR_INVALID_CLUSTER_SIZE;
     }
+  // A parameter the kernel's parameter block does not hold is a layout the device misread: refused,
+  // not launched with the parameter left as zeros.
+  for (uint32_t i = 0; args && i < f->nparams; i++)
+    if (f->poff[i] + f->psize[i] > f->paramBytes) {
+      note("%s: parameter %u (%u bytes at offset %u) outside its %u-byte parameter block", f->name, i,
+           f->psize[i], f->poff[i], f->paramBytes);
+      return CUDA_ERROR_INVALID_VALUE;
+    }
   Op *o = newOp(OP_KERNEL);
   o->f = f;
   memcpy(o->grid, grid, sizeof o->grid);
@@ -1003,8 +1011,7 @@ static CUresult kernelOp(Op **out, CUfunction f, const unsigned grid[3], const u
   o->paramBytes = f->paramBytes;
   o->params = calloc(1, f->paramBytes ? f->paramBytes : 1);
   if (args) {
-    for (uint32_t i = 0; i < f->nparams; i++)
-      if (f->poff[i] + f->psize[i] <= f->paramBytes) memcpy(o->params + f->poff[i], args[i], f->psize[i]);
+    for (uint32_t i = 0; i < f->nparams; i++) memcpy(o->params + f->poff[i], args[i], f->psize[i]);
   } else if (extra) {
     void *buf = NULL;
     size_t sz = 0;
