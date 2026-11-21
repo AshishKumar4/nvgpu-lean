@@ -119,8 +119,10 @@ int main(int argc, char** argv) {
     return 1;
   }
   // The work pool's helpers: the CTAs the GPU holds beside the launch's, which then must all be
-  // resident (a cooperative launch); a grid that fills the GPU runs without.
-  uint64_t helpers = resident > ctas ? resident - ctas : 0;
+  // resident (a cooperative launch). Fewer helpers than the launch's CTAs serve its issuers one
+  // after another and hold them up (the TMA + wgmma GEMM's 128 CTAs with 4 helpers on a GH200: 300
+  // ms against 30 without), so a grid that leaves fewer idle runs without.
+  uint64_t helpers = resident >= 2 * ctas ? resident - ctas : 0;
   if (helpersMax >= 0) helpers = std::min(helpers, (uint64_t)helpersMax);
   if (ctas + helpers > 0x7fffffffull) { fprintf(stderr, "a grid of %llu CTAs\n", (unsigned long long)(ctas + helpers)); return 1; }
   const uint64_t slots = helpers ? ctas * LIFT_WARPS : 0;
