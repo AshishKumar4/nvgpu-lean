@@ -100,7 +100,9 @@ def frontEnd : FrontEndParams where
     ""
   codePrefetchLines := inferred 17 "meas-h200" ""
     ""
-  takenBranchCycles := inferred 0 "meas-h200" ""
+  takenBranchCycles := inferred 4 "meas-gh200" ""
+    ""
+  forwardBranchCycles := inferred 17 "meas-gh200" ""
     ""
   stallZeroInterlocks := inferred false "huerta2025" "§4: the stall counter is the only wait a
     fixed-latency dependence has" "" (some "Ampere")

@@ -79,6 +79,7 @@ def frontEnd : FrontEndParams :=
     codeCaches := onH200 Hopper.frontEnd.codeCaches
     codePrefetchLines := onH200 Hopper.frontEnd.codePrefetchLines
     takenBranchCycles := onH200 Hopper.frontEnd.takenBranchCycles
+    forwardBranchCycles := onH200 Hopper.frontEnd.forwardBranchCycles
     constCacheBytes := doc 8192 "cuda-guide"
       "§5.1.3 Table 34: cache working set per SM for constant memory, 8 KB (compute capability 8.0)" }
 

@@ -196,8 +196,12 @@ structure FrontEndParams where
   /-- Sequential code lines requested ahead of a warp entering a new line, from L2 (each a line
   request through the memory system, timed like a load). -/
   codePrefetchLines : Fact Nat
-  /-- Cycles a warp loses to the fetch redirect after a taken branch, call or return. -/
+  /-- Cycles a warp loses to the fetch redirect after a taken branch, call or return back to code
+  it has run (a loop's back edge). -/
   takenBranchCycles : Fact Nat
+  /-- A taken forward branch's redirect: a cycle an instruction it skips, the fetch having gone on
+  past the branch, up to this many. -/
+  forwardBranchCycles : Fact Nat
   /-- Whether an instruction encoded with a stall count of 0 interlocks: the next instruction
   waits for the fixed-latency results it reads. -/
   stallZeroInterlocks : Fact Bool

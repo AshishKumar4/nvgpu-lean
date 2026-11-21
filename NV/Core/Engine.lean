@@ -1492,15 +1492,19 @@ private def pass (kit : Kit) (focus : Nat) (stop : Nat) (st : St) :
         sb := sb.modify b fun es => (es.filter (· > t)).push release
       -- Yield: the warp does not issue in the next cycle, and the scheduler's greedy choice
       -- moves on (Huerta et al. 2025 §4; measured on Ampere, inferred for Hopper). A taken
-      -- control transfer redirects the warp's fetch (`takenBranchCycles`).
-      let taken := match s.w.current with
-        | some (next, _) => next != pc + 1 && transfers.contains ins.opcode
-        | none => false
+      -- control transfer redirects the warp's fetch: back to code it has run (`takenBranchCycles`),
+      -- or forward a cycle an instruction it skips, to `forwardBranchCycles`.
+      let redirect : Nat := match s.w.current with
+        | some (next, _) =>
+          if next == pc + 1 || !transfers.contains ins.opcode then 0
+          else if next > pc then min (next - pc - 1) p.frontEnd.forwardBranchCycles.value
+          else p.frontEnd.takenBranchCycles.value
+        | none => 0
       -- Functionally a warp waits for every other warp's turn (none is ever stalled, so the
       -- greedy choice would keep a spinning warp).
       let hold := if l.functional then sm.slots.size else
         (if ins.ctrl.yield then max ins.ctrl.stall 2 else max ins.ctrl.stall 1) +
-        (if taken then p.frontEnd.takenBranchCycles.value else 0)
+        redirect
       -- While the sub-partition's tensor core runs a warpgroup MMA, its pipes lose a share of
       -- their time: the instruction's occupancy stretches (`TensorParams.wgmmaPipeSharePermille`).
       let share := p.tensor.wgmmaPipeSharePermille.value
