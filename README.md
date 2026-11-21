@@ -56,6 +56,21 @@ A launch spec (JSON) names the kernel source (`.cu`, `.ptx`, or a compiled `.cub
 buffers and their contents, the parameters, and the expected outputs. `sim` prints, per launch,
 the cycles (launch, active, drain), instruction and memory counters, and where warps stalled.
 
+On a machine with an NVIDIA GPU, the accelerated mode runs the same launches there:
+
+```sh
+lake exe sim examples/specs/tcgen05_gemm.json --gpu b200 --functional --export out/b200/tcgen05_gemm
+sh tools/lift/check.sh out          # lift, compile and run each exported launch, compare its memory
+```
+
+`check.sh` lifts each launch's SASS to CUDA C (`tools/lift/lift.py`), compiles it for the local
+GPU, runs it, and compares global memory with the simulator's result byte for byte. A
+warpgroup or tensor-memory MMA, or a TMA or bulk copy, is split into independent tasks
+(16-row output tiles, 4 KB of rows). The issuing warp runs them, along with helper CTAs on the
+SMs the launch leaves idle. So the B200's tcgen05 GEMM runs on an A100 in 0.15 ms (67 ms in one
+issuing thread), bit for bit equal to the simulator. All 15 example launches, exported for the
+H100, A100 and B200, are bit-exact on an A100-SXM4-40GB.
+
 ## Proving things
 
 `Examples/` holds what the library can prove today:
