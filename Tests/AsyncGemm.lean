@@ -143,4 +143,18 @@ def main : IO UInt32 := do
       if lost > res.counters.instExecuted then
         IO.eprintln s!"beside: {lost} dispatch-stall cycles over {res.counters.instExecuted} issues"
       pure (lost ≤ res.counters.instExecuted)
-  return if ok1 && ok2 && ok3 then 0 else 1
+  -- An empty commit group (`gdesc[URZ]`: zero descriptors) runs and the warpgroup goes on.
+  let some ke := ks2.find? (·.name == "empty_group") | throw (IO.userError "empty_group not found")
+  let mut pe := ByteArray.mk (Array.replicate ke.paramBytes 0)
+  for ((off, sz), v) in ke.params.toList.zip [0x7f0000000000] do
+    for (j, byte) in (List.range sz).zip (le v sz) do pe := pe.set! (off + j) byte
+  let empty : Launch := { kernel := ke, grid := (1, 1, 1), block := (128, 1, 1), params := pe,
+                          global := Store.empty 0x7f0000000000 512 }
+  let ok4 ← match run NV.Arch.h200 empty with
+    | .error e => do IO.eprintln s!"empty_group: {e}"; pure false
+    | .ok res =>
+      let out := res.global.read 0x7f0000000000 512
+      let got := (List.range 128).map fun i => out[i]!.toNat
+      if got == List.range 128 then pure true
+      else do IO.eprintln s!"empty_group: wrote {got.take 8}…"; pure false
+  return if ok1 && ok2 && ok3 && ok4 then 0 else 1

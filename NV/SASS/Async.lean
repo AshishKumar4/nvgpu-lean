@@ -85,7 +85,8 @@ def sharedLanes (env : Env) (as : List (Option UInt64)) : Space × Array (Option
   if at_.all (·.all (·.1 == .shared)) then (.shared, (at_.map (·.map (·.2))).toArray)
   else (.sharedCluster, as.toArray)
 
-def ur64 (w : View) (i : Nat) : UInt64 := toU64 (w.getUR i) (w.getUR (i + 1))
+/-- The 64-bit uniform register pair at `URi`; `URZ`'s is zero. -/
+def ur64 (w : View) (i : Nat) : UInt64 := if i == 255 then 0 else toU64 (w.getUR i) (w.getUR (i + 1))
 
 /-- The uniform register and offset of a `[URa+off]` operand. -/
 def urMem : Operand → Option (Nat × Int)
@@ -445,7 +446,10 @@ def gmma (env : Env) (w : View) (i : Instr) : Except String (Op × (Resp → Lis
       .regs ((Array.range 32).map fun l => (Array.range 4).map fun j => w.getR (r + j) l)
     else .smem (Wgmma.Desc.decode (ur64 w u)) (!dmods.contains "tnspA")
   let share : Wgmma.Share :=
-    { n, ty := ta, tyB := tb, acc, warp := env.ctx.warp % 4, a, b := Wgmma.Desc.decode (ur64 w (u + 2)),
+    -- `gdesc[URZ]` (the empty `HGMMA.64x8x16.F16 RZ, gdesc[URZ], RZ, !UPT` that fills an empty
+    -- commit group) names zero descriptors, A's and B's alike.
+    { n, ty := ta, tyB := tb, acc, warp := env.ctx.warp % 4, a,
+      b := Wgmma.Desc.decode (if u == 255 then 0 else ur64 w (u + 2)),
       -- A from registers is negated by the operand's sign (`HGMMA … -R32, gdesc[UR8]`, PTX's
       -- `imm-scale-a = -1`).
       bKMajor := !dmods.contains "tnspB",

@@ -60,3 +60,14 @@ extern "C" __global__ void beside(unsigned* out, int rounds, int steps) {
     if (tid == 128) out[1] = p;
   }
 }
+
+// A warpgroup commits a wgmma group with nothing in it and waits for it (ptxas fills the group with
+// an empty `HGMMA.64x8x16.F16 RZ, gdesc[URZ], RZ, !UPT`), then writes its thread indices.
+extern "C" __global__ void empty_group(unsigned* out) {
+#if defined(__CUDA_ARCH_FEAT_SM90_ALL)
+  asm volatile("wgmma.fence.sync.aligned;" ::: "memory");
+  asm volatile("wgmma.commit_group.sync.aligned;" ::: "memory");
+  asm volatile("wgmma.wait_group.sync.aligned 0;" ::: "memory");
+#endif
+  out[threadIdx.x] = threadIdx.x;
+}
