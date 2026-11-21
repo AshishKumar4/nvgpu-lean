@@ -2,3 +2,4 @@
 /.venv/
 *.olean
 lake-manifest.json
+__pycache__/
