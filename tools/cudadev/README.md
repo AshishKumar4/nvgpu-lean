@@ -79,7 +79,10 @@ libraries and frameworks built on it load them where they would load NVIDIA's, a
   `--query-gpu=… --format=csv`.
 * `nvml.c` and `smi.c` show every device.
 * `jax_check.py` runs JAX programs (matmuls, a softmax, a transformer's loss and gradients) and
-  bit-compares two runs' outputs: the emulated device's with a real GPU's.
+  bit-compares two runs' outputs: the emulated device's with a real GPU's. With JAX 0.12.0.1
+  (`jax[cuda12]`), all 11 outputs of the emulated H100 equal a GH200's bit for bit, and all 11 of
+  the emulated A100 an A100-SXM4-40GB's (2026-11-21; the device-jax row's outputs against
+  `jax_check.py run` on each GPU).
 
 ## A mesh
 
