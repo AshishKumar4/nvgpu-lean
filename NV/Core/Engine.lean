@@ -114,15 +114,18 @@ inductive Stall where
   /-- A cycle the sub-partition lost to its tensor core (`dispatch_stall`;
   `TensorParams.wgmmaIssueSharePermille`). -/
   | dispatch
+  /-- Asleep after a `NANOSLEEP` (`sleeping`). -/
+  | sleeping
   deriving DecidableEq, Repr, Inhabited
 
 def Stall.index : Stall → Nat
   | .wait => 0 | .longScoreboard => 1 | .shortScoreboard => 2 | .pipe => 3 | .regRead => 4
   | .mio => 5 | .fetch => 6 | .barrier => 7 | .fence => 8 | .notSelected => 9 | .dispatch => 10
+  | .sleeping => 11
 
 def Stall.all : List Stall :=
   [.wait, .longScoreboard, .shortScoreboard, .pipe, .regRead, .mio, .fetch, .barrier, .fence,
-   .notSelected, .dispatch]
+   .notSelected, .dispatch, .sleeping]
 
 /-- The launch's cluster shape: the attribute's, else the kernel's required one. -/
 def Launch.clusterShape (l : Launch) : Nat × Nat × Nat :=
@@ -136,7 +139,7 @@ structure Counters where
   hazards : Nat := 0
   /-- Warp-cycles each live warp spent not issuing, by reason (`Stall.index`): the sum over warps
   of the cycles between its issues, attributed to the reason that held it last. -/
-  stalls : Array Nat := Array.replicate 11 0
+  stalls : Array Nat := Array.replicate 12 0
   /-- `gpc__cycles_elapsed.max`: cycles from the first CTA's start to the last warp's exit or the
   last memory request's delivery, whichever is later. -/
   cycles : Nat := 0
@@ -1498,6 +1501,17 @@ private def pass (kit : Kit) (focus : Nat) (stop : Nat) (st : St) :
         interval := interval + b / den
       s := { s with readyAt := max s.readyAt (t + hold), sb, live := s.live && !s.w.done,
                     interlock := ins.ctrl.stall == 0 && p.frontEnd.stallZeroInterlocks.value }
+      -- `NANOSLEEP t` suspends the warp for about `t` ns, at most 1 ms (PTX `nanosleep`: between 0
+      -- and twice `t`; the model takes `t`). `NANOSLEEP.SYNCS`, a barrier wait's backoff, wakes on
+      -- the barrier and is not held here.
+      if ins.opcode == "NANOSLEEP" && !ins.mods.contains "SYNCS" && !l.functional then
+        let lane := (List.range 32).find? (fun i => (s.w.live >>> i.toUInt32) &&& 1 == 1) |>.getD 0
+        let ns : Nat := match ins.operands[0]? with
+          | some (NV.SASS.Operand.imm v) => v.toNat
+          | some (NV.SASS.Operand.reg ⟨.r, r⟩ _) => (s.w.getR r lane).toNat
+          | _ => 0
+        let sleep := min ns 1000000 * p.clockMHz.value / 1000
+        if sleep > hold then s := { s with readyAt := max s.readyAt (t + sleep), why := .sleeping }
       if atomWb.isSome then s := { s with readyAt := pendingAt, atomWb }
       -- A `printf` call holds the warp until it returns (`SyncParams.printfPs`), timed alone.
       if s.w.printing > 0 then

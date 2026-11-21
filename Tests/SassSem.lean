@@ -343,6 +343,16 @@ def sameCycleWrites : Kernel :=
     ins 0x60 "STG" #["E"] #[gaddr 4, r 3] (ctrl 1),
     ins 0x70 "EXIT" #[] #[] (ctrl 5)] }
 
+/-- `out[t] = t` after `NANOSLEEP ns`: the warp sleeps about `ns` ns before its store. -/
+def sleeper (ns : UInt64) : Kernel :=
+  { name := "sleeper", sm := 90, regs := 8, params := #[(0, 8)], paramBytes := 8, code := #[
+    ins 0x00 "S2R" #[] #[r 0, .name "SR_TID.X"] (ctrl 1 (some 0)),
+    ins 0x10 "LDC" #["64"] #[r 4, .cbank 0 none 0x210] (ctrl 1 (some 1)),
+    ins 0x20 "NANOSLEEP" #[] #[.imm ns] (ctrl 1),
+    ins 0x30 "IMAD" #["WIDE", "U32"] #[r 4, r 0, .imm 4, r 4] (ctrl 4 none 0b11),
+    ins 0x40 "STG" #["E"] #[gaddr 4, r 0] (ctrl 1),
+    ins 0x50 "EXIT" #[] #[] (ctrl 5)] }
+
 def checkTiming : IO (List String) := do
   let n := 32
   let mut out := []
@@ -367,6 +377,15 @@ def checkTiming : IO (List String) := do
   | .ok (bs, c) =>
     out := out ++ compare "shuffle after a store" bs[0]! ((List.range n).map fun t => (t, 100 + t))
     if c.hazards != 0 then out := out ++ [s!"shuffle after a store: {c.hazards} hazards"]
+  match ← runWith (sleeper 0) 1 n [Array.replicate n 0], ← runWith (sleeper 1000) 1 n [Array.replicate n 0] with
+  | .ok (_, c0), .ok (bs, c) =>
+    out := out ++ compare "NANOSLEEP" bs[0]! ((List.range n).map fun t => (t, t))
+    -- About 1000 ns at the part's clock (the work the 0 ns run waits for overlapping the
+    -- sleep), against the same kernel sleeping 0 ns.
+    let want := 1000 * NV.Arch.h200.clockMHz.value / 1000 * 95 / 100
+    if c.cycles < c0.cycles + want then
+      out := out ++ [s!"NANOSLEEP 1000 ns: {c.cycles} cycles against {c0.cycles} for 0 ns, under {want} more"]
+  | .error e, _ | _, .error e => out := out ++ [s!"NANOSLEEP: {e}"]
   match ← runWith sameCycleWrites 1 n [Array.replicate n 0] with
   | .error e => out := out ++ [s!"writes landing in one cycle: {e}"]
   | .ok (bs, c) =>
