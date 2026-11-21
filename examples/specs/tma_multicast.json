@@ -1,0 +1,8 @@
+{ "code": "tma_multicast.cu", "function": "tma_multicast", "grid": [4], "block": [128], "cluster": [2, 1, 1],
+  "buffers": [
+    { "name": "in", "bytes": 16384, "init": { "gen": "iota", "dtype": "u32", "start": 1, "step": 1 } },
+    { "name": "out", "bytes": 16384 } ],
+  "tensorMaps": [
+    { "name": "map", "dtype": "f32", "buffer": "in", "dims": [32, 128], "strides": [128], "box": [32, 16],
+      "swizzle": "none" } ],
+  "params": [ { "ordinal": 0, "tensorMap": "map" }, { "ordinal": 1, "ptr": "out" } ] }
