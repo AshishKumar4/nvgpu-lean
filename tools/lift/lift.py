@@ -276,7 +276,10 @@ def f_nop(i):
 @form("EXIT")
 def f_exit(i):
     # The warp's last lane out takes the warp out of its cluster barrier's and the work pool's
-    # live warps.
+    # live warps. A predicate operand (`EXIT P1`) exits only the lanes it holds for.
+    ops = i["ops"]
+    if ops:
+        return f"if ({pred(ops[0])}) LIFT_EXIT"
     return "LIFT_EXIT"
 
 
