@@ -252,19 +252,21 @@ def tests : Except String T := do
   t := t.check "fence its own cost after the store's acknowledgement" (fAt == sAt + 9 && sAt > 0)
     s!"{sAt} {fAt}"
   let mut m := fresh
-  for _ in [0:mem.mioQueueDepth.value] do m := ((m.reserve 0 0 0).issue 0 origin lds).1
-  t := t.check "MIO queue full" (!m.accepts 0 0 && m.accepts 0 1)
+  for _ in [0:mem.mioQueueDepth.value] do m := ((m.reserve 0 0 0 0).issue 0 origin lds).1
+  t := t.check "MIO queue full" (!m.accepts 0 0 0 && m.accepts 0 1 0)
+  -- Shared memory's queue full, the global accesses' queue beside it is not.
+  t := t.check "a full MIO queue leaves the LG queue room" (m.accepts 0 0 1)
   let (m', _) ← m.advance 0
-  t := t.check "MIO queue drains" (m'.accepts 0 0)
+  t := t.check "MIO queue drains" (m'.accepts 0 0 0)
   -- A barrier may count a warp once its requests have performed, not before.
-  let (m1, _) := (fresh.reserve 0 0 0).issue 10 origin (req .shared .st [some 64] (data := #[7]))
+  let (m1, _) := (fresh.reserve 0 0 0 0).issue 10 origin (req .shared .st [some 64] (data := #[7]))
   let (m2, _) ← m1.advance 10
   let (m3, _) ← m2.advance (10 + cfg.front)
   t := t.check "performed after the data port, not before" (!m1.performed 0 0 && !m2.performed 0 0 &&
     m3.performed 0 0 && (m3.sharedOf 0 0).read 64 4 == #[7])
   -- A CTA retired while a reserved request has not arrived keeps its memory until that request
   -- has performed (`drain` fails if the request finds it gone), and frees it after.
-  let m1 := (fresh.reserve 0 0 0).removeCta 0 0
+  let m1 := (fresh.reserve 0 0 0 0).removeCta 0 0
   let (m2, _) := m1.issue 20 origin (req .shared .st [some 8] (data := #[9]))
   let (m3, _) ← drain m2
   t := t.check "retired CTA's memory outlives its reserved request" ((m3.sharedOf 0 0).size == 0)

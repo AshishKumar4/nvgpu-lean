@@ -143,9 +143,10 @@ def removeCta (m : MemSys) (sm cta : Nat) : MemSys :=
     | none => m.dir
   { m with sms := m.sms.modify sm (·.removeCta cta), dir }
 
-def accepts (m : MemSys) (sm smsp : Nat) : Bool := m.sms[sm]!.accepts smsp
+def accepts (m : MemSys) (sm smsp queue : Nat) : Bool := m.sms[sm]!.accepts smsp queue
 
-def reserve (m : MemSys) (sm smsp cta : Nat) : MemSys := { m with sms := m.sms.modify sm (·.reserve smsp cta) }
+def reserve (m : MemSys) (sm smsp cta queue : Nat) : MemSys :=
+  { m with sms := m.sms.modify sm (·.reserve smsp cta queue) }
 
 /-- Take SM `sm`'s side out, so it is updated in place, and put it back. -/
 @[inline] private def withSm {α : Type} (m : MemSys) (sm : Nat) (f : SmMem → SmMem × α) : MemSys × α :=

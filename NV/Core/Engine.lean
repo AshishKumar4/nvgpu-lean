@@ -685,8 +685,13 @@ private def readiness (k : Kernel) (timings : Array (Option OpTiming))
   if let some tm := timings[pc]?.join then
     let free := sm.pipes[q * Pipe.count + tm.pipe.index]!.free
     if free > wait then wait := free; why := .pipe
-    -- A full MIO queue frees when the memory system next dispatches.
-    if tm.pipe == .lsu && !mem.accepts si q then
+    -- A full queue (shared memory's MIO queue, the global and local accesses' LG queue; a generic
+    -- access either) frees when the memory system next dispatches.
+    let full := match ins.opcode with
+      | "LD" | "ST" | "ATOM" | "RED" => !mem.accepts si q 0 || !mem.accepts si q 1
+      | op => !mem.accepts si q (if op.endsWith "S" || op.startsWith "LDS" || op.startsWith "STS" ||
+          op == "SYNCS" then 0 else 1)
+    if tm.pipe == .lsu && full then
       let next := max (t + 1) ((mem.nextSm si).getD (t + 1))
       if next > wait then wait := next; why := .mio
   if sm.rfRead[q]!.free > wait then wait := sm.rfRead[q]!.free; why := .regRead
@@ -1327,7 +1332,7 @@ private def pass (kit : Kit) (focus : Nat) (stop : Nat) (st : St) :
         -- that releases; without one it reads them now.
         let rr := if tm.readRelease == 0 then p.readRelease.value else tm.readRelease
         let at_ := max (t + rr) s.lastMem
-        mem := mem.reserve si q s.cta
+        mem := mem.reserve si q s.cta (Memory.SmMem.queueOf (req w).space)
         -- The earlier loads still to write what it reads; then its own number, if it loads.
         let after := (vectorRegs fp.reads).filterMap fun l =>
           (s.loadOf.get? l.index).filter s.inflight.contains

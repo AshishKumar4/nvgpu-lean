@@ -189,8 +189,9 @@ structure SmMem where
   txns : Array Txn := #[]
   freeTxns : Array Nat := #[]
   events : Heap SmEv := {}
-  /-- Per sub-partition: accepted requests not yet dispatched, and slots taken by issued
-  instructions whose requests have not arrived yet. -/
+  /-- Per sub-partition and queue (`queueOf`: shared memory's MIO queue 0, apart from the global
+  and local accesses' LG queue 1; index `2 * q + queue`): accepted requests not yet dispatched,
+  and slots taken by issued instructions whose requests have not arrived yet. -/
   mio : Array (Array Nat)
   reserved : Array Nat
   armed : Bool := false
@@ -224,7 +225,7 @@ structure SmMem where
 namespace SmMem
 
 def init (c : Config) (sm : Nat) : SmMem :=
-  { cfg := c, sm, mio := Array.replicate c.smsps #[], reserved := Array.replicate c.smsps 0,
+  { cfg := c, sm, mio := Array.replicate (2 * c.smsps) #[], reserved := Array.replicate (2 * c.smsps) 0,
     ports := Array.replicate (SmRes.count c) {}, l1 := Tags.empty c.l1Sets c.l1Ways }
 
 /-- CTA `cta` starts with `bytes` of shared memory. -/
@@ -250,13 +251,22 @@ private def free (m : SmMem) (cta : Nat) : SmMem :=
 def removeCta (m : SmMem) (cta : Nat) : SmMem :=
   if m.ctaInflight.getD cta 0 == 0 then m.free cta else { m with retired := m.retired.insert cta () }
 
-/-- Whether sub-partition `q` has room in its MIO queue. -/
-def accepts (m : SmMem) (q : Nat) : Bool := m.mio[q]!.size + m.reserved[q]! < m.cfg.mioDepth
+/-- The queue a request of `space` waits in: shared memory's (MIO, 0) or the global and local
+accesses' (LG, 1), apart, so a shared store held for the data stage does not hold a global load
+(wgmio on the GH200: an LDG chain beside an STS.128 stream runs 13% slower). -/
+def queueOf (space : Space) : Nat :=
+  match space with
+  | .shared | .sharedCluster => 0
+  | _ => 1
 
-/-- A memory instruction of CTA `cta` issued on sub-partition `q` takes an MIO slot; its request,
-which `issue` brings later, fills it. The CTA's memory is kept from then on. -/
-def reserve (m : SmMem) (q cta : Nat) : SmMem :=
-  { m with reserved := m.reserved.modify q (· + 1),
+/-- Whether sub-partition `q`'s queue `queue` has room. -/
+def accepts (m : SmMem) (q : Nat) (queue : Nat) : Bool :=
+  m.mio[2 * q + queue]!.size + m.reserved[2 * q + queue]! < m.cfg.mioDepth
+
+/-- A memory instruction of CTA `cta` issued on sub-partition `q` takes a slot in its queue; its
+request, which `issue` brings later, fills it. The CTA's memory is kept from then on. -/
+def reserve (m : SmMem) (q cta queue : Nat) : SmMem :=
+  { m with reserved := m.reserved.modify (2 * q + queue) (· + 1),
            ctaInflight := m.ctaInflight.insert cta (m.ctaInflight.getD cta 0 + 1) }
 
 /-- Whether every request warp `slot` has issued is past the SM's ordering point, so the SM's later
@@ -329,9 +339,10 @@ def issue (m : SmMem) (t : Nat) (o : Origin) (r : Req) (issued : Nat := t) : SmM
   let m := match r.op with
     | .mbar (.arrive ..) => if m.cfg.races then { m with race := m.race.mbarArrive o.slot id } else m
     | _ => m
-  let m := { m with mio := m.mio.modify o.smsp (·.push id) }
+  let qi := 2 * o.smsp + queueOf r.space
+  let m := { m with mio := m.mio.modify qi (·.push id) }
   -- The engine reserved the slot (and counted the request against its CTA) at issue.
-  let m := if m.reserved[o.smsp]! > 0 then { m with reserved := m.reserved.modify o.smsp (· - 1) }
+  let m := if m.reserved[qi]! > 0 then { m with reserved := m.reserved.modify qi (· - 1) }
     else { m with ctaInflight := m.ctaInflight.insert o.cta (m.ctaInflight.getD o.cta 0 + 1) }
   let w := m.warp o.slot
   let m := m.setWarp o.slot { w with queued := w.queued + 1, unordered := w.unordered + 1 }
@@ -654,9 +665,10 @@ private def dispatch (m : SmMem) (t : Nat) (dir : Directory) : Except String SmM
   -- still calculating does not hold the others back.
   let mut pick : Option Nat := none
   let mut best := t
-  for k in [0:c.smsps] do
-    let q := (m.rr + k) % c.smsps
-    if let some id := m.mio[q]![0]? then
+  for k in [0:2 * c.smsps] do
+    let qi := (m.rr + k) % (2 * c.smsps)
+    let q := qi / 2
+    if let some id := m.mio[qi]![0]? then
       if !m.gated id then
         -- A shared-memory store leaves its queue once the stores before it would have left the
         -- data stage as it arrives (`front` later): their backlog holds the queue, and through it
@@ -666,12 +678,13 @@ private def dispatch (m : SmMem) (t : Nat) (dir : Directory) : Except String SmM
         let data := if r.space == .shared && r.op == .st then m.storesFree - min c.front m.storesFree else t
         let ready := max (max t data) m.ports[(SmRes.addr q).index c]!.free
         if pick.isNone || ready < best then
-          pick := some q; best := ready
+          pick := some qi; best := ready
   -- Every head waits on its warp: a delivery re-arms the LSU.
-  let some q := pick | return m
+  let some qi := pick | return m
   if best > t then return m.arm best
-  let id := m.mio[q]![0]!
-  m := { m with mio := m.mio.modify q (·.eraseIdxIfInBounds 0), rr := q + 1 }
+  let q := qi / 2
+  let id := m.mio[qi]![0]!
+  m := { m with mio := m.mio.modify qi (·.eraseIdxIfInBounds 0), rr := qi + 1 }
   let r := m.reqs[id]!
   let w := m.warp r.origin.slot
   let acq := r.req.sem == .acquire || r.req.sem == .acqRel
