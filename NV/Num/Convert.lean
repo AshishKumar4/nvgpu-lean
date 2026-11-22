@@ -9,8 +9,11 @@ scale factors, float to integer, integer to float, float to an integral float, t
 fixed-point `s2f6`, plus decimal literals. Each is the exact source value rounded once into the
 destination.
 
-NaN rules: a NaN becomes the destination's canonical NaN (`cuda_fp8.hpp`, `cuda_fp16.hpp`,
-`cuda_bf16.hpp` canonicalize; PTX leaves `cvt.f32.bf16`'s NaN unspecified), so for the formats
+NaN rules: between binary32 and binary64 a NaN keeps its sign and payload, quieted (the fp64 unit
+converts: an A100's and a GH200's `cvt.f64.f32` and `cvt.f32.f64` carry the payload's top bits
+across); otherwise a NaN becomes the destination's canonical NaN (`cuda_fp8.hpp`,
+`cuda_fp16.hpp`, `cuda_bf16.hpp` canonicalize; PTX leaves `cvt.f32.bf16`'s NaN unspecified), so
+for the formats
 without NaN it becomes `+MAX_NORM` under `.satfinite` (PTX's rule for E2M1/E2M3/E3M2). Float to
 integer gives 0 for NaN, or `1 << (width - 1)` from binary64 or into 64 bits (PTX's Integer Notes).
 -/
@@ -44,10 +47,23 @@ def cvtVal (dst : Format) (encodeRound : Bool → Nat → Int → Nat) (o : CvtO
   | .inf n => o.finish dst (dst.encode .rn (if o.satfinite then .sat else .ieee) (.inf n))
   | .fin n m e => o.finish dst (encodeRound n m e)
 
+/-- A binary32 NaN widened to binary64, or a binary64 NaN narrowed to binary32: its sign and the
+payload's top bits kept, quieted. -/
+def nanAcross (src dst : Format) (a : Nat) : Nat :=
+  let neg := (a / pow2 (src.width - 1)) % 2 == 1
+  let frac := a % pow2 src.man
+  let frac := if dst.man ≥ src.man then frac * pow2 (dst.man - src.man) else frac / pow2 (src.man - dst.man)
+  dst.pack neg dst.expMax (frac ||| pow2 (dst.man - 1))
+
 /-- Float to float. -/
 def cvt (src dst : Format) (r : Rounding) (o : CvtOpts := {}) (a : Nat) : Nat :=
   let ovf : Overflow := if o.satfinite then .sat else .ieee
-  cvtVal dst (fun n m e => dst.round r ovf n m e) o (src.decodeIn (o.ftz && src == .f32) a)
+  match src.decodeIn (o.ftz && src == .f32) a with
+  | .nan =>
+    if ((src == .f32 && dst == .f64) || (src == .f64 && dst == .f32)) && !o.relu && !o.sat then
+      nanAcross src dst a
+    else cvtVal dst (fun n m e => dst.round r ovf n m e) o .nan
+  | v => cvtVal dst (fun n m e => dst.round r ovf n m e) o v
 
 /-- A decoded value times the UE8M0 scale factor `sf` (`2^(sf - 127)`; `0xff` is NaN), or divided
 by it when `down`. Exact: hardware applying the scale to the exponent is inferred (PTX writes
