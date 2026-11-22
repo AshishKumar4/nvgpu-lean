@@ -772,8 +772,8 @@ __device__ __forceinline__ MmaModel mmaModel(uint32_t sm, bool tf32) {
 // column.
 template <int K, int AW, int BW>
 __device__ inline void hmma(const Ctx& x, MmaModel m, int w, const Codec& c, int man, const uint32_t (&a)[AW],
-                            const uint32_t (&b)[BW], const uint32_t (&cin)[4], uint32_t (&d)[4], uint32_t lane) {
-  const uint32_t mask = __activemask();
+                            const uint32_t (&b)[BW], const uint32_t (&cin)[4], uint32_t (&d)[4], uint32_t lane,
+                            uint32_t mask) {
   if (mask != 0xffffffffu || m.blockSize == 0) {
     if (lane == __ffs(mask) - 1) atomicOr(x.fault, 32u);
     return;
@@ -808,7 +808,7 @@ __device__ inline void hmma(const Ctx& x, MmaModel m, int w, const Codec& c, int
 // mask): this lane arrives at barrier `bar` (arrived lanes, broken-out lanes) of mask `m`, waits
 // until every lane of the mask that has not broken out or exited (`live`) has arrived, and the
 // lanes leave together.
-__device__ inline void bsync(uint32_t* bar, uint32_t m, const volatile uint32_t* live, uint32_t lane) {
+__device__ inline uint32_t bsync(uint32_t* bar, uint32_t m, const volatile uint32_t* live, uint32_t lane) {
   atomicOr(&bar[0], 1u << lane);
   uint32_t need;
   for (unsigned ns = 8;; ns = min(2 * ns, 256u)) {
@@ -817,6 +817,7 @@ __device__ inline void bsync(uint32_t* bar, uint32_t m, const volatile uint32_t*
     __nanosleep(ns);
   }
   __syncwarp(need);
+  return need;
 }
 
 // `.SAT` on a binary32 result (`NV.Num.satUnit`): NaN and negatives (-0 too) to +0, above one to one.
@@ -1156,8 +1157,7 @@ __device__ inline void serve(const Ctx& x, uint32_t* smem) {
 // -133, the sum truncated to binary32 (`Hopper.f16f32`).
 template <int N>
 __device__ inline void hgmma(const Ctx& x, InType ty, uint64_t da, uint64_t db, bool aK, bool bK, bool negA,
-                             bool negB, bool scaleD, uint32_t* acc, uint32_t lane, uint32_t warp) {
-  const uint32_t mask = __activemask();
+                             bool negB, bool scaleD, uint32_t* acc, uint32_t lane, uint32_t warp, uint32_t mask) {
   if (mask != 0xffffffffu) { if (lane == __ffs(mask) - 1) atomicOr(x.fault, 32u); return; }
   Job j;
   j.x = x; j.kind = 0; j.tasks = N / 8;
@@ -1298,7 +1298,8 @@ __device__ inline void bulkCopy(const Ctx& x, uint8_t* dst, const uint8_t* src, 
     uint32_t _n = blockDim.x * blockDim.y * blockDim.z - warp * 32;                              \
     s_live[warp] = _n >= 32 ? 0xffffffffu : ((1u << _n) - 1u);                                   \
   }                                                                                              \
-  __syncthreads();
+  __syncthreads();                                                                               \
+  uint32_t act = s_live[warp];
 
 #define EPILOGUE return;
 // A thread's exit; the warp's last lane out takes the warp out of the live warps (`warpExit`).

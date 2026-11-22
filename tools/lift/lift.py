@@ -279,9 +279,7 @@ def f_exit(i):
     # The warp's last lane out takes the warp out of its cluster barrier's and the work pool's
     # live warps. A predicate operand (`EXIT P1`) exits only the lanes it holds for.
     ops = i["ops"]
-    if ops:
-        return f"if ({pred(ops[0])}) LIFT_EXIT"
-    return "LIFT_EXIT"
+    return split(i, [pred(ops[0])] if ops else [], "LIFT_EXIT")
 
 
 @form("UCGABAR_ARV")
@@ -292,7 +290,7 @@ def f_cgaarv(i):
 @form("UCGABAR_WAIT")
 def f_cgawait(i):
     # The warp leaves together, as it arrived (`UCGABAR_ARV`).
-    return "clusterWait(ctx, cgaPhase); __syncwarp(LIVE);"
+    return "{ clusterWait(ctx, cgaPhase); __syncwarp(LIVE); act = LIVE; }"
 
 
 @form("UBLKCP")
@@ -312,7 +310,7 @@ def f_ublkcp(i):
         call = f"bulkCopy(ctx, gptr(ctx, U64(UR({a}), UR({a + 1}))), sharedAt(ctx, UR({b})), {size}, NONE, lane, warp)"
     else:
         raise Lift(f"UBLKCP {mods}")
-    return f"if (lane == __ffs(__activemask()) - 1) {{ {call}; }}"
+    return f"if (lane == __ffs(__EXEC__) - 1) {{ {call}; }}"
 
 
 @form("UBLKRED")
@@ -335,7 +333,27 @@ def f_ublkred(i):
     else:
         dst = f"gptr(ctx, U64(UR({a}), UR({a + 1})))"
         tail = ""
-    return (f"if (lane == __ffs(__activemask()) - 1) {{ bulkRed<{ty}>(ctx, {dst}, UR({b}), {size}, {opn});{tail} }}")
+    return (f"if (lane == __ffs(__EXEC__) - 1) {{ bulkRed<{ty}>(ctx, {dst}, UR({b}), {size}, {opn});{tail} }}")
+
+
+# The warp's SIMT state: each lane's `act` is the set of lanes executing with it, as the simulator's
+# warp has them (`NV.SASS.Warp`): set from the live lanes at the start, split by a branch, an exit
+# or a return its lanes take apart, and set again where they reconverge (`BSYNC`, `WARPSYNC`).
+# Warp collectives (shuffles, votes, the lowest executing lane) name it as their lanes (`EXEC`):
+# the host GPU's `__EXEC__` is the lanes it happens to run together, which independent
+# thread scheduling may leave short of the lanes the simulator executes.
+
+def split(i, conds, taken):
+    """A control transfer its lanes may take apart: those for which the guard and `conds` hold run
+    `taken` (which leaves) with the lanes taking it with them; the others go on without them."""
+    cs = list(conds)
+    g = i["guard"]
+    if g:
+        cs.insert(0, pred({"k": "reg", "r": g["r"], "not": g["not"], "neg": False, "abs": False, "sfx": []}))
+    if not cs:
+        return taken
+    return (f"{{ const bool _c = {' && '.join(cs)}; const uint32_t _cm = __ballot_sync(act, _c); "
+            f"if (_c) {{ act = _cm; {taken} }} act &= ~_cm; }}")
 
 
 @form("BRA")
@@ -346,19 +364,15 @@ def f_bra(i):
     lab = f"L_{t['pc']:x}"
     if "DIV" in i["mods"]:
         # Taken when lanes of the mask are live but not executing here (the warp is diverged).
-        return f"if (({val(i['ops'][0])} & LIVE & ~__activemask()) != 0u) goto {lab};"
+        return split(i, [f"(({val(i['ops'][0])} & LIVE & ~act) != 0u)"], f"goto {lab};")
     if "ANY" in i["mods"]:
-        # `@P BRA.U.ANY target`: every lane here goes when the guard holds in any of them (the
-        # guard is this form's own: `emit` leaves it to it).
+        # `@P BRA.U.ANY target`: every lane here goes when the guard holds in any of them.
         g = i["guard"]
         if not g:
             return f"goto {lab};"
         o = {"k": "reg", "r": g["r"], "not": g["not"], "neg": False, "abs": False, "sfx": []}
-        return f"if (__any_sync(__activemask(), {pred(o)})) goto {lab};"
-    preds = [o for o in i["ops"] if is_pred(o)]
-    if preds:
-        return f"if ({' && '.join(pred(o) for o in preds)}) goto {lab};"
-    return f"goto {lab};"
+        return f"if (__any_sync(act, {pred(o)})) goto {lab};"
+    return split(i, [pred(o) for o in i["ops"] if is_pred(o)], f"goto {lab};")
 
 
 # Calls: the return address (the call's next instruction, relative to the function) is in a
@@ -374,10 +388,10 @@ def f_call(i):
         # `CALL.ABS.NOINC Rn`: a call to one of the module's external functions (`printf`'s
         # `vprintf`, the device runtime's), which the lifted kernel does not make: the launch faults
         # when a thread reaches one (the assertion paths that hold them seldom run).
-        return "{ atomicOr(&FAULT, 128u); LIFT_EXIT }"
+        return split(i, [], "{ atomicOr(&FAULT, 128u); LIFT_EXIT }")
     if t["k"] != "target" or "REL" not in i["mods"]:
         raise Lift("CALL form")
-    return f"goto L_{t['pc']:x};"
+    return split(i, [], f"goto L_{t['pc']:x};")
 
 
 @form("LEPC")
@@ -397,16 +411,18 @@ def f_ret(i):
     if len(ops) != 2 or ops[1]["k"] != "target":
         raise Lift("RET form")
     cases = " ".join(f"case {pc:#x}u: goto L_{pc:x};" for pc in sorted(RET_SITES))
-    return f"switch ({ops[1]['pc']:#x}u + {val(ops[0])}) {{ {cases} default: __trap(); }}"
+    # Lanes returning to different sites go apart.
+    return split(i, [], f"{{ const uint32_t _t = {ops[1]['pc']:#x}u + {val(ops[0])}; act = __match_any_sync(act, _t); "
+                        f"switch (_t) {{ {cases} default: __trap(); }} }}")
 
 
 @form("BSSY")
 def f_bssy(i):
     b = i["ops"][0]["r"]["i"]
     if not HAS_BREAK:
-        return f"BREG({b}) = __activemask();"
+        return f"BREG({b}) = act;"
     # The barrier's shared state cleared by one lane before any of them arrives or breaks out.
-    return (f"{{ const uint32_t _m = __activemask(); BREG({b}) = _m; if (lane == __ffs(_m) - 1u) "
+    return (f"{{ const uint32_t _m = act; BREG({b}) = _m; if (lane == __ffs(_m) - 1u) "
             f"{{ s_bar[warp][{b}][0] = 0u; s_bar[warp][{b}][1] = 0u; }} __syncwarp(_m); }}")
 
 
@@ -416,23 +432,23 @@ def f_break(i):
     o = i["ops"][0]
     if o["k"] != "reg" or o["r"]["f"] != "b":
         raise Lift("BREAK operand")
-    return f"atomicOr(&s_bar[warp][{o['r']['i']}][1], __activemask());"
+    return f"atomicOr(&s_bar[warp][{o['r']['i']}][1], 1u << lane);"
 
 
 @form("BSYNC")
 def f_bsync(i):
     b = i["ops"][0]["r"]["i"]
     if HAS_BREAK:
-        return f"bsync(s_bar[warp][{b}], BREG({b}), &LIVE, lane);"
-    return f"__syncwarp(BREG({b}) & LIVE);"
+        return f"act = bsync(s_bar[warp][{b}], BREG({b}), &LIVE, lane);"
+    return f"{{ __syncwarp(BREG({b}) & LIVE); act = BREG({b}) & LIVE; }}"
 
 
 @form("WARPSYNC")
 def f_warpsync(i):
     if "ALL" in i["mods"]:
-        return "__syncwarp(LIVE);"
+        return "{ __syncwarp(LIVE); act = LIVE; }"
     # `WARPSYNC.COLLECTIVE mask, end`: the region's lanes together.
-    return f"__syncwarp({val(i['ops'][0])} & LIVE);"
+    return f"{{ const uint32_t _w = {val(i['ops'][0])} & LIVE; __syncwarp(_w); act = _w; }}"
 
 
 @form("ENDCOLLECTIVE")
@@ -509,7 +525,7 @@ def f_s2r(i):
         if is_pred(ops[0]):
             raise Lift("R2UR with a predicate")
         # The first executing lane's value.
-        return wr(ops[0], f"__shfl_sync(__activemask(), {val(ops[1])}, __ffs(__activemask()) - 1)")
+        return wr(ops[0], f"__shfl_sync(__EXEC__, {val(ops[1])}, __ffs(__EXEC__) - 1)")
     return wr(ops[0], val(ops[1]))
 
 
@@ -725,7 +741,7 @@ def f_isetp(i):
 @form("ELECT")
 def f_elect(i):
     ops = i["ops"]
-    s = ["{ uint32_t _m = __activemask(); uint32_t _l = __ffs(_m) - 1;", wrP(ops[0], "lane == _l")]
+    s = ["{ uint32_t _m = __EXEC__; uint32_t _l = __ffs(_m) - 1;", wrP(ops[0], "lane == _l")]
     s.append(wr(ops[1], "_l"))
     return " ".join(s) + " }"
 
@@ -735,7 +751,7 @@ def f_vote(i):
     ops, mods = i["ops"], i["mods"]
     n = len(ops)
     ps, pd = ops[n - 1], ops[n - 2]
-    s = [f"{{ uint32_t _m = __activemask(); uint32_t _b = __ballot_sync(_m, {pred(ps)});"]
+    s = [f"{{ uint32_t _m = __EXEC__; uint32_t _b = __ballot_sync(_m, {pred(ps)});"]
     if "ANY" in mods:
         red = "_b != 0u"
     elif "ALL" in mods:
@@ -761,7 +777,7 @@ def f_shfl(i):
           "IDX": "(_j <= (int)_max)"}[mode]
     return (f"{{ uint32_t _bv = {b} & 0x1fu, _cc = {c}; uint32_t _cv = _cc & 0x1fu, _mask = (_cc >> 8) & 0x1fu;"
             f" uint32_t _max = (lane & _mask) | (_cv & (0x1fu ^ _mask)); int _j = {j}; bool _ok = {ok};"
-            f" uint32_t _v = __shfl_sync(__activemask(), {a}, _ok ? _j : (int)lane); "
+            f" uint32_t _v = __shfl_sync(__EXEC__, {a}, _ok ? _j : (int)lane); "
             + wrP(ops[0], "_ok") + " " + wr(ops[1], "_v") + " }")
 
 
@@ -1248,7 +1264,7 @@ def f_redux(i):
           "XOR": "__reduce_xor_sync", "MIN": "__reduce_min_sync", "MAX": "__reduce_max_sync"}[op]
     o = i["ops"]
     arg = f"(int){val(o[1])}" if s32 and op in ("MIN", "MAX") else val(o[1])
-    return wr(o[0], f"(uint32_t){fn}(__activemask(), {arg})")
+    return wr(o[0], f"(uint32_t){fn}(__EXEC__, {arg})")
 
 
 @form("BPT")
@@ -1367,7 +1383,7 @@ def f_syncs(i):
     if "EXCH" in mods:
         r, off = ur_mem(ops[1])
         v = ops[2]["r"]["i"]
-        return (f"if (lane == __ffs(__activemask()) - 1) mbExch(ctx, UR({r}) + {off & 0xffffffff:#x}u, "
+        return (f"if (lane == __ffs(__EXEC__) - 1) mbExch(ctx, UR({r}) + {off & 0xffffffff:#x}u, "
                 f"U64(UR({v}), UR({v + 1})));")
     if "PHASECHK" in mods:
         # Polled plainly; once the phase has completed, read again with acquire (the copies that
@@ -1431,7 +1447,7 @@ def f_hmma(i):
             f"const uint32_t _b[{bw}] = {{{', '.join(reg(o[2], j) for j in range(bw))}}}; "
             f"const uint32_t _c[4] = {{{', '.join(reg(o[3], j) for j in range(4))}}}; uint32_t _d[4]; "
             f"hmma<{k}, {aw}, {bw}>(ctx, mmaModel(SM, {str(t == 'TF32').lower()}), {w}, {codec}, {man}, "
-            f"_a, _b, _c, _d, lane); {out} }}")
+            f"_a, _b, _c, _d, lane, __EXEC__); {out} }}")
 
 
 @form("LDSM", "STSM")
@@ -1472,7 +1488,7 @@ def f_ldsm(i):
         decl = f"uint32_t _v[{num}] = {{{', '.join('0u' for _ in range(num))}}}; "
         if d != 255:
             body.append(" ".join(f"r[{d + j}] = _v[{j}];" for j in range(num)))
-    return (f"{{ if (__activemask() != 0xffffffffu) atomicOr(&FAULT, 32u); else {{ "
+    return (f"{{ if (__EXEC__ != 0xffffffffu) atomicOr(&FAULT, 32u); else {{ "
             f"const uint32_t _a = (uint32_t){addr(ao)}; {decl}{' '.join(body)} }} }}")
 
 
@@ -1490,7 +1506,7 @@ def f_utchmma(i):
     x, idx = ops[3]["r"]["i"], ops[4]["r"]["i"]
     acc = pred(ops[5]) if len(ops) > 5 else "true"
     pair = "true" if "2CTA" in mods else "false"
-    return (f"if (lane == __ffs(__activemask()) - 1) {{ if (UR({x}) != 0u) atomicOr(&FAULT, 32u); "
+    return (f"if (lane == __ffs(__EXEC__) - 1) {{ if (UR({x}) != 0u) atomicOr(&FAULT, 32u); "
             f"else utcmma(ctx, U64(UR({a}), UR({a + 1})), U64(UR({b}), UR({b + 1})), {d}, UR({idx}), {acc}, {pair}, lane, warp); }}")
 
 
@@ -1508,7 +1524,7 @@ def f_utcbar(i):
                 + arrive.format(f"(_k << 24) | ({at} & 0xffffffu)") + ";")
     else:
         body = arrive.format(at) + ";"
-    return f"if (lane == __ffs(__activemask()) - 1) {{ __threadfence(); {body} }}"
+    return f"if (lane == __ffs(__EXEC__) - 1) {{ __threadfence(); {body} }}"
 
 
 @form("UTCATOMSWS")
@@ -1516,14 +1532,14 @@ def f_utcatomsws(i):
     ops, mods = i["ops"], i["mods"]
     if "FIND_AND_SET" in mods:
         pd, ud, un = ops[0]["r"]["i"], ops[1]["r"]["i"], ops[2]["r"]["i"]
-        return (f"{{ int _g = 0; if (lane == __ffs(__activemask()) - 1) _g = tmemAlloc(ctx, UR({un})); "
-                f"_g = __shfl_sync(__activemask(), _g, __ffs(__activemask()) - 1); "
+        return (f"{{ int _g = 0; if (lane == __ffs(__EXEC__) - 1) _g = tmemAlloc(ctx, UR({un})); "
+                f"_g = __shfl_sync(__EXEC__, _g, __ffs(__EXEC__) - 1); "
                 f"UPW({pd}, _g >= 0); if (_g >= 0) URW({ud}, (uint32_t)_g); }}")
     if "AND" in mods:
         ud, um = ops[0]["r"]["i"], ops[1]["r"]["i"]
         w = f"URW({ud}, _o);" if ud != 255 else ""
-        return (f"{{ uint32_t _o = 0; if (lane == __ffs(__activemask()) - 1) _o = tmemFree(ctx, UR({um})); "
-                f"_o = __shfl_sync(__activemask(), _o, __ffs(__activemask()) - 1); {w} }}")
+        return (f"{{ uint32_t _o = 0; if (lane == __ffs(__EXEC__) - 1) _o = tmemFree(ctx, UR({um})); "
+                f"_o = __shfl_sync(__EXEC__, _o, __ffs(__EXEC__) - 1); {w} }}")
     raise Lift(f"UTCATOMSWS {mods}")
 
 
@@ -1600,7 +1616,7 @@ def f_utma(i):
     else:
         call = (f"tmaLoad(ctx, _m, _c, UR({a}), UR({a + 1}), 0u, lane, warp)" if load
                 else f"tmaStore(ctx, _m, _c, UR({a}), lane, warp)")
-    return (f"if (lane == __ffs(__activemask()) - 1) {{ int32_t _c[5] = {{{coords}}}; "
+    return (f"if (lane == __ffs(__EXEC__) - 1) {{ int32_t _c[5] = {{{coords}}}; "
             f"TensorMapView _m = mapAt(ctx, U64(UR({b}), UR({b + 1}))); {call}; }}")
 
 
@@ -1630,7 +1646,7 @@ def f_hgmma(i):
     return (f"{{ uint32_t _acc[{words}]; {load} hgmma<{n}>(ctx, {ty}, U64(UR({u}), UR({u + 1})), "
             f"U64(UR({u + 2}), UR({u + 3})), {'false' if 'tnspA' in dm else 'true'}, "
             f"{'false' if 'tnspB' in dm else 'true'}, {'true' if 'negA' in dm else 'false'}, "
-            f"{'true' if 'negB' in dm else 'false'}, {scale}, _acc, lane, warp); {store} }}")
+            f"{'true' if 'negB' in dm else 'false'}, {scale}, _acc, lane, warp, __EXEC__); {store} }}")
 
 
 # ---------------------------------------------------------------------------------------------
@@ -1646,10 +1662,16 @@ def emit(i):
     except (KeyError, IndexError, StopIteration) as e:
         raise Lift(f"{i['op']}{''.join('.' + m for m in i['mods'])} at {i['pc']:#x}: form ({e!r})")
     g = i["guard"]
-    if g and body and not (i["op"] == "BRA" and "ANY" in i["mods"]):
+    # Control transfers take their guard themselves (`split`).
+    if g and body and i["op"] not in ("BRA", "EXIT", "CALL", "RET"):
         o = {"k": "reg", "r": g["r"], "not": g["not"], "neg": False, "abs": False, "sfx": []}
-        body = f"if ({pred(o)}) {{ {body} }}"
-    return body
+        if "__EXEC__" in body:
+            # The executing lanes: those of the lanes together here whose guard holds.
+            body = (f"{{ const bool _gd = {pred(o)}; const uint32_t _ex = __ballot_sync(act, _gd); "
+                    f"if (_gd) {{ {body.replace('__EXEC__', '_ex')} }} }}")
+        else:
+            body = f"if ({pred(o)}) {{ {body} }}"
+    return body.replace("__EXEC__", "act")
 
 
 def main():
