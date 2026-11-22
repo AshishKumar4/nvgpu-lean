@@ -241,6 +241,7 @@ __device__ __forceinline__ uint32_t mufuFrac(const MufuPoly& p, uint64_t sum) {
 #define MUFU_LG2 MufuPoly{kLg2, 30, 18, false, true, 56, 0x868b000000000000ull}
 #define MUFU_RCP MufuPoly{kRcp, 30, 17, true, false, 56, 0x67e7000000000000ull}
 #define MUFU_RSQ MufuPoly{kRsqrt, 31, 17, true, false, 57, 0x7fff800000000000ull}
+#define MUFU_SQRT MufuPoly{kSqrt, 33, 18, false, true, 58, 0x7fff800000000000ull}
 
 // `x · 2^k` for a normal `x`, rounded to nearest with subnormals, then flushed (MufuWord.ldexp):
 // exact in binary64, one rounding to binary32.
@@ -311,6 +312,25 @@ __device__ inline uint32_t mufuRsq(uint32_t x) {
   const MufuPoly P = MUFU_RSQ;
   uint64_t sum = 2 * mufuEval(P, index, xl, mufuSquare(xl));
   return mufuLdexp((126u << 23) | mufuFrac(P, sum), -(l / 2));
+}
+
+// `MUFU.SQRT` (Mufu.sqrt on a flushed input).
+__device__ inline uint32_t mufuSqrt(uint32_t x) {
+  x = flush32(x);
+  bool neg = x >> 31;
+  uint32_t ef = (x >> 23) & 0xff;
+  if (isNaN32(x)) return 0x7fffffffu;
+  if (ef == 0xff) return neg ? 0x7fffffffu : 0x7f800000u;
+  if ((x & 0x7fffffffu) == 0) return x;
+  if (neg) return 0x7fffffffu;
+  int l = (int)ef - 127;
+  uint32_t fr = x & 0x7fffff;
+  int index = fr >> 17;
+  uint64_t xl = fr & 0x1ffff;
+  if (l & 1) { index += 64; l -= 1; }
+  const MufuPoly P = MUFU_SQRT;
+  uint64_t sum = mufuEval(P, index, xl, mufuSquare(xl));
+  return mufuLdexp(0x3f800000u | mufuFrac(P, sum), l / 2);
 }
 
 // `MUFU.LG2` (Mufu.lg2 on a flushed input).
