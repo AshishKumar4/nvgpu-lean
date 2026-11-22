@@ -1140,6 +1140,39 @@ def f_frnd(i):
     return wr(o[0], f"([&]{{ float _v; asm(\"cvt.{rnd}{ftz}.f32.f32 %0, %1;\" : \"=f\"(_v) : \"f\"(__uint_as_float({fsrc(o[1])}))); return __float_as_uint(_v); }}())")
 
 
+@form("F2F")
+def f_f2f(i):
+    # `F2F[.FTZ].dst.src[.RZ|.RM|.RP] Rd, Ra`: between binary64 (a register pair), binary32 and
+    # binary16 (the low half), rounded (PTX `cvt`; a widening is exact and takes no mode).
+    mods = i["mods"]
+    fmts = [m for m in mods if m in ("F64", "F32", "F16")]
+    if len(fmts) != 2 or any(m not in RND_F and m not in ("FTZ", "F64", "F32", "F16") for m in mods):
+        raise Lift(f"F2F {mods}")
+    dst, srcf = fmts
+    width = {"F64": 64, "F32": 32, "F16": 16}
+    if dst == srcf:
+        raise Lift(f"F2F {mods}")
+    rnd = "" if width[dst] > width[srcf] else "." + next((RND_F[m] for m in mods if m in RND_F), "rn")
+    ftz = ".ftz" if "FTZ" in mods and "F32" in fmts else ""
+    o = i["ops"]
+    x = o[1]
+    if srcf == "F64":
+        if x["k"] != "reg" or x["abs"] or x["neg"]:
+            raise Lift("F2F.F64 source")
+        src, sc = f"__hiloint2double((int){rhi(x['r'])}, (int){rname(x['r'])})", "d"
+    elif srcf == "F32":
+        src, sc = f"__uint_as_float({fsrc(x)})", "f"
+    else:
+        src, sc = f"(unsigned short)({val(x)} & 0xffffu)", "h"
+    ty = {"F64": "f64", "F32": "f32", "F16": "f16"}
+    asm = f"cvt{rnd}{ftz}.{ty[dst]}.{ty[srcf]} %0, %1;"
+    if dst == "F64":
+        return wr64(o[0], f"([&]{{ double _v; asm(\"{asm}\" : \"=d\"(_v) : \"{sc}\"({src})); return (uint64_t)__double_as_longlong(_v); }}())")
+    if dst == "F32":
+        return wr(o[0], f"([&]{{ float _v; asm(\"{asm}\" : \"=f\"(_v) : \"{sc}\"({src})); return __float_as_uint(_v); }}())")
+    return wr(o[0], f"([&]{{ unsigned short _v; asm(\"{asm}\" : \"=h\"(_v) : \"{sc}\"({src})); return (uint32_t)_v; }}())")
+
+
 @form("I2F")
 def f_i2f(i):
     # `I2F[.F16|.F64][.type][.RZ|.RM|.RP] Rd, Ra`: to binary32 (binary16 in the low half, binary64

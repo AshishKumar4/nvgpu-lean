@@ -1,6 +1,7 @@
 // Rounding to an integral value (PTX `cvt.rXi`, SASS FRND) over a sweep of binary32 inputs of every
 // exponent and class: to nearest even, toward zero, down and up, with subnormals kept and flushed,
-// and the same four of the input widened to binary64; twelve words an input.
+// and the same four of the input widened to binary64 (F2F.F64.F32), and that narrowed back toward
+// zero (F2F.F32.F64.RZ); fourteen words an input.
 extern "C" __global__ void rounding(const unsigned* x, unsigned* y, int n) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= n) return;
@@ -15,7 +16,10 @@ extern "C" __global__ void rounding(const unsigned* x, unsigned* y, int n) {
     asm("cvt.rzi.f64.f64 %0, %1;" : "=d"(d[1]) : "d"(w));
     asm("cvt.rmi.f64.f64 %0, %1;" : "=d"(d[2]) : "d"(w));
     asm("cvt.rpi.f64.f64 %0, %1;" : "=d"(d[3]) : "d"(w));
+    float back;
+    asm("cvt.rz.f32.f64 %0, %1;" : "=f"(back) : "d"(w));
     for (int k = 0; k < 5; ++k) y[16 * i + k] = __float_as_uint(r[k]);
+    y[16 * i + 5] = __float_as_uint(back);
     for (int k = 0; k < 4; ++k) {
         unsigned long long b = __double_as_longlong(d[k]);
         y[16 * i + 6 + 2 * k] = (unsigned)b;
