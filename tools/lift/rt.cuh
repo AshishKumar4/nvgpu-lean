@@ -366,6 +366,11 @@ __device__ __forceinline__ uint32_t encode(const Codec& c, uint32_t x) {
   return sign | ((uint32_t)(ef + 512 - c.bias) << 12) | (uint32_t)(frac | (1ull << c.man));
 }
 
+// A codec whose element sits above `pad` ignored low bits (TF32 in a binary32 word: 13).
+__device__ __forceinline__ Codec codecPad(int exp, int man, int pad) {
+  Codec c = codecIeee(exp, man); c.pad = pad; return c;
+}
+
 struct Datapath {
   bool shl; uint64_t sh; int64_t alignFrac, minAlignExp; bool rn;
   uint64_t cMan, cExp, cPad; int64_t cBias, cQMin; uint64_t cExpMax;
@@ -741,6 +746,69 @@ __device__ inline void bulkRed(const Ctx& x, uint8_t* d, uint32_t src, uint32_t 
   __threadfence();
 }
 
+
+// ---------------------------------------------------------------------------------------------
+// Warp-level matrix multiply-accumulate (`mma.sync`, NV.SASS.decodeMma) and matrix moves
+// (`ldmatrix`/`stmatrix`, lifted inline by lift.py).
+
+// The tensor-core datapath `mma.sync` into binary32 uses on SM version `sm`
+// (`NV.PTX.Sem.Matrix.model`: `NV.Num.{Ampere,Hopper,Blackwell}.{f16f32,tf32f32}`): products per
+// fused step, aligned fraction bits, the alignment's smallest exponent. Blocks of 0: none.
+struct MmaModel { int blockSize, alignFrac, minAlignExp; };
+
+__device__ __forceinline__ MmaModel mmaModel(uint32_t sm, bool tf32) {
+  if (sm >= 80 && sm < 90) return tf32 ? MmaModel{4, 24, -132} : MmaModel{8, 24, -132};
+  if (sm == 90 || (sm >= 100 && sm < 130)) return tf32 ? MmaModel{8, 25, -133} : MmaModel{16, 25, -133};
+  return MmaModel{0, 0, 0};
+}
+
+// `HMMA.{16816|1688|1684}.F32[.BF16|.TF32]` by the whole warp: D = A·B + C, 16 x 8 outputs of K
+// products each, every output `Datapath.dot` over blocks of the model's size from C's value
+// (`NV.Num.TensorModel.tileWords`). Lane (g, q) = (lane / 4, lane % 4) holds the PTX fragments
+// (`aCoord`, `bCoord`, `cCoord`): A's element i in row g + 8·(r mod 2), column q·per + i mod per +
+// 4·per·⌊r/2⌋ (r = ⌊i/per⌋, per elements of `w` bits a register); B's in row q·per + i mod per +
+// 4·per·r, column g; C's and D's value i in row g + 8·⌊i/2⌋, column 2q + i mod 2. The operands are
+// encoded once (`Codec.encode`, `c`; `man` fraction bits) into the warp's stage, A by row and B by
+// column.
+template <int K, int AW, int BW>
+__device__ inline void hmma(const Ctx& x, MmaModel m, int w, const Codec& c, int man, const uint32_t (&a)[AW],
+                            const uint32_t (&b)[BW], const uint32_t (&cin)[4], uint32_t (&d)[4], uint32_t lane) {
+  const uint32_t mask = __activemask();
+  if (mask != 0xffffffffu || m.blockSize == 0) {
+    if (lane == __ffs(mask) - 1) atomicOr(x.fault, 32u);
+    return;
+  }
+  uint32_t* A = x.stage;
+  uint32_t* B = x.stage + 16 * K;
+  const int per = 32 / w;
+  const uint32_t g = lane / 4, q = lane % 4;
+  __syncwarp();
+  for (int i = 0; i < AW * per; ++i) {
+    const uint32_t e = w == 32 ? a[i] : (a[i / per] >> (w * (i % per))) & ((1u << w) - 1);
+    const int r = i / per;
+    A[(g + 8 * (r % 2)) * K + q * per + i % per + 4 * per * (r / 2)] = encode(c, e);
+  }
+  for (int i = 0; i < BW * per; ++i) {
+    const uint32_t e = w == 32 ? b[i] : (b[i / per] >> (w * (i % per))) & ((1u << w) - 1);
+    const int r = i / per;
+    B[g * K + q * per + i % per + 4 * per * r] = encode(c, e);
+  }
+  __syncwarp();
+  const Datapath dp = prepareF32(m.alignFrac, m.minAlignExp, 23, false, man, man);
+  for (int i = 0; i < 4; ++i) {
+    const uint32_t row = g + 8 * (i / 2), col = 2 * q + i % 2;
+    uint64_t acc = cin[i];
+    for (int s = 0; s < K; s += m.blockSize) acc = blockAt(dp, A + row * K + s, B + col * K + s, min(m.blockSize, K - s), acc);
+    d[i] = (uint32_t)acc;
+  }
+  __syncwarp();
+}
+
+// `.SAT` on a binary32 result (`NV.Num.satUnit`): NaN and negatives (-0 too) to +0, above one to one.
+__device__ __forceinline__ uint32_t sat32(uint32_t u) {
+  if ((u & 0x7fffffffu) > 0x7f800000u || (u >> 31)) return 0u;
+  return u > 0x3f800000u ? 0x3f800000u : u;
+}
 
 // ---------------------------------------------------------------------------------------------
 // The work pool. An instruction whose work the simulator does in one step (a warpgroup or

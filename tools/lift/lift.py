@@ -743,11 +743,12 @@ ROUND = {"RN": "rn", "RP": "ru", "RM": "rd", "RZ": "rz"}
 
 
 def arith32(i, name, n):
-    """`FADD`/`FMUL`/`FFMA` with `.FTZ` and a rounding (`.RP`, `.RM`, `.RZ`; round to nearest even
-    without one): CUDA's `__f{add,mul,maf}_r?`, inputs and result flushed under `.FTZ`."""
+    """`FADD`/`FMUL`/`FFMA` with `.FTZ`, `.SAT` and a rounding (`.RP`, `.RM`, `.RZ`; round to
+    nearest even without one): CUDA's `__f{add,mul,maf}_r?`, inputs and result flushed under
+    `.FTZ`, the result then clamped to [0, 1] under `.SAT` (`sat32`)."""
     mods = i["mods"]
     rnd = [m for m in mods if m in ROUND]
-    extra = [m for m in mods if m not in ROUND and m != "FTZ"]
+    extra = [m for m in mods if m not in ROUND and m not in ("FTZ", "SAT")]
     if extra or len(rnd) > 1:
         raise Lift(f"{i['op']} modifiers {extra or rnd}")
     r = ROUND[rnd[0]] if rnd else "rn"
@@ -757,7 +758,9 @@ def arith32(i, name, n):
     if ftz:
         srcs = [f"flush32({x})" for x in srcs]
     e = f"__float_as_uint(__{name}_{r}({', '.join(f'__uint_as_float({x})' for x in srcs)}))"
-    return wr(o[0], f"flush32({e})" if ftz else e)
+    if ftz:
+        e = f"flush32({e})"
+    return wr(o[0], f"sat32({e})" if "SAT" in mods else e)
 
 
 @form("FFMA")
@@ -1282,6 +1285,74 @@ def tmem_op(o):
     if o["k"] != "udesc" or o["kind"] != "tmem" or o["r"]["f"] != "ur":
         raise Lift("tmem operand")
     return f"(UR({o['r']['i']}) + {o['off'] & 0xffffffff:#x}u)"
+
+
+@form("HMMA")
+def f_hmma(i):
+    # `mma.sync` into binary32 from f16, bf16 or tf32 (`hmma`): `Rd, Ra, Rb, Rc`.
+    mods = i["mods"]
+    k = {"16816": 16, "1688": 8, "1684": 4}.get(mods[0] if mods else "")
+    ty = [m for m in mods[1:] if m != "F32"]
+    t = ty[0] if ty else "F16"
+    # The shapes: m16n8k16 and m16n8k8 of 16-bit inputs, m16n8k8 and m16n8k4 of TF32.
+    if "F32" not in mods or len(ty) > 1 or k not in {"F16": (16, 8), "BF16": (16, 8), "TF32": (8, 4)}.get(t, ()):
+        raise Lift(f"HMMA {'.'.join(mods)}")
+    w, codec, man = {"F16": (16, "codecIeee(5, 10)", 10), "BF16": (16, "codecIeee(8, 7)", 7),
+                     "TF32": (32, "codecPad(8, 10, 13)", 10)}[t]
+    aw, bw = k * w // 64, k * w // 128
+    o = i["ops"]
+    if len(o) < 4 or any(x["k"] != "reg" or x["r"]["f"] != "r" for x in o[:4]):
+        raise Lift("HMMA operands")
+    reg = lambda x, j: "0u" if x["r"]["i"] == 255 else f"r[{x['r']['i'] + j}]"
+    rd = o[0]["r"]["i"]
+    out = "" if rd == 255 else " ".join(f"r[{rd + j}] = _d[{j}];" for j in range(4))
+    return (f"{{ const uint32_t _a[{aw}] = {{{', '.join(reg(o[1], j) for j in range(aw))}}}; "
+            f"const uint32_t _b[{bw}] = {{{', '.join(reg(o[2], j) for j in range(bw))}}}; "
+            f"const uint32_t _c[4] = {{{', '.join(reg(o[3], j) for j in range(4))}}}; uint32_t _d[4]; "
+            f"hmma<{k}, {aw}, {bw}>(ctx, mmaModel(SM, {str(t == 'TF32').lower()}), {w}, {codec}, {man}, "
+            f"_a, _b, _c, _d, lane); {out} }}")
+
+
+@form("LDSM", "STSM")
+def f_ldsm(i):
+    # `ldmatrix`/`stmatrix` of 16-bit elements, 8 x 8 matrices (`MatMove`), by the whole warp: lane
+    # 8j + i gives row i of matrix j (16 bytes); lane t's register j is row 8j + t/4's elements
+    # 2(t%4) and 2(t%4) + 1, or, transposed (`MT88`), element t/4 of rows 8j + 2(t%4) and
+    # 8j + 2(t%4) + 1. Each row's address is read from its lane by shuffle.
+    mods = i["mods"]
+    trans = "MT88" in mods
+    num = 4 if "4" in mods else 2 if "2" in mods else 1
+    if "16" not in mods or not (trans or "M88" in mods) or \
+            any(m not in ("16", "M88", "MT88", "2", "4") for m in mods):
+        raise Lift(f"{i['op']} {'.'.join(mods)}")
+    load = i["op"] == "LDSM"
+    ao, ro = (i["ops"][1], i["ops"][0]) if load else (i["ops"][0], i["ops"][1])
+    if ro["k"] != "reg" or ro["r"]["f"] != "r":
+        raise Lift(f"{i['op']} register")
+    d = ro["r"]["i"]
+    src = lambda j: "0u" if d == 255 else f"r[{d + j}]"
+
+    def row(lane_expr):
+        # The row's shared address (the CTA's window: `ldmatrix` is not cluster-wide).
+        return f"(__shfl_sync(0xffffffffu, _a, {lane_expr}) & 0xffffffu)"
+
+    body = []
+    for j in range(num):
+        if not trans:
+            p = f"SH({row(f'{8 * j}u + lane / 4')} + 4u * (lane % 4))"
+            body.append(f'_v[{j}] = LD_SH(uint32_t, "b32", {p});' if load else f'ST_SH("b32", {p}, {src(j)});')
+            continue
+        for e in range(2):
+            p = f"SH({row(f'{8 * j + e}u + 2u * (lane % 4)')} + 2u * (lane / 4))"
+            body.append(f'_v[{j}] |= LD_SH(uint32_t, "u16", {p}) << {16 * e};' if load
+                        else f'ST_SH("b16", {p}, {src(j)} >> {16 * e});')
+    decl = ""
+    if load:
+        decl = f"uint32_t _v[{num}] = {{{', '.join('0u' for _ in range(num))}}}; "
+        if d != 255:
+            body.append(" ".join(f"r[{d + j}] = _v[{j}];" for j in range(num)))
+    return (f"{{ if (__activemask() != 0xffffffffu) atomicOr(&FAULT, 32u); else {{ "
+            f"const uint32_t _a = (uint32_t){addr(ao)}; {decl}{' '.join(body)} }} }}")
 
 
 @form("UTCHMMA")

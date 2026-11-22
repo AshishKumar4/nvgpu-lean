@@ -1,0 +1,5 @@
+{ "code": "mma_sync.cu", "function": "mma_sync", "grid": [4], "block": [128],
+  "buffers": [
+    { "name": "in", "bytes": 32768, "init": { "gen": "iota", "dtype": "u32", "start": 1006632960, "step": 2654435761 } },
+    { "name": "out", "bytes": 65536 } ],
+  "params": [ { "ordinal": 0, "ptr": "in" }, { "ordinal": 1, "ptr": "out" } ] }
