@@ -91,8 +91,9 @@ libraries and frameworks built on it load them where they would load NVIDIA's, a
   `torch_check.py run` on each GPU).
 * Accelerated (`NVGPU_LEAN_ACCEL`), on an A100-SXM4-40GB: `jax_check.py` on the emulated H100
   equals a GH200's bit for bit and on the emulated A100 the A100's (11 of 11 each), and
-  `torch_check.py`'s softmax, reductions and layer norm on the emulated H100 a GH200's (12 of 12).
-  The transformer case runs in 18 s once its kernels are compiled (each about 1.5 to 10 s, once).
+  `torch_check.py`'s softmax, reductions and layer norm on the emulated H100 a GH200's and on the
+  emulated A100 the A100's (12 of 12 each). Once its 60 kernels are compiled (136 s, once, cached),
+  the transformer case's 60 launches run in 1.3 s (0.2 s on the A100 itself).
 
 ## A mesh
 
