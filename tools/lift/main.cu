@@ -45,10 +45,16 @@ static FILE* runLog = stdout;
   fprintf(runLog, "CUDA %s at %s:%d\n", s_, __FILE__, __LINE__); return 1; } } while (0)
 
 static bool readFile(const std::string& p, std::vector<uint8_t>* v) {
-  std::ifstream f(p, std::ios::binary);
+  FILE* f = fopen(p.c_str(), "rb");
   if (!f) { fprintf(runLog, "cannot read %s\n", p.c_str()); return false; }
-  v->assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
-  return true;
+  fseek(f, 0, SEEK_END);
+  long n = ftell(f);
+  fseek(f, 0, SEEK_SET);
+  v->resize(n > 0 ? (size_t)n : 0);
+  bool ok = v->empty() || fread(v->data(), 1, v->size(), f) == v->size();
+  fclose(f);
+  if (!ok) fprintf(runLog, "cannot read %s\n", p.c_str());
+  return ok;
 }
 
 static std::map<std::string, std::vector<unsigned long long>> readMeta(const std::string& p) {
@@ -105,11 +111,13 @@ static int runDir(const Kernel& k, const std::string& dir, bool out1, int reps, 
   const auto t0 = std::chrono::steady_clock::now();
   double tRead = 0, tSetup = 0, tRun = 0;
   auto meta = readMeta(dir + "/meta.txt");
+  const double tMeta = msSince(t0);
   std::vector<uint8_t> const0, global, module, final_;
   if (!readFile(dir + "/const0.bin", &const0) || !readFile(dir + "/global.bin", &global)) return 1;
   bool hasModule = meta.count("moduleBase") > 0;
   if (hasModule && !readFile(dir + "/module.bin", &module)) return 1;
   if (!out1 && !readFile(dir + "/final.bin", &final_)) return 1;
+  const double tFiles = msSince(t0) - tMeta;
   dim3 grid(meta["grid"][0], meta["grid"][1], meta["grid"][2]);
   dim3 block(meta["block"][0], meta["block"][1], meta["block"][2]);
   const uint32_t threads = block.x * block.y * block.z, warps = (threads + 31) / 32;
@@ -256,7 +264,8 @@ static int runDir(const Kernel& k, const std::string& dir, bool out1, int reps, 
       if (!save("out-module.bin", m)) return 1;
     }
     fprintf(runLog, "fault flags %#x, kernel time %.3f ms\n", fault, first);
-    fprintf(runLog, "phases: read %.1f ms, setup %.1f ms, run %.1f ms, out %.1f ms\n", tRead, tSetup, tRun,
+    fprintf(runLog, "phases: read %.1f ms (meta %.1f, files %.1f of %zu bytes), setup %.1f ms, run %.1f ms, out %.1f ms\n",
+            tRead, tMeta, tFiles, const0.size() + global.size() + module.size(), tSetup, tRun,
             msSince(t0) - tRead - tSetup - tRun);
     return fault == 0 ? 0 : 4;
   }
