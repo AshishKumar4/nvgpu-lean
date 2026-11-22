@@ -258,6 +258,22 @@ def tests : Except String T := do
   t := t.check "a full MIO queue leaves the LG queue room" (m.accepts 0 0 1)
   let (m', _) ← m.advance 0
   t := t.check "MIO queue drains" (m'.accepts 0 0 0)
+  -- Shared and global accesses queue apart; a warp's order across the two queues still holds.
+  -- Warp 4's global stores back up sub-partition 0's global queue, warp 0's store waits behind
+  -- them: its release to shared memory after waits for that store, and its global acquire holds
+  -- its shared load after.
+  let backlog := (List.range 8).map fun i =>
+    (100, origin (slot := 4), req .global .st (lanes fun l => base + g (300 + i) + 16 * l.toUInt64) (bytes := 16)
+      (data := Array.replicate 128 1))
+  let rel : Req := { req .shared .st [some 32] (data := #[5]) with sem := .release, scope := .gpu }
+  let (_, ds) ← runAll fresh (backlog ++ [(101, origin, req .global .st [some (base + g 400)] (data := #[6])),
+                                         (102, origin, rel)])
+  t := t.check "a release waits for the warp's store in the other queue" (ds[9]!.at_ > ds[8]!.at_)
+    s!"{ds[8]!.at_} {ds[9]!.at_}"
+  let acq : Req := { req .global .ld [some (base + g 401)] with sem := .acquire, scope := .gpu }
+  let (_, ds) ← runAll fresh (backlog ++ [(101, origin, acq), (102, origin, req .shared .ld [some 32])])
+  t := t.check "a load waits for the warp's acquire in the other queue" (ds[9]!.at_ > ds[8]!.at_)
+    s!"{ds[8]!.at_} {ds[9]!.at_}"
   -- A barrier may count a warp once its requests have performed, not before.
   let (m1, _) := (fresh.reserve 0 0 0 0).issue 10 origin (req .shared .st [some 64] (data := #[7]))
   let (m2, _) ← m1.advance 10
