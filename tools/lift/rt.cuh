@@ -576,7 +576,7 @@ __device__ __forceinline__ void tmemPos(int shape, uint32_t t, uint32_t i, uint3
 
 // `LDTM`/`STTM` for this thread: `regs` registers at `taddr` (`moveReq`); `pack`, two 16-bit
 // columns a register. The lanes must be the warp's quarter; an address in lanes 0-31 names it.
-__device__ inline void tmemMove(const Ctx& x, bool ld, int shape, uint32_t regs, bool pack, uint32_t taddr,
+static __device__ __noinline__ void tmemMove(const Ctx& x, bool ld, int shape, uint32_t regs, bool pack, uint32_t taddr,
                                 uint32_t warp, uint32_t t, uint32_t* r) {
   uint32_t lo = 32 * (warp % 4), a = taddr >> 16, c0 = taddr & 0xffffu, l0 = a < 32 ? lo + a : a;
   uint32_t per = pack ? 2 * regs : regs;
@@ -791,7 +791,7 @@ __device__ __forceinline__ MmaModel mmaModel(uint32_t sm, bool tf32) {
 // encoded once (`Codec.encode`, `c`; `man` fraction bits) into the warp's stage, A by row and B by
 // column.
 template <int K, int AW, int BW>
-__device__ inline void hmma(const Ctx& x, MmaModel m, int w, const Codec& c, int man, const uint32_t (&a)[AW],
+static __device__ __noinline__ void hmma(const Ctx& x, MmaModel m, int w, const Codec& c, int man, const uint32_t (&a)[AW],
                             const uint32_t (&b)[BW], const uint32_t (&cin)[4], uint32_t (&d)[4], uint32_t lane,
                             uint32_t mask) {
   if (mask != 0xffffffffu || m.blockSize == 0) {
@@ -846,6 +846,9 @@ __device__ __forceinline__ uint32_t sat32(uint32_t u) {
   return u > 0x3f800000u ? 0x3f800000u : u;
 }
 
+// The heavy helpers (a warpgroup or tensor-memory MMA, a TMA copy, the work pool's tasks) are kept
+// out of line and static: compiled once a kernel, not at every call site (a TMA and wgmma GEMM's
+// lifted kernel compiled in 18 s inlined, 3 s out of line), and not at all when unused.
 // ---------------------------------------------------------------------------------------------
 // The work pool. An instruction whose work the simulator does in one step (a warpgroup or
 // tensor-memory MMA, a TMA or bulk copy) is a job of independent tasks: an MMA's tiles of 16 output
@@ -967,7 +970,7 @@ __device__ inline uint32_t* mmaOut(const Ctx& x, const MmaJob& j, uint32_t* buf,
 // accumulators, when the issuing warp runs a warpgroup MMA's task whole (its outputs are the lanes'
 // own values, `tilePos`).
 template <class Sync>
-__device__ inline void mmaTask(const Ctx& x, const MmaJob& j, uint32_t* buf, uint32_t t, uint32_t r, uint32_t n,
+static __device__ __noinline__ void mmaTask(const Ctx& x, const MmaJob& j, uint32_t* buf, uint32_t t, uint32_t r, uint32_t n,
                                uint32_t* st, Sync sync, uint32_t* own) {
   const int man = j.ty == BF16 ? 7 : 10;
   const Codec c = j.ty == BF16 ? codecIeee(8, 7) : codecIeee(5, 10);
@@ -1011,7 +1014,7 @@ __device__ __forceinline__ uint32_t rowsPerTask(const BoxShape& b) { return max(
 // Copy task `t` by `n` lanes (`r` this lane's rank): 4 KB of bytes, or the box's rows in as many
 // bytes, a lane a 16-byte unit of a row at a time (`TensorMap.tile`: elements outside the tensor
 // read as zeros and are not stored; the swizzle permutes whole 16-byte units).
-__device__ inline void copyTask(const Ctx& x, const CopyJob& j, uint32_t t, uint32_t r, uint32_t n) {
+static __device__ __noinline__ void copyTask(const Ctx& x, const CopyJob& j, uint32_t t, uint32_t r, uint32_t n) {
   if (j.kind == 2) {
     const uint32_t lo = t * COPY_TASK_BYTES, hi = min(j.size, lo + COPY_TASK_BYTES);
     for (uint32_t b = lo + 16 * r; b < hi; b += 16 * n) copy16(j.dst + b, j.src + b, min(16u, hi - b));
@@ -1081,7 +1084,7 @@ __device__ inline int claimTask(Slot* s, unsigned long long gen, uint32_t tasks)
 // beside the helpers when `work`, and waited for. `back(mine)` then runs on every lane, `mine`
 // the tasks below 64 the issuer ran itself.
 template <class Sync, class Back>
-__device__ inline void runJob(const Ctx& x, const Job& j, uint32_t warp, uint32_t r, uint32_t n, uint32_t mask,
+static __device__ __noinline__ void runJob(const Ctx& x, const Job& j, uint32_t warp, uint32_t r, uint32_t n, uint32_t mask,
                               Sync sync, uint32_t* own, bool work, Back back) {
   if (x.helpers == 0) {
     for (uint32_t t = 0; t < j.tasks; ++t) runTask(j, t, r, n, x.stage, sync, own);
@@ -1119,7 +1122,7 @@ __device__ inline void runJob(const Ctx& x, const Job& j, uint32_t warp, uint32_
 
 // A helper CTA's warps: the job at the ring's head, its tasks claimed one by one until none is
 // left, then passed; asleep while the ring is empty; gone once every lifted warp has exited.
-__device__ inline void serve(const Ctx& x, uint32_t* smem) {
+static __device__ __noinline__ void serve(const Ctx& x, uint32_t* smem) {
   const uint32_t threads = blockDim.x * blockDim.y * blockDim.z;
   const uint32_t flat = threadIdx.x + blockDim.x * (threadIdx.y + blockDim.y * threadIdx.z);
   const uint32_t lane = flat % 32, warp = flat / 32, n = min(32u, threads - 32 * warp);
@@ -1176,7 +1179,7 @@ __device__ inline void serve(const Ctx& x, uint32_t* smem) {
 // f16/bf16 inputs and an f32 accumulator: blocks of 16, 25 fraction bits aligned, exponent floor
 // -133, the sum truncated to binary32 (`Hopper.f16f32`).
 template <int N>
-__device__ inline void hgmma(const Ctx& x, InType ty, uint64_t da, uint64_t db, bool aK, bool bK, bool negA,
+static __device__ __noinline__ void hgmma(const Ctx& x, InType ty, uint64_t da, uint64_t db, bool aK, bool bK, bool negA,
                              bool negB, bool scaleD, uint32_t* acc, uint32_t lane, uint32_t warp, uint32_t mask) {
   if (mask != 0xffffffffu) { if (lane == __ffs(mask) - 1) atomicOr(x.fault, 32u); return; }
   Job j;
@@ -1206,7 +1209,7 @@ __device__ inline void hgmma(const Ctx& x, InType ty, uint64_t da, uint64_t db, 
 // shared memory, issued by one thread (`Tcgen05.Inst.op`): D = A·B (+ D), the B200's datapath
 // (`NV.Num.Blackwell.f16f32`: Hopper's), in tiles of 16 x 16. `pair`: `.cta_group::2`, M 256, rows
 // and columns 128/N2 on the peer (the next rank). Others set the fault flag.
-__device__ inline void utcmma(const Ctx& x, uint64_t da, uint64_t db, uint32_t d, uint32_t idesc, bool accumulate,
+static __device__ __noinline__ void utcmma(const Ctx& x, uint64_t da, uint64_t db, uint32_t d, uint32_t idesc, bool accumulate,
                               bool pair, uint32_t lane, uint32_t warp) {
   auto f = [&](int lo, int w) { return (idesc >> lo) & ((1u << w) - 1); };
   uint32_t dtype = f(4, 2), atype = f(7, 3), btype = f(10, 3);
@@ -1231,7 +1234,7 @@ __device__ inline void utcmma(const Ctx& x, uint64_t da, uint64_t db, uint32_t d
 // `UTMALDG`: the box into shared memory at `smem` (zeros outside the tensor), of this CTA or, with
 // bit 16 of `ranks` (`.MULTICAST`), of each cluster rank its bits 0-15 name, at `smem`'s offset; then
 // a complete-tx of its bytes on the mbarrier at `mbar` (at its offset in each). Issued by one lane.
-__device__ inline void tmaLoad(const Ctx& x, const TensorMapView& m, const int32_t* coords, uint32_t smem,
+static __device__ __noinline__ void tmaLoad(const Ctx& x, const TensorMapView& m, const int32_t* coords, uint32_t smem,
                                uint32_t mbar, uint32_t ranks, uint32_t lane, uint32_t warp) {
   if (!m.ok) return;
   const BoxShape b = boxShape(m);
@@ -1251,7 +1254,7 @@ __device__ inline void tmaLoad(const Ctx& x, const TensorMapView& m, const int32
 }
 
 // `UTMASTG`: the box's elements inside the tensor from shared memory at `smem`. Issued by one lane.
-__device__ inline void tmaStore(const Ctx& x, const TensorMapView& m, const int32_t* coords, uint32_t smem,
+static __device__ __noinline__ void tmaStore(const Ctx& x, const TensorMapView& m, const int32_t* coords, uint32_t smem,
                                 uint32_t lane, uint32_t warp) {
   if (!m.ok) return;
   const BoxShape b = boxShape(m);
@@ -1268,7 +1271,7 @@ __device__ inline void tmaStore(const Ctx& x, const TensorMapView& m, const int3
 // Bulk copies (`UBLKCP`, `NV.SASS.Async.ublkcp`): `size` bytes from `src` to `dst` (shared to shared
 // across the cluster, global to shared, or shared to global), complete when issued; then, unless
 // `mbar` is NONE, a complete-tx of the bytes on the mbarrier at `mbar`. Issued by one lane.
-__device__ inline void bulkCopy(const Ctx& x, uint8_t* dst, const uint8_t* src, uint32_t size, uint32_t mbar,
+static __device__ __noinline__ void bulkCopy(const Ctx& x, uint8_t* dst, const uint8_t* src, uint32_t size, uint32_t mbar,
                                 uint32_t lane, uint32_t warp) {
   Job j;
   j.x = x; j.kind = 1; j.buf = nullptr; j.tasks = (size + COPY_TASK_BYTES - 1) / COPY_TASK_BYTES;
