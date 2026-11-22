@@ -402,12 +402,27 @@ def f_ret(i):
 @form("BSSY")
 def f_bssy(i):
     b = i["ops"][0]["r"]["i"]
-    return f"BREG({b}) = __activemask();"
+    if not HAS_BREAK:
+        return f"BREG({b}) = __activemask();"
+    # The barrier's shared state cleared by one lane before any of them arrives or breaks out.
+    return (f"{{ const uint32_t _m = __activemask(); BREG({b}) = _m; if (lane == __ffs(_m) - 1u) "
+            f"{{ s_bar[warp][{b}][0] = 0u; s_bar[warp][{b}][1] = 0u; }} __syncwarp(_m); }}")
+
+
+@form("BREAK")
+def f_break(i):
+    # `BREAK Bb`: the executing lanes out of the barrier's mask (`bsync`).
+    o = i["ops"][0]
+    if o["k"] != "reg" or o["r"]["f"] != "b":
+        raise Lift("BREAK operand")
+    return f"atomicOr(&s_bar[warp][{o['r']['i']}][1], __activemask());"
 
 
 @form("BSYNC")
 def f_bsync(i):
     b = i["ops"][0]["r"]["i"]
+    if HAS_BREAK:
+        return f"bsync(s_bar[warp][{b}], BREG({b}), &LIVE, lane);"
     return f"__syncwarp(BREG({b}) & LIVE);"
 
 
@@ -1574,6 +1589,8 @@ def emit(i):
 def main():
     lines = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
     meta, prog = lines[0], lines[1:]
+    global HAS_BREAK
+    HAS_BREAK = any(i["op"] == "BREAK" for i in prog)
     BANKS.update({int(b): ws for b, ws in meta.get("banks", {}).items()})
     RET_SITES.update(i["pc"] + 16 for i in prog if i["op"] == "CALL")
     targets = {o["pc"] for i in prog for o in i["ops"] if o["k"] == "target"} | RET_SITES
@@ -1593,6 +1610,7 @@ def main():
     print(f"// Lifted from {meta['kernel']} (sm_{meta['sm']}), {len(prog)} instructions, by tools/lift/lift.py.")
     print(f"#define LIFT_LOCAL {max(meta.get('localBytes', 0), 4)}")
     print(f"#define LIFT_THREADS {THREADS}")
+    print(f"#define LIFT_BREAK {int(HAS_BREAK)}")
     # A kernel that reads the clock writes what no simulator's run can match (main.cu reports it).
     print(f"#define LIFT_CLOCK {int(READS_CLOCK)}")
     # `Exec.localWindowAt`: the local window's base in constant bank 0 (sm_100 on: 0x2f8).
@@ -1629,6 +1647,7 @@ if __name__ == "__main__":
         tables(sys.argv[2])
         sys.exit(0)
     THREADS = 384
+    HAS_BREAK = False
     READS_CLOCK = False
     if sys.argv[1:2] == ["--threads"]:
         THREADS = int(sys.argv[2])

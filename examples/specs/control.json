@@ -1,0 +1,5 @@
+{ "code": "control.cu", "function": "control", "grid": [8], "block": [128],
+  "buffers": [
+    { "name": "in", "bytes": 16384, "init": { "gen": "iota", "dtype": "u32", "start": 12345, "step": 2654435761 } },
+    { "name": "out", "bytes": 4096 } ],
+  "params": [ { "ordinal": 0, "ptr": "in" }, { "ordinal": 1, "ptr": "out" } ] }

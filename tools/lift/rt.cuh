@@ -804,6 +804,21 @@ __device__ inline void hmma(const Ctx& x, MmaModel m, int w, const Codec& c, int
   __syncwarp();
 }
 
+// `BSYNC` in a kernel with `BREAK` (`NV.SASS.Sem`: a `BREAK` takes its lanes out of the barrier's
+// mask): this lane arrives at barrier `bar` (arrived lanes, broken-out lanes) of mask `m`, waits
+// until every lane of the mask that has not broken out or exited (`live`) has arrived, and the
+// lanes leave together.
+__device__ inline void bsync(uint32_t* bar, uint32_t m, const volatile uint32_t* live, uint32_t lane) {
+  atomicOr(&bar[0], 1u << lane);
+  uint32_t need;
+  for (unsigned ns = 8;; ns = min(2 * ns, 256u)) {
+    need = m & *live & ~*(volatile uint32_t*)&bar[1];
+    if ((*(volatile uint32_t*)&bar[0] & need) == need) break;
+    __nanosleep(ns);
+  }
+  __syncwarp(need);
+}
+
 // `.SAT` on a binary32 result (`NV.Num.satUnit`): NaN and negatives (-0 too) to +0, above one to one.
 __device__ __forceinline__ uint32_t sat32(uint32_t u) {
   if ((u & 0x7fffffffu) > 0x7f800000u || (u >> 31)) return 0u;
@@ -1255,6 +1270,7 @@ __device__ inline void bulkCopy(const Ctx& x, uint8_t* dst, const uint8_t* src, 
   extern __shared__ uint32_t lift_dyn[];                                                         \
   if (blockIdx.x >= ctx0.ctas) { lift::serve(ctx0, lift_dyn); return; }                         \
   __shared__ uint32_t s_live[LIFT_WARPS];                                                        \
+  LIFT_BARS                                                                                      \
   const uint32_t tidx = threadIdx.x, tidy = threadIdx.y, tidz = threadIdx.z;                     \
   const uint32_t flat = tidx + blockDim.x * (tidy + blockDim.y * tidz);                          \
   const uint32_t lane = flat % 32, warp = flat / 32;                                             \
@@ -1297,6 +1313,13 @@ __device__ inline void bulkCopy(const Ctx& x, uint8_t* dst, const uint8_t* src, 
 // B registers (`BSSY`'s lanes): each thread's own copy, so lanes that independent thread scheduling
 // runs apart cannot overwrite each other's.
 #define BREG(b) (breg[(b)])
+// A kernel with `BREAK` (lift.py's LIFT_BREAK): its convergence barriers' state shared by the warp's
+// lanes (`bsync`), per barrier the lanes arrived at its `BSYNC` and those that broke out.
+#if defined(LIFT_BREAK) && LIFT_BREAK
+#define LIFT_BARS __shared__ uint32_t s_bar[LIFT_WARPS][16][2];
+#else
+#define LIFT_BARS
+#endif
 #define LIVE (s_live[warp])
 #define C32(off) lift::ld32c(ctx, (uint32_t)(off))
 // A shared address names the CTA by its cluster rank in bits 24 and up (`Exec.sharedAt`): the
