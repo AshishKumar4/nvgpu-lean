@@ -134,8 +134,16 @@ static int accelBinary(const char *dir, unsigned threads, char *bin, size_t binS
   return accelRun("lifting and compiling the kernel", cmd, log);
 }
 
-// Launch `o` on the host's GPU (the lock held).
+static double accelNow(void) {
+  struct timespec t;
+  clock_gettime(CLOCK_MONOTONIC, &t);
+  return (double)t.tv_sec + 1e-9 * (double)t.tv_nsec;
+}
+
+// Launch `o` on the host's GPU (the lock held). With NVGPU_LEAN_VERBOSE, its phases' times.
 static CUresult accelKernel(Op *o) {
+  double tp[6];
+  tp[0] = accelNow();
   CUfunction f = o->f;
   char dir[600];
   snprintf(dir, sizeof dir, "%s/accel", cacheDir);
@@ -170,17 +178,21 @@ static CUresult accelKernel(Op *o) {
     goto done;
   }
   lean_dec(msg);
+  tp[1] = accelNow();
   if (!(g = accelRead(lo, hi - lo)) || !(m = accelRead(mlo, mhi - mlo))) goto done;
   snprintf(path, sizeof path, "%s/global.bin", dir);
   if (!spill(path, lean_sarray_cptr(g), hi - lo)) goto done;
   snprintf(path, sizeof path, "%s/module.bin", dir);
   if (!spill(path, lean_sarray_cptr(m), mhi - mlo)) goto done;
+  tp[2] = accelNow();
   if (!accelBinary(dir, o->block[0] * o->block[1] * o->block[2], bin, sizeof bin)) goto done;
+  tp[3] = accelNow();
   const char *libs = getenv("NVGPU_LEAN_ACCEL_LIBRARY_PATH");
   snprintf(cmd, sizeof cmd, "env -u LD_PRELOAD LD_LIBRARY_PATH='%s' '%s' '%s' --out", libs ? libs : "",
            bin, dir);
   snprintf(path, sizeof path, "%s/run.log", dir);
   if (!accelRun("the lifted kernel", cmd, path)) goto done;
+  tp[4] = accelNow();
   size_t n;
   uint8_t *after;
   snprintf(path, sizeof path, "%s/out.bin", dir);
@@ -201,6 +213,11 @@ static CUresult accelKernel(Op *o) {
   ok = accelTakeBack(mlo, lean_sarray_cptr(m), after, n);
   free(after);
   if (ok) r = CUDA_SUCCESS;
+  tp[5] = accelNow();
+  if (getenv("NVGPU_LEAN_VERBOSE"))
+    fprintf(stderr, "nvgpu-lean: accel %s: export %.3f s, memory out %.3f s (%.1f MB), build %.3f s, run %.3f s, "
+            "memory back %.3f s\n", f->name, tp[1] - tp[0], tp[2] - tp[1], (double)(hi - lo + mhi - mlo) / 1e6,
+            tp[3] - tp[2], tp[4] - tp[3], tp[5] - tp[4]);
 done:
   if (g) lean_dec(g);
   if (m) lean_dec(m);
