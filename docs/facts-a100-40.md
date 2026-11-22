@@ -111,7 +111,7 @@ The role column says who reads a fact (`NV/Core/Roles.lean`): only `engine` fact
 | `HMMA.TF32` | tensor, every 6, latency 16 | encoded | engine | `fixtures`  |  |
 | `HMMA` | tensor, every 6, latency 23 | encoded | engine | `fixtures`  |  |
 | `S2R` | cbu, every 1, latency 20 | inferred | engine | `analogy`  |  |
-| `S2UR` | cbu, every 1, latency 20 | inferred | engine | `analogy`  |  |
+| `S2UR` | cbu, every 1, latency 36 | inferred | engine | `meas-gh200`  |  |
 | `CS2R` | alu, every 2, latency 4 | encoded | engine | `fixtures`  |  |
 | `LDC` | lsu, every 2, latency 26, reads released at 10 | inferred (Ampere) | engine | `huerta2025` Table 2: 32-bit constant load, immediate address: RAW 26, WAR 10 |  |
 | `UIMAD` | uniform, every 2, latency 4 | inferred (H200) | engine | `meas-h200`  |  |

@@ -112,7 +112,7 @@ The role column says who reads a fact (`NV/Core/Roles.lean`): only `engine` fact
 | `HMMA.TF32` | tensor, every 6, latency 16 | encoded | engine | `fixtures`  |  |
 | `HMMA` | tensor, every 6, latency 19 | inferred | engine | `fixtures`  |  |
 | `S2R` | cbu, every 1, latency 20 | inferred | engine | `analogy`  |  |
-| `S2UR` | cbu, every 1, latency 20 | inferred | engine | `analogy`  |  |
+| `S2UR` | cbu, every 1, latency 36 | inferred | engine | `meas-gh200`  |  |
 | `CS2R` | alu, every 2, latency 4 | encoded | engine | `fixtures`  |  |
 | `LDC` | lsu, every 2, latency 26, reads released at 10 | inferred (Ampere) | engine | `huerta2025` Table 2: 32-bit constant load, immediate address: RAW 26, WAR 10 |  |
 | `UIMAD` | uniform, every 2, latency 4 | inferred (H200) | engine | `meas-h200`  |  |
@@ -253,7 +253,7 @@ The role column says who reads a fact (`NV/Core/Roles.lean`): only `engine` fact
 | `LD` | lsu, every 1, latency 654, reads released at 11 | inferred (H200) | engine | `meas-h200`  |  |
 | `ST` | lsu, every 1, reads released at 14 | inferred (Ampere) | engine | `huerta2025` Table 2: 32-bit global store, WAR 14 |  |
 | `LDCU` | lsu, every 2, latency 26, reads released at 10 | inferred (Ampere) | engine | `huerta2025` Table 2: 32-bit constant load, immediate address: RAW 26, WAR 10 |  |
-| `CS2UR` | cbu, every 1, latency 20 | inferred | engine | `analogy`  |  |
+| `CS2UR` | cbu, every 1, latency 36 | inferred | engine | `meas-gh200`  |  |
 | `UI2F` | xu, every 8, latency 13 | inferred | engine | `cuda-guide-12.6` §5.4.1 Table 4: 16 results per clock per SM |  |
 | `IADD` | alu, every 2, latency 4 | inferred | engine | `cuda-guide-12.6` §5.4.1 Table 4: 64 results per clock per SM |  |
 | `UFMUL` | fmalite, every 1, latency 4 | inferred | engine | `cuda-guide-12.6` §5.4.1 Table 4: 128 results per clock per SM |  |

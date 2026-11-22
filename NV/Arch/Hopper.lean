@@ -219,7 +219,7 @@ def ops : Array OpRule := #[
     ""),
   op "S2R" #[] (inferred (tm .cbu 1 20) "analogy" ""
     ""),
-  op "S2UR" #[] (inferred (tm .cbu 1 20) "analogy" "" ""),
+  op "S2UR" #[] (inferred (tm .cbu 1 36) "meas-gh200" "" ""),
   op "CS2R" #[] (encoded (tm .alu 2 4) ""),
   op "LDC" #[] (inferred (tm .lsu 2 26 10) "huerta2025" "Table 2: 32-bit constant load, immediate
     address: RAW 26, WAR 10"
