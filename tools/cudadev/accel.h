@@ -250,6 +250,9 @@ static int accelServe(const char *cubin, const char *dir) {
   return 0;
 }
 
+// The last accelerated launch's directory.
+static char accelLastDir[600];
+
 static double accelNow(void) {
   struct timespec t;
   clock_gettime(CLOCK_MONOTONIC, &t);
@@ -333,6 +336,59 @@ static CUresult accelKernel(Op *o) {
 done:
   if (g) lean_dec(g);
   if (m) lean_dec(m);
-  if (r == CUDA_SUCCESS) accelRemove(dir);
+  if (r == CUDA_SUCCESS && !getenv("NVGPU_LEAN_ACCEL_CHECK")) accelRemove(dir);
+  snprintf(accelLastDir, sizeof accelLastDir, "%s", dir);
+  return r;
+}
+
+// NVGPU_LEAN_ACCEL_CHECK: every accelerated launch run by the simulator too, from the same memory,
+// and the two results compared. A launch that differs is reported with its directory (kept, with
+// the simulator's result as final.bin, which `tools/lift/lift-run` compares against); the
+// simulator's result is the one kept. Slow: it simulates every launch.
+static CUresult accelChecked(Op *o) {
+  CUdeviceptr lo = DEVICE_BASE, hi = DEVICE_BASE;
+  for (Alloc *a = G.allocs; a; a = a->next)
+    if (a->base + a->size > hi) hi = a->base + a->size;
+  lean_object *before = accelRead(lo, hi - lo);
+  if (!before) return CUDA_ERROR_LAUNCH_FAILED;
+  CUresult r = accelKernel(o);
+  lean_object *accel = r == CUDA_SUCCESS ? accelRead(lo, hi - lo) : NULL;
+  if (!accel) {
+    lean_dec(before);
+    return r == CUDA_SUCCESS ? CUDA_ERROR_LAUNCH_FAILED : r;
+  }
+  // The memory as it was, then the simulator's run.
+  if (!accelTakeBack(lo, lean_sarray_cptr(accel), lean_sarray_cptr(before), hi - lo)) r = CUDA_ERROR_LAUNCH_FAILED;
+  lean_dec(before);
+  lean_object *sim = NULL;
+  if (r == CUDA_SUCCESS) {
+    lean_object *pb = lean_alloc_sarray(1, o->paramBytes, o->paramBytes);
+    memcpy(lean_sarray_cptr(pb), o->params, o->paramBytes);
+    lean_object *res = ioValue(nvgpu_launch(G.lean, (uint32_t)o->f->k[gcur], o->grid[0], o->grid[1], o->grid[2],
+                                            o->block[0], o->block[1], o->block[2], o->cluster[0], o->cluster[1],
+                                            o->cluster[2], o->smem, pb, 1, lean_io_mk_world()));
+    if (!res) {
+      G.lean = NULL;
+      r = CUDA_ERROR_LAUNCH_FAILED;
+    } else if (!take(res) || !(sim = accelRead(lo, hi - lo)))
+      r = CUDA_ERROR_LAUNCH_FAILED;
+  }
+  if (sim) {
+    const uint8_t *a = lean_sarray_cptr(accel), *s = lean_sarray_cptr(sim);
+    size_t n = hi - lo, bad = 0, first = 0;
+    for (size_t i = 0; i < n; i++)
+      if (a[i] != s[i] && bad++ == 0) first = i;
+    char path[700];
+    snprintf(path, sizeof path, "%s/final.bin", accelLastDir);
+    if (bad) {
+      spill(path, s, n);
+      fprintf(stderr, "nvgpu-lean: accel check: %s differs from the simulator in %zu bytes (first at %#llx): %s\n",
+              o->f->name, bad, (unsigned long long)(lo + first), accelLastDir);
+    } else {
+      accelRemove(accelLastDir);
+    }
+    lean_dec(sim);
+  }
+  lean_dec(accel);
   return r;
 }

@@ -34,6 +34,7 @@ libraries and frameworks built on it load them where they would load NVIDIA's, a
 | `NVGPU_LEAN_UNTIL=CYCLE` | each launch stopped at that cycle, a sample of a launch too long to run whole (`sim --until`); later launches read what it wrote; the launch cache off; its report to stderr |
 | `NVGPU_LEAN_REPORT=1` | each launch's report to stderr, as `lake exe sim` prints it (cycles, instructions, memory traffic, stalls, the binding resource) |
 | `NVGPU_LEAN_ACCEL` | the host GPU's target (`sm_80`, `sm_90a`, …): launches run on it as the lifter's CUDA (`accel.h`: each kernel compiled once to a cubin and cached, one harness process running every launch), with `NVGPU_LEAN_LIFT` (the `tools/lift` directory), `NVGPU_LEAN_ACCEL_NVCC` and `NVGPU_LEAN_ACCEL_NVCC_FLAGS` (the host's compiler), `NVGPU_LEAN_ACCEL_LIBRARY_PATH` (where the host's libcuda is) |
+| `NVGPU_LEAN_ACCEL_CHECK=1` | every accelerated launch also simulated from the same memory and the results compared; one that differs is reported with its directory, kept with the simulator's result as `final.bin` (`tools/lift/main.cu` compares against it) |
 
 ## How it works
 

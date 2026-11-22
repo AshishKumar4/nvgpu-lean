@@ -119,6 +119,7 @@ static int isLegacy(CUstream s) {
 static CUresult captureOp(CUstream s, Op *o);  // graph.h
 static CUresult runExec(Op *o);              // graph.h
 static CUresult accelKernel(Op *o);          // accel.h
+static CUresult accelChecked(Op *o);         // accel.h
 static const char *accelArch(void);          // accel.h
 static void graphFree(CUgraph g);
 static void armLaunch(Op *o);                // workLock held
@@ -219,7 +220,7 @@ static CUresult runKernel(Op *o) {
   uint64_t c0 = G.lean ? nvgpu_device_cycles(lend()) : 0;
   CUresult r = CUDA_SUCCESS;
   if (accelArch())
-    r = accelKernel(o);
+    r = getenv("NVGPU_LEAN_ACCEL_CHECK") ? accelChecked(o) : accelKernel(o);
   else {
     lean_object *pb = lean_alloc_sarray(1, o->paramBytes, o->paramBytes);
     memcpy(lean_sarray_cptr(pb), o->params, o->paramBytes);
