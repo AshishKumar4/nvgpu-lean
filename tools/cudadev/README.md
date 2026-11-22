@@ -33,7 +33,7 @@ libraries and frameworks built on it load them where they would load NVIDIA's, a
 | `NVGPU_LEAN_SPANS=1` | each CTA's span as it finishes (`cta ID sm SM start S end E`) to stderr |
 | `NVGPU_LEAN_UNTIL=CYCLE` | each launch stopped at that cycle, a sample of a launch too long to run whole (`sim --until`); later launches read what it wrote; the launch cache off; its report to stderr |
 | `NVGPU_LEAN_REPORT=1` | each launch's report to stderr, as `lake exe sim` prints it (cycles, instructions, memory traffic, stalls, the binding resource) |
-| `NVGPU_LEAN_ACCEL` | the host GPU's target (`sm_80`, `sm_90a`, …): launches run on it as the lifter's CUDA (`accel.h`), with `NVGPU_LEAN_LIFT` (the `tools/lift` directory), `NVGPU_LEAN_ACCEL_NVCC` and `NVGPU_LEAN_ACCEL_NVCC_FLAGS` (the host's compiler), `NVGPU_LEAN_ACCEL_LIBRARY_PATH` (where the host's libcuda is) |
+| `NVGPU_LEAN_ACCEL` | the host GPU's target (`sm_80`, `sm_90a`, …): launches run on it as the lifter's CUDA (`accel.h`: each kernel compiled once to a cubin and cached, one harness process running every launch), with `NVGPU_LEAN_LIFT` (the `tools/lift` directory), `NVGPU_LEAN_ACCEL_NVCC` and `NVGPU_LEAN_ACCEL_NVCC_FLAGS` (the host's compiler), `NVGPU_LEAN_ACCEL_LIBRARY_PATH` (where the host's libcuda is) |
 
 ## How it works
 
@@ -88,6 +88,10 @@ libraries and frameworks built on it load them where they would load NVIDIA's, a
   cumsum, GELU, exp and tanh, a layer norm) on the emulated H100 and A100 equal a GH200's and an
   A100-SXM4-40GB's bit for bit, 12 of 12 outputs each (the device-torch row's outputs against
   `torch_check.py run` on each GPU).
+* Accelerated (`NVGPU_LEAN_ACCEL`), on an A100-SXM4-40GB: `jax_check.py` on the emulated H100
+  equals a GH200's bit for bit and on the emulated A100 the A100's (11 of 11 each), and
+  `torch_check.py`'s softmax, reductions and layer norm on the emulated H100 a GH200's (12 of 12).
+  The transformer case runs in 18 s once its kernels are compiled (each about 1.5 to 10 s, once).
 
 ## A mesh
 

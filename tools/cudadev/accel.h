@@ -5,10 +5,10 @@
 // the device exports it (nvgpu_launch_export: the harness's const0.bin, kernel.jsonl and meta.txt)
 // with the device memory's two segments (global.bin: the allocations, from DEVICE_BASE to the end
 // of the last; module.bin: the modules' data), the lifter translates the kernel and the host's nvcc
-// builds it into the harness (tools/lift/main.cu) once per kernel, block size and lifter, the
-// harness runs it, and the device takes back the pages it changed. Functional: it counts no
-// cycles. A fault the lifted kernel detects, or a kernel the lifter cannot translate, fails the
-// launch.
+// compiles it to a cubin once per kernel, block size and lifter, the harness (tools/lift/main.cu's
+// `lift-run --serve`, one process for every launch, built once) loads and runs it, and the device
+// takes back the pages it changed. Functional: it counts no cycles. A fault the lifted kernel
+// detects, or a kernel the lifter cannot translate, fails the launch.
 //
 // Environment: NVGPU_LEAN_LIFT (the tools/lift directory; its mufu_tables.cuh is used when there, as
 // in a copy without the repository's NV/Num/MufuTables.lean, else generated), NVGPU_LEAN_ACCEL_NVCC (default nvcc)
@@ -17,6 +17,8 @@
 // is; this library is never on it), NVGPU_LEAN_ACCEL_KEEP (keep every launch's directory under the
 // cache's accel/, not only a failed one's).
 
+#include <fcntl.h>
+#include <spawn.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 
@@ -50,7 +52,7 @@ static int spill(const char *path, const void *p, size_t n) {
 // Run `cmd` through the shell, its output to `log`; on failure the log's end noted.
 static int accelRun(const char *what, const char *cmd, const char *log) {
   char *full = malloc(strlen(cmd) + strlen(log) + 32);
-  sprintf(full, "%s > '%s' 2>&1", cmd, log);
+  sprintf(full, "{ %s; } > '%s' 2>&1", cmd, log);
   int st = system(full);
   free(full);
   if (st != -1 && WIFEXITED(st) && WEXITSTATUS(st) == 0) return 1;
@@ -93,9 +95,21 @@ static void accelRemove(const char *dir) {
   if (system(cmd) != 0) note("could not remove %s", dir);
 }
 
-// The harness built for this launch's kernel (`dir`'s kernel.jsonl) and block size: `bin` set to
-// it, building it on first use.
-static int accelBinary(const char *dir, unsigned threads, char *bin, size_t binSize) {
+// A digest of the lifter's sources (`lift.py`, `rt.cuh`, `main.cu`) from `h`: what is built from
+// them is rebuilt when they change.
+static uint64_t accelSources(const char *lift, uint64_t h) {
+  const char *sources[] = {"lift.py", "rt.cuh", "main.cu"};
+  char path[700];
+  for (int i = 0; i < 3; i++) {
+    snprintf(path, sizeof path, "%s/%s", lift, sources[i]);
+    h = fnvFile(path, h);
+  }
+  return h;
+}
+
+// The lifted kernel's cubin for this launch's kernel (`dir`'s kernel.jsonl) and block size: `cubin`
+// set to it, lifting and compiling it on first use.
+static int accelCubin(const char *dir, unsigned threads, char *cubin, size_t cubinSize) {
   const char *lift = getenv("NVGPU_LEAN_LIFT");
   const char *nvcc = getenv("NVGPU_LEAN_ACCEL_NVCC") ? getenv("NVGPU_LEAN_ACCEL_NVCC") : "nvcc";
   const char *flags = getenv("NVGPU_LEAN_ACCEL_NVCC_FLAGS") ? getenv("NVGPU_LEAN_ACCEL_NVCC_FLAGS") : "";
@@ -107,17 +121,12 @@ static int accelBinary(const char *dir, unsigned threads, char *bin, size_t binS
   uint64_t h = fnv(accelArch(), strlen(accelArch()), 1469598103934665603ull);
   h = fnv(&threads, sizeof threads, h);
   snprintf(path, sizeof path, "%s/kernel.jsonl", dir);
-  h = fnvFile(path, h);
-  const char *sources[] = {"lift.py", "rt.cuh", "main.cu"};
-  for (int i = 0; i < 3; i++) {
-    snprintf(path, sizeof path, "%s/%s", lift, sources[i]);
-    h = fnvFile(path, h);
-  }
+  h = accelSources(lift, fnvFile(path, h));
   char kdir[600];
   snprintf(kdir, sizeof kdir, "%s/accel/%016llx", cacheDir, (unsigned long long)h);
-  snprintf(bin, binSize, "%s/lifted", kdir);
+  snprintf(cubin, cubinSize, "%s/lifted.cubin", kdir);
   struct stat st;
-  if (stat(bin, &st) == 0) return 1;
+  if (stat(cubin, &st) == 0) return 1;
   char cmd[4096], log[700];
   snprintf(cmd, sizeof cmd, "mkdir -p '%s'", kdir);
   if (system(cmd) != 0) {
@@ -128,10 +137,117 @@ static int accelBinary(const char *dir, unsigned threads, char *bin, size_t binS
   snprintf(cmd, sizeof cmd,
            "{ cp '%s/mufu_tables.cuh' '%s/' 2>/dev/null || python3 '%s/lift.py' --tables '%s/mufu_tables.cuh'; } && "
            "python3 '%s/lift.py' --threads %u '%s/kernel.jsonl' > '%s/lifted.cu' && "
-           "'%s' -std=c++17 -arch=%s -ftz=false -fmad=false %s -I'%s' -I'%s' -x cu -o '%s.tmp' '%s/main.cu' && "
+           "'%s' -std=c++17 -arch=%s -ftz=false -fmad=false %s -cubin -I'%s' -I'%s' -o '%s.tmp' '%s/lifted.cu' && "
            "mv '%s.tmp' '%s'",
-           lift, kdir, lift, kdir, lift, threads, dir, kdir, nvcc, accelArch(), flags, kdir, lift, bin, lift, bin, bin);
+           lift, kdir, lift, kdir, lift, threads, dir, kdir, nvcc, accelArch(), flags, kdir, lift, cubin, kdir,
+           cubin, cubin);
   return accelRun("lifting and compiling the kernel", cmd, log);
+}
+
+// The harness (tools/lift/main.cu's `lift-run --serve`), one process for every launch: its
+// requests' pipe, its answers' and its process; restarted when it has gone.
+static struct {
+  FILE *in, *out;
+  pid_t pid;
+} server = {NULL, NULL, -1};
+
+static void accelServerStop(void) {
+  if (server.in) fclose(server.in);
+  if (server.out) fclose(server.out);
+  if (server.pid > 0) waitpid(server.pid, NULL, 0);
+  server.in = server.out = NULL;
+  server.pid = -1;
+}
+
+static int accelServer(void) {
+  if (server.pid > 0 && waitpid(server.pid, NULL, WNOHANG) == 0) return 1;
+  server.pid = -1;
+  accelServerStop();
+  const char *lift = getenv("NVGPU_LEAN_LIFT");
+  const char *nvcc = getenv("NVGPU_LEAN_ACCEL_NVCC") ? getenv("NVGPU_LEAN_ACCEL_NVCC") : "nvcc";
+  const char *flags = getenv("NVGPU_LEAN_ACCEL_NVCC_FLAGS") ? getenv("NVGPU_LEAN_ACCEL_NVCC_FLAGS") : "";
+  char sdir[600], bin[700], cmd[4096], log[700];
+  uint64_t h = accelSources(lift, fnv(accelArch(), strlen(accelArch()), 1469598103934665603ull));
+  snprintf(sdir, sizeof sdir, "%s/accel/harness-%016llx", cacheDir, (unsigned long long)h);
+  snprintf(bin, sizeof bin, "%s/lift-run", sdir);
+  struct stat st;
+  if (stat(bin, &st) != 0) {
+    snprintf(cmd, sizeof cmd, "mkdir -p '%s'", sdir);
+    if (system(cmd) != 0) {
+      note("cannot create %s", sdir);
+      return 0;
+    }
+    snprintf(log, sizeof log, "%s/build.log", sdir);
+    // rt.cuh, which main.cu includes for its types, includes the special-function tables.
+    snprintf(cmd, sizeof cmd,
+             "{ cp '%s/mufu_tables.cuh' '%s/' 2>/dev/null || python3 '%s/lift.py' --tables '%s/mufu_tables.cuh'; } && "
+             "'%s' -std=c++17 -arch=%s %s -I'%s' -I'%s' -o '%s.tmp' '%s/main.cu' -lcuda && mv '%s.tmp' '%s'",
+             lift, sdir, lift, sdir, nvcc, accelArch(), flags, sdir, lift, bin, lift, bin, bin);
+    if (!accelRun("building the accelerated mode's harness", cmd, log)) return 0;
+  }
+  int toServer[2], fromServer[2];
+  if (pipe(toServer) != 0) return 0;
+  if (pipe(fromServer) != 0) {
+    close(toServer[0]);
+    close(toServer[1]);
+    return 0;
+  }
+  // Never this library: the harness runs on the host's own driver.
+  const char *libs = getenv("NVGPU_LEAN_ACCEL_LIBRARY_PATH");
+  snprintf(cmd, sizeof cmd, "exec env -u LD_PRELOAD LD_LIBRARY_PATH='%s' '%s' --serve 2>> '%s/serve.log'",
+           libs ? libs : "", bin, sdir);
+  posix_spawn_file_actions_t fa;
+  posix_spawn_file_actions_init(&fa);
+  posix_spawn_file_actions_adddup2(&fa, toServer[0], 0);
+  posix_spawn_file_actions_adddup2(&fa, fromServer[1], 1);
+  posix_spawn_file_actions_addclose(&fa, toServer[1]);
+  posix_spawn_file_actions_addclose(&fa, fromServer[0]);
+  char *argv[] = {"/bin/sh", "-c", cmd, NULL};
+  extern char **environ;
+  int e = posix_spawn(&server.pid, "/bin/sh", &fa, NULL, argv, environ);
+  posix_spawn_file_actions_destroy(&fa);
+  close(toServer[0]);
+  close(fromServer[1]);
+  if (e != 0) {
+    close(toServer[1]);
+    close(fromServer[0]);
+    server.pid = -1;
+    note("cannot start the accelerated mode's harness: %s", strerror(e));
+    return 0;
+  }
+  fcntl(toServer[1], F_SETFD, FD_CLOEXEC);
+  fcntl(fromServer[0], F_SETFD, FD_CLOEXEC);
+  server.in = fdopen(toServer[1], "w");
+  server.out = fdopen(fromServer[0], "r");
+  return server.in && server.out;
+}
+
+// The harness runs `cubin` on the launch exported to `dir` (its output in dir/run.log).
+static int accelServe(const char *cubin, const char *dir) {
+  if (!accelServer()) return 0;
+  int code = -1;
+  if (fprintf(server.in, "%s %s\n", cubin, dir) < 0 || fflush(server.in) != 0 || fscanf(server.out, " exit %d", &code) != 1) {
+    note("the accelerated mode's harness stopped (its log: %s/accel/harness-*/serve.log)", cacheDir);
+    accelServerStop();
+    return 0;
+  }
+  char path[700];
+  snprintf(path, sizeof path, "%s/run.log", dir);
+  if (code == 0) {
+    if (getenv("NVGPU_LEAN_VERBOSE")) {
+      size_t n = 0;
+      char *out = slurp(path, &n), *ph = out ? strstr(out, "phases:") : NULL;
+      if (ph) fprintf(stderr, "nvgpu-lean: harness %.*s\n", (int)strcspn(ph, "\n"), ph);
+      free(out);
+    }
+    return 1;
+  }
+  size_t n = 0;
+  char *out = slurp(path, &n);
+  size_t from = n > 600 ? n - 600 : 0;
+  note("the lifted kernel failed (exit %d): %.*s", code, (int)(n - from), out ? out + from : "");
+  free(out);
+  return 0;
 }
 
 static double accelNow(void) {
@@ -170,7 +286,7 @@ static CUresult accelKernel(Op *o) {
                                                  lean_io_mk_world()));
   CUresult r = CUDA_ERROR_LAUNCH_FAILED;
   lean_object *g = NULL, *m = NULL;
-  char path[700], bin[700], cmd[2400];
+  char path[700], bin[700];
   if (!msg) goto done;
   if (lean_string_size(msg) != 1) {
     note("%s", lean_string_cstr(msg));
@@ -185,13 +301,9 @@ static CUresult accelKernel(Op *o) {
   snprintf(path, sizeof path, "%s/module.bin", dir);
   if (!spill(path, lean_sarray_cptr(m), mhi - mlo)) goto done;
   tp[2] = accelNow();
-  if (!accelBinary(dir, o->block[0] * o->block[1] * o->block[2], bin, sizeof bin)) goto done;
+  if (!accelCubin(dir, o->block[0] * o->block[1] * o->block[2], bin, sizeof bin)) goto done;
   tp[3] = accelNow();
-  const char *libs = getenv("NVGPU_LEAN_ACCEL_LIBRARY_PATH");
-  snprintf(cmd, sizeof cmd, "env -u LD_PRELOAD LD_LIBRARY_PATH='%s' '%s' '%s' --out", libs ? libs : "",
-           bin, dir);
-  snprintf(path, sizeof path, "%s/run.log", dir);
-  if (!accelRun("the lifted kernel", cmd, path)) goto done;
+  if (!accelServe(bin, dir)) goto done;
   tp[4] = accelNow();
   size_t n;
   uint8_t *after;

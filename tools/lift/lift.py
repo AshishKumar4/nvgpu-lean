@@ -18,7 +18,8 @@ no-ops); the simulator's results do not depend on when they complete. Their work
 the issuing warp and the helper CTAs on the GPU's idle SMs (rt.cuh's work pool), and the issuer
 waits for it. The lifted CTAs are the grid's first; a CTA's coordinates are `ctaX`, `ctaY`, `ctaZ`.
 
-Usage: lift.py [--threads N] KERNEL.jsonl > lifted.cu   (N: the launch's threads per CTA, 384 if not given)
+Usage: lift.py [--threads N] KERNEL.jsonl > lifted.cu   (N: the launch's threads per CTA, 384 if not given;
+       nvcc -cubin compiles lifted.cu, which main.cu's lift-run loads)
        lift.py --tables mufu_tables.cuh   (the special-function unit's tables, beside rt.cuh)
 
 A form the lifter does not know is an error naming it: the lifted kernel never guesses.
@@ -1626,6 +1627,8 @@ def main():
     print("\n".join(out))
     print("  EPILOGUE")
     print("}")
+    # What the harness (main.cu) reads from the kernel's cubin.
+    print("extern \"C\" __device__ __attribute__((used)) const uint32_t lift_info[4] = {LIFT_THREADS, LIFT_CLOCK, PARAM_BASE, PARAM_BYTES};")
 
 
 def tables(out):
