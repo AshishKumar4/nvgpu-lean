@@ -768,6 +768,8 @@ def f_shfl(i):
 # Floats: IEEE round to nearest even; `.FTZ` flushes subnormal inputs and results (`fadd32`…).
 
 def fsrc(o):
+    """`Float.src` with `0x80000000`: a binary32 source, its sign modifiers on the sign bit (a
+    negated constant, `-c[…]`, flips its sign: not the integer negation `val` takes)."""
     if o["k"] == "reg":
         x = rname(o["r"])
         if o["abs"]:
@@ -775,6 +777,8 @@ def fsrc(o):
         if o["neg"]:
             x = f"({x} ^ 0x80000000u)"
         return x
+    if o["k"] == "neg":
+        return f"({fsrc(o['o'])} ^ 0x80000000u)"
     return val(o)
 
 
@@ -1111,10 +1115,10 @@ def f_f2i(i):
     ftz = ".ftz" if "FTZ" in mods else ""
     o = i["ops"]
     if w == 64:
-        return wr64(o[0], f"([&]{{ uint64_t _v; asm(\"cvt.{rnd}{ftz}.{ty}.f32 %0, %1;\" : \"=l\"(_v) : \"f\"(__uint_as_float({val(o[1])}))); return _v; }}())")
+        return wr64(o[0], f"([&]{{ uint64_t _v; asm(\"cvt.{rnd}{ftz}.{ty}.f32 %0, %1;\" : \"=l\"(_v) : \"f\"(__uint_as_float({fsrc(o[1])}))); return _v; }}())")
     if w < 32:
         raise Lift(f"F2I {mods}")
-    return wr(o[0], f"([&]{{ uint32_t _v; asm(\"cvt.{rnd}{ftz}.{ty}.f32 %0, %1;\" : \"=r\"(_v) : \"f\"(__uint_as_float({val(o[1])}))); return _v; }}())")
+    return wr(o[0], f"([&]{{ uint32_t _v; asm(\"cvt.{rnd}{ftz}.{ty}.f32 %0, %1;\" : \"=r\"(_v) : \"f\"(__uint_as_float({fsrc(o[1])}))); return _v; }}())")
 
 
 @form("I2F")
@@ -1152,6 +1156,15 @@ def f_vimnmx(i):
     t = "uint32_t" if "U32" in mods else "int32_t"
     a, b = f"({t}){val(ops[1 + k])}", f"({t}){val(ops[2 + k])}"
     return wr(ops[0], f"(uint32_t)({pred(ops[3 + k])} ? min({a}, {b}) : max({a}, {b}))")
+
+
+@form("IABS")
+def f_iabs(i):
+    # `IABS Rd, a`: |a| as a signed word, wrapping (INT_MIN stays INT_MIN).
+    o = i["ops"]
+    if i["mods"]:
+        raise Lift(f"IABS {i['mods']}")
+    return f"{{ const uint32_t _v = {val(o[1])}; {wr(o[0], '((int32_t)_v < 0 ? 0u - _v : _v)')} }}"
 
 
 @form("POPC", "UPOPC")
