@@ -1121,6 +1121,25 @@ def f_f2i(i):
     return wr(o[0], f"([&]{{ uint32_t _v; asm(\"cvt.{rnd}{ftz}.{ty}.f32 %0, %1;\" : \"=r\"(_v) : \"f\"(__uint_as_float({fsrc(o[1])}))); return _v; }}())")
 
 
+@form("FRND")
+def f_frnd(i):
+    # `FRND[.TRUNC|.FLOOR|.CEIL][.FTZ][.F64] Rd, a`: a rounded to an integral value (PTX
+    # `cvt.rXi.f32.f32`, `.f64.f64` on a register pair), to nearest even without a mode.
+    mods = i["mods"]
+    if any(m not in RND_I and m not in ("FTZ", "F64") for m in mods):
+        raise Lift(f"FRND {mods}")
+    rnd = next((RND_I[m] for m in mods if m in RND_I), "rni")
+    o = i["ops"]
+    if "F64" in mods:
+        x = o[1]
+        if x["k"] != "reg" or x["abs"] or x["neg"]:
+            raise Lift("FRND.F64 source")
+        src = f"__hiloint2double((int){rhi(x['r'])}, (int){rname(x['r'])})"
+        return wr64(o[0], f"([&]{{ double _v; asm(\"cvt.{rnd}.f64.f64 %0, %1;\" : \"=d\"(_v) : \"d\"({src})); return (uint64_t)__double_as_longlong(_v); }}())")
+    ftz = ".ftz" if "FTZ" in mods else ""
+    return wr(o[0], f"([&]{{ float _v; asm(\"cvt.{rnd}{ftz}.f32.f32 %0, %1;\" : \"=f\"(_v) : \"f\"(__uint_as_float({fsrc(o[1])}))); return __float_as_uint(_v); }}())")
+
+
 @form("I2F")
 def f_i2f(i):
     # `I2F[.F16|.F64][.type][.RZ|.RM|.RP] Rd, Ra`: to binary32 (binary16 in the low half, binary64

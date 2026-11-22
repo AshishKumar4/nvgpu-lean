@@ -1,0 +1,5 @@
+{ "code": "rounding.cu", "function": "rounding", "grid": [64], "block": [256],
+  "buffers": [
+    { "name": "x", "bytes": 65536, "init": { "gen": "iota", "dtype": "u32", "start": 12345, "step": 262139 } },
+    { "name": "y", "bytes": 1048576 } ],
+  "params": [ { "ordinal": 0, "ptr": "x" }, { "ordinal": 1, "ptr": "y" }, { "ordinal": 2, "s32": 16384 } ] }
