@@ -430,12 +430,17 @@ private def performLocal (m : SmMem) (id : Nat) (r : Req) (lanes : Array Nat) : 
     m := m.answerLane id lane (out.extract 0 n)
   return { m with locals := m.locals.insert slot ls }
 
-/-- Whether the head of a warp's queue must wait: a release behind the warp's requests in flight,
-or anything behind an acquire in flight. -/
+/-- Whether the head of a warp's queue must wait: anything behind an acquire of the warp in flight
+or waiting in the sub-partition's other queue, and a release behind the warp's earlier requests,
+those in the other queue and those in flight. -/
 private def gated (m : SmMem) (id : Nat) : Bool :=
   let r := m.reqs[id]!
   let w := m.warp r.origin.slot
-  w.acquiring > 0 || ((r.req.sem == .release || r.req.sem == .acqRel) && w.inflight > 0)
+  let earlier := m.mio[2 * r.origin.smsp + (1 - queueOf r.req.space)]!.filter fun j =>
+    m.reqs[j]!.origin.slot == r.origin.slot && m.reqs[j]!.issued < r.issued
+  let acquire (j : Nat) := m.reqs[j]!.req.sem == .acquire || m.reqs[j]!.req.sem == .acqRel
+  w.acquiring > 0 || earlier.any acquire ||
+    ((r.req.sem == .release || r.req.sem == .acqRel) && (!earlier.isEmpty || w.inflight > 0))
 
 /-- The sector index of sector `s` of `line`. -/
 private def sectorKey (c : Config) (line s : Nat) : Nat := line * (c.lineBytes / c.sectorBytes) + s
