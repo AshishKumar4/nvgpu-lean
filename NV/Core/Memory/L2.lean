@@ -178,6 +178,15 @@ private def replay (m : L2Mem) (e : Log) : Except String L2Mem := do
     let (flat, id) ← f.issue { slot, tid := slot * 32, cta := own } r (cta := ci)
     return { m with flat, keys := m.keys.insert key (slot, id) }
   | .perform key lane read =>
+    let some (slot, id) := m.keys.get? key | throw s!"request {repr key} is not in flight"
+    -- A shared-memory lane: its SM performed it on its CTA's shared memory, which the SM holds
+    -- (the request machine keeps none); its checks and retirement here, the SM's bytes its reads
+    -- (`Flat.deliverShared_spec`).
+    if ((m.flat.find slot id).map (·.2.req.space == .shared)).getD false then
+      let (m, f) := m.takeFlat
+      let flat ← f.deliverShared slot id lane
+      let m := { m with flat }
+      return if (flat.find slot id).isNone then { m with keys := m.keys.erase key } else m
     let (m, read') ← m.deliver key lane
     if read' != read then
       throw s!"{repr key} lane {lane}: the SM read {read}, the request machine {read'}"

@@ -201,6 +201,35 @@ def deliver (m : Flat) (slot id lane : Nat) : Except String (Flat × List UInt8)
   | none => .error s!"request {id} is not in flight"
   | some (i, q) => deliverAt m slot i q lane
 
+/-! ## Shared memory performed by its SM
+
+The timing core performs a shared-memory lane on its CTA's SM, on the SM's own copy of the CTA's
+shared memory, and hands the request machine the bytes the lane's reads returned. `deliverShared`
+is `deliver` without the store: the same checks, the same retirement, and the SM's bytes. With the
+CTA's shared memory as the SM holds it in place of the machine's own, it is `deliver`
+(`NV.Flat.deliverShared_spec`), so the run is still a run of the request machine (`Mem.sound`)
+and the machine need not keep, or perform on, a copy of shared memory. -/
+
+/-- `deliverShared` with `q` at index `i` of the slot's queue. -/
+def deliverSharedAt (m : Flat) (slot i : Nat) (q : InFlight) (lane : Nat) : Except String Flat :=
+  let qs := m.queue slot
+  if !q.lanes.contains lane then .error s!"lane {lane} of request {q.id} is not in flight" else
+  match (qs.take i).findSome? (blocker · q lane) with
+  | some why => .error s!"request {q.id} ({repr q.req.op} {repr q.req.space} {repr q.req.sem}) lane {lane}: {why}"
+  | none =>
+    match loc q.cta q.req lane with
+    | none => .error s!"lane {lane} of request {q.id} is inactive"
+    | some l =>
+      if l.space != .shared then .error s!"request {q.id} is not a shared-memory access"
+      else .ok { m with queues := m.queues.set! slot (retire qs q.id lane) }
+
+/-- Lane `lane` of shared-memory request `id` of issuer slot `slot`, performed by its SM: the
+checks of `deliver` and the lane's retirement, the store untouched. -/
+def deliverShared (m : Flat) (slot id lane : Nat) : Except String Flat :=
+  match find m slot id with
+  | none => .error s!"request {id} is not in flight"
+  | some (i, q) => deliverSharedAt m slot i q lane
+
 /-! ## A request's lanes delivered together
 
 The timing core delivers the lanes of a request part one after another (`deliverSeq`).
