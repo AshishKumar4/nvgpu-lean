@@ -2,4 +2,5 @@
   "buffers": [
     { "name": "in", "bytes": 32768, "init": { "gen": "iota", "dtype": "u32", "start": 1006632960, "step": 2654435761 } },
     { "name": "out", "bytes": 65536 } ],
-  "params": [ { "ordinal": 0, "ptr": "in" }, { "ordinal": 1, "ptr": "out" } ] }
+  "params": [ { "ordinal": 0, "ptr": "in" }, { "ordinal": 1, "ptr": "out" }, { "ordinal": 2, "u8": 201 },
+              { "ordinal": 3, "u16": 40000 } ] }

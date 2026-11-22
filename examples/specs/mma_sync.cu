@@ -1,8 +1,9 @@
 // Warp-level tensor-core MMA as XLA's and PyTorch's GEMMs issue it: ldmatrix of A (.x4) and of B
 // transposed (.x2.trans) from shared memory; mma.sync m16n8k16 of f16 and of bf16 and m16n8k8 of
 // tf32, into f32; a saturated epilogue (FFMA.SAT); and, sm_90 on, stmatrix of the f16 product's
-// halves (.x2, and .x1.trans). Each warp works on its own 512 input words, pseudo-random bits.
-extern "C" __global__ void mma_sync(const unsigned* in, unsigned* out) {
+// halves (.x2, and .x1.trans). Each warp works on its own 512 input words, pseudo-random bits. And
+// a NaN-propagating maximum (FMNMX.NAN) and byte and half parameters (narrow constant loads).
+extern "C" __global__ void mma_sync(const unsigned* in, unsigned* out, unsigned char s, unsigned short h) {
   __shared__ alignas(16) unsigned short a[4][16][16], b[4][16][8], st[4][16][8], st2[4][8][8];
   const int w = threadIdx.x / 32, l = threadIdx.x % 32, g = blockIdx.x * 4 + w;
   const unsigned* src = in + g * 512;
@@ -37,7 +38,11 @@ extern "C" __global__ void mma_sync(const unsigned* in, unsigned* out) {
     dst[128 + 4 * l + i] = __float_as_uint(e[i]);
     dst[256 + 4 * l + i] = __float_as_uint(f[i]);
     dst[384 + 4 * l + i] = __float_as_uint(__saturatef(fmaf(d[i], e[i], f[i])));
+    float m;
+    asm("max.NaN.f32 %0, %1, %2;" : "=f"(m) : "f"(d[i]), "f"(__uint_as_float(src[4 * l + i])));
+    dst[640 + 4 * l + i] = __float_as_uint(m);
   }
+  dst[768 + l] = (unsigned)s * (unsigned)l + (unsigned)h;
 #if __CUDA_ARCH__ >= 900
   const unsigned h0 = (__float_as_uint(d[0]) >> 16) | (__float_as_uint(d[1]) & 0xffff0000u);
   const unsigned h1 = (__float_as_uint(d[2]) >> 16) | (__float_as_uint(d[3]) & 0xffff0000u);

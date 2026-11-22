@@ -369,9 +369,25 @@ RET_SITES = set()
 @form("CALL")
 def f_call(i):
     t = i["ops"][0]
+    if "ABS" in i["mods"] and t["k"] == "reg":
+        # `CALL.ABS.NOINC Rn`: a call to one of the module's external functions (`printf`'s
+        # `vprintf`, the device runtime's), which the lifted kernel does not make: the launch faults
+        # when a thread reaches one (the assertion paths that hold them seldom run).
+        return "{ atomicOr(&FAULT, 128u); LIFT_EXIT }"
     if t["k"] != "target" or "REL" not in i["mods"]:
         raise Lift("CALL form")
     return f"goto L_{t['pc']:x};"
+
+
+@form("LEPC")
+def f_lepc(i):
+    # `LEPC Rd[, target]`: a code address, which only an external call (`CALL.ABS`, not lifted)
+    # takes as its return address. The module's code offset is not known here: the offset within
+    # the kernel.
+    o = i["ops"]
+    t = o[1] if len(o) > 1 else None
+    pc = t["pc"] if t and t["k"] == "target" else (t["v"] if t and t["k"] == "imm" else i["pc"])
+    return wr64(o[0], f"{pc:#x}ull")
 
 
 @form("RET")
@@ -502,7 +518,21 @@ def f_ldc(i):
     ops = i["ops"]
     if "64" in i["mods"]:
         return wr64(ops[0], f"U64({val(ops[1])}, {hi(ops[1])})")
-    if i["mods"] and i["mods"] != ["64"]:
+    narrow = {"U8": (8, False), "S8": (8, True), "U16": (16, False), "S16": (16, True)}
+    if len(i["mods"]) == 1 and i["mods"][0] in narrow and ops[1]["k"] == "c":
+        # A byte or half from the word holding it, zero- or sign-extended (`Sem`'s `narrow`).
+        bits, signed = narrow[i["mods"][0]]
+        o = ops[1]
+        if o["base"] is None:
+            word, sh = cword({**o, "off": o["off"] & ~3}, 0), f"{8 * (o['off'] % 4)}u"
+        elif o["bank"] == 0:
+            a = f"({rname(o['base'])} + {o['off']:#x}u)"
+            word, sh = f"C32({a} & ~3u)", f"(8u * ({a} & 3u))"
+        else:
+            raise Lift("LDC of a narrow element at a register offset of the kernel's bank")
+        v = f"(({word} >> {sh}) & {(1 << bits) - 1:#x}u)"
+        return wr(ops[0], f"(uint32_t)(int32_t)(int{bits}_t){v}" if signed else v)
+    if i["mods"]:
         raise Lift("LDC width")
     return wr(ops[0], val(ops[1]))
 
@@ -854,11 +884,17 @@ def f_fchk(i):
 def f_fmnmx(i):
     # `FMNMX Rd, a, b, P`: the minimum when P holds, else the maximum; NaN-ignoring, -0 below +0
     # (NV.Num.min/max, as fminf/fmaxf), inputs flushed under `.FTZ`.
-    ftz = plain_float(i)
+    # `.NAN`: a NaN operand gives the canonical NaN.
+    nan = "NAN" in i["mods"]
+    ftz = plain_float(i, ("FTZ", "NAN"))
     o = i["ops"]
     fl = (lambda x: f"flush32({x})") if ftz == "true" else (lambda x: x)
-    return wr(o[0], f"({pred(o[3])} ? __float_as_uint(fminf(__uint_as_float({fl(fsrc(o[1]))}), __uint_as_float({fl(fsrc(o[2]))})))"
-                    f" : __float_as_uint(fmaxf(__uint_as_float({fl(fsrc(o[1]))}), __uint_as_float({fl(fsrc(o[2]))}))))")
+    x, y = fl(fsrc(o[1])), fl(fsrc(o[2]))
+    e = (f"({pred(o[3])} ? __float_as_uint(fminf(__uint_as_float(_x), __uint_as_float(_y)))"
+         f" : __float_as_uint(fmaxf(__uint_as_float(_x), __uint_as_float(_y))))")
+    if nan:
+        e = f"(((_x & 0x7fffffffu) > 0x7f800000u || (_y & 0x7fffffffu) > 0x7f800000u) ? 0x7fffffffu : {e})"
+    return f"{{ const uint32_t _x = {x}, _y = {y}; {wr(o[0], e)} }}"
 
 
 @form("FSEL")
