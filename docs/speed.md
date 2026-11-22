@@ -41,6 +41,15 @@ frame holds a large share. Reaching 10⁶ warp instructions per second needs the
 path to work on words or byte arrays instead of lists, with the request machine's proofs carried
 over, which this does not attempt yet.
 
+Workers: the timed GEMM to cycle 9 000 takes 74 s on one worker, 54 s on 2, 41 s on 4 and 38 s
+on 8, 16 or 32 (an 8-core container). About half the one-worker time is the master's: the L2's
+quantum, which replays every SM's records on the one request machine in stamp order, and the
+engine's bookkeeping between quanta. More workers do not shorten it. Splitting the request
+machine by SM (each CTA's shared memory and its issuers' queues on their own, with the cluster
+peers' accesses and global memory on the master) would let the workers replay their own SMs'
+shared accesses. That needs `Mem.sound` restated over the split machine, and this does not do it
+yet.
+
 Changes so far, each measured over the whole timed GEMM in one container (wall time; one worker,
 then the default workers):
 
