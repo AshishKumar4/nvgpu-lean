@@ -152,6 +152,9 @@ inductive SmEv where
   | remote (x : PeerReq)
   /-- A tensor-memory request's lanes, at the SM's tensor memory. -/
   | tmem (req : Nat) (lanes : Array Nat)
+  /-- A warpgroup MMA's operand read takes the data stage for `cycles`
+  (`Config.wgmmaOperandData`). -/
+  | dataShare (cycles : Nat)
   /-- Held `try_wait` `req` on CTA `cta`'s barrier at `addr` reaches its limit `deadline`. -/
   | tryWaitEnd (cta addr req deadline : Nat)
   /-- A cluster request part leaving for another SM. -/
@@ -858,14 +861,17 @@ private def bankStage (m : SmMem) (t id cta : Nat) (lanes : Array Nat) (key : Ke
   if m.reqs[id]!.tensor then
     let busy := ((w - conflicts) * c.wavefrontCycles + m.reqs[id]!.tensorShares - 1) / max m.reqs[id]!.tensorShares 1
     let m := { m with counters := { m.counters with tensorPortMax := m.counters.tensorPortMax + busy } }
-    let (_, last, m) := m.take .tensor t busy
+    let (start, last, m) := m.take .tensor t busy
     -- On a part where a warpgroup MMA's reads share the data stage with the warps' accesses
-    -- (`Config.wgmmaOperandData`), they take it too, first: the loads, stores and copies' writes
-    -- after them wait, they wait for none (wgmma beside a TMA stream runs at its rate).
-    let m := if c.wgmmaOperandData > 0 && m.reqs[id]!.wgmma then
-      (m.take .data t ((busy * c.wgmmaOperandData + 999) / 1000)).2.2 else m
-    let (m, _) ← m.performShared t cta id key r lanes
-    return (m.passed id).complete id (last + c.backShared)
+    -- (`Config.wgmmaOperandData`), they take it too, when the tensor core starts on them: the
+    -- warps' loads and stores then wait for the MMA being read, not for every queued MMA's reads
+    -- (a burst of four HGMMAs left FA3's shared loads 400 cycles behind it). They wait for nothing
+    -- themselves (wgmma beside a TMA stream runs at its rate).
+    let mut m := m
+    if c.wgmmaOperandData > 0 && m.reqs[id]!.wgmma then
+      m := m.push start (.dataShare ((busy * c.wgmmaOperandData + 999) / 1000))
+    let (m', _) ← m.performShared t cta id key r lanes
+    return (m'.passed id).complete id (last + c.backShared)
   let (_, last, m) := m.take .data t cost
   let m := if r.op == .st then { m with storesFree := max m.storesFree last } else m
   -- `try_wait` (SASS `SYNCS.PHASECHK.TRANS64.TRYWAIT`, marked by `SASS.phaseChk`): while its
@@ -1000,6 +1006,7 @@ private def step (m : SmMem) (t : Nat) (snapshot : Store) (dir : Directory) :
   | .bank id cta lanes key r => do return (← m.bankStage t id cta lanes key r, none)
   | .remote x => do return (← m.remoteStage t x, none)
   | .tmem id lanes => do return (← m.tmemStage t id lanes, none)
+  | .dataShare n => pure ((m.take .data t n).2.2, none)
   | .tryWaitEnd cta addr id deadline => pure (m.tryWaitEnd t cta addr id deadline, none)
   | .send x => pure (m.sendStage t x, none)
   | .arrive msg => do return (← m.arriveStage t msg snapshot, none)
