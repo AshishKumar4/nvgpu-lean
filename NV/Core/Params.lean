@@ -267,6 +267,8 @@ structure SyncParams where
   clusterBarrierCycles : Fact Nat
   /-- `bar.arrive` by one warp to the `bar.sync` of another returning. -/
   namedBarrierLatency : Fact Nat
+  /-- Cycles a `BAR.ARV`'s arrival reaches its barrier after a `BAR.SYNC`'s would. -/
+  barArriveCycles : Fact Nat
   /-- `(threads, cycles)`: one `bar.sync 0` by every thread of a CTA of that size. -/
   barSync : Fact (List (Nat × Nat))
   /-- Fences: the cycles each adds to its warp. -/

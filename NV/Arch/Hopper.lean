@@ -640,6 +640,8 @@ def clusterBarrierCycles : Fact Nat :=
 
 def namedBarrierLatency : Fact Nat := meas 36 ""
 
+def barArriveCycles : Fact Nat := inferred 10 "meas-h200" "" ""
+
 def tryWaitLimit : Fact Nat :=
   measOn 1941 ""
     ""

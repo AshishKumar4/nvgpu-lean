@@ -5292,6 +5292,15 @@
    "measuredOn": "H200",
    "kind": "measured"},
   {"value": "0",
+   "source": {"ref": "meas-a100", "loc": ""},
+   "section": "Synchronization (cycles unless the name says otherwise)",
+   "role": "engine",
+   "number": 0,
+   "note": "",
+   "name": "sync.barArriveCycles",
+   "measuredOn": null,
+   "kind": "inferred"},
+  {"value": "0",
    "source":
    {"ref": "ptx-isa-9.5",
     "loc":

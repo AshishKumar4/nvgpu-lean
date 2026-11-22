@@ -167,6 +167,7 @@ def b200 : Params := {
     clusterMbarrierLatency := measOn 380 ""
     clusterBarrierCycles
     namedBarrierLatency := measOn 37 ""
+    barArriveCycles := inferred 10 "meas" "" ""
     barSync := measOn [(64, 16), (128, 20), (256, 28), (512, 44), (1024, 76)] ""
     fenceProxyAsync := measOn 18 "" ""
     fenceAcqRelCta := measOn 30 "" ""

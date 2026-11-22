@@ -115,7 +115,8 @@ def sections (p : Params) : List (String × List Row) :=
     l2FarCopiesNear, l2ClockRefMHz, l2LatencyFixedPermille, l2LatencyRefMHz, dramTurnaroundPs⟩ := mem
   let ⟨fmaPerCycle16, fmaPerCycle8, fmaPerCycleTF32, fmaPerCycleF64, wgmmaLatency, wgmmaLatencyRS,
     mmaSyncLatency, wgmmaOperandDataPermille, wgmmaIssueSharePermille, wgmmaPipeSharePermille, tcgen05Latency, tmemLatency⟩ := tensor
-  let ⟨mbarrierLatency, clusterMbarrierLatency, clusterBarrierCycles, namedBarrierLatency, barSync, fenceProxyAsync,
+  let ⟨mbarrierLatency, clusterMbarrierLatency, clusterBarrierCycles, namedBarrierLatency, barArriveCycles, barSync,
+    fenceProxyAsync,
     fenceAcqRelCta, fenceAcqRelGpu, fenceScGpu, fenceAcqRelSys, fenceCycles, redReleaseGpu,
     atomAcqRelGpu,
     atomRelaxedGpu, ldAcquireGpu, flagHopPs, printfPs, printfLanePs, tryWaitLimit, tryWaitWake⟩ := sync
@@ -197,7 +198,7 @@ def sections (p : Params) : List (String × List Row) :=
     [rowN "sync.mbarrierLatency" mbarrierLatency,
      rowN "sync.clusterMbarrierLatency" clusterMbarrierLatency,
      rowN "sync.clusterBarrierCycles" clusterBarrierCycles,
-     rowN "sync.namedBarrierLatency" namedBarrierLatency, rowN "sync.tryWaitLimit" tryWaitLimit,
+     rowN "sync.namedBarrierLatency" namedBarrierLatency, rowN "sync.barArriveCycles" barArriveCycles, rowN "sync.tryWaitLimit" tryWaitLimit,
      rowN "sync.tryWaitWake" tryWaitWake,
      row "sync.barSync" barSync showPairs,
      rowN "sync.fenceProxyAsync" fenceProxyAsync, rowN "sync.fenceAcqRelCta" fenceAcqRelCta,

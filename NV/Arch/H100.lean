@@ -70,6 +70,7 @@ def h100 : Params := {
     clusterMbarrierLatency := onH200 clusterMbarrierLatency
     clusterBarrierCycles
     namedBarrierLatency := onH200 namedBarrierLatency
+    barArriveCycles := onH200 barArriveCycles
     barSync := onH200 barSync
     fenceProxyAsync := onH200 fenceProxyAsync
     fenceAcqRelCta := onH200 fenceAcqRelCta

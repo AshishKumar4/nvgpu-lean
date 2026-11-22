@@ -1359,8 +1359,10 @@ private def pass (kit : Kit) (focus : Nat) (stop : Nat) (st : St) :
         let ct := sm.ctas[s.cta]!
         let expected := match cnt with | some n => cdiv n 32 | none => 0
         -- Arrivals are counted one per `barrierArrivalCycles` per SM (`facts-h200.md`).
-        -- An arrival counts at the end of its slot of the SM's barrier unit.
-        let (slot, port) := sm.barPort.reserve t p.barrierArrivalCycles.value
+        -- An arrival counts at the end of its slot of the SM's barrier unit; a `BAR.ARV`'s
+        -- reaches the unit `sync.barArriveCycles` later than a `BAR.SYNC`'s.
+        let reach := t + if arrive then p.sync.barArriveCycles.value else 0
+        let (slot, port) := sm.barPort.reserve reach p.barrierArrivalCycles.value
         let counted := slot + p.barrierArrivalCycles.value
         sm := { sm with barPort := port }
         let ct := { ct with arrived := ct.arrived.set! id (ct.arrived[id]! + 1),

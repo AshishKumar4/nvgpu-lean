@@ -304,6 +304,7 @@ The role column says who reads a fact (`NV/Core/Roles.lean`): only `engine` fact
 | `sync.clusterMbarrierLatency` | 0 | documented | observed: bound input, not read by the engine | `cuda-guide` §5.1 Table 32: no clusters before 9.0 |  |
 | `sync.clusterBarrierCycles` | 0 | documented | engine | `cuda-guide` §5.1 Table 32: no clusters before 9.0 |  |
 | `sync.namedBarrierLatency` | 36 | measured (H200) | observed: bound input, not read by the engine | `meas-h200`  |  |
+| `sync.barArriveCycles` | 0 | inferred | engine | `meas-a100`  |  |
 | `sync.tryWaitLimit` | 0 | documented | engine | `ptx-isa-9.5` §9.7.15.16.19 Target ISA notes: mbarrier.try_wait requires sm_90 or higher (test_wait, which returns at once, sm_80) |  |
 | `sync.tryWaitWake` | 0 | documented | engine | `ptx-isa-9.5` §9.7.15.16.19 Target ISA notes: mbarrier.try_wait requires sm_90 or higher |  |
 | `sync.barSync` | 64: 16, 128: 20, 256: 28, 512: 44, 1024: 76 | measured (H200) | observed: bound input, not read by the engine | `meas-h200`  |  |

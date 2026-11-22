@@ -336,6 +336,7 @@ The role column says who reads a fact (`NV/Core/Roles.lean`): only `engine` fact
 | `sync.clusterMbarrierLatency` | 395 | measured (H200) | observed: bound input, not read by the engine | `meas-h200`  |  |
 | `sync.clusterBarrierCycles` | 173 | inferred (H200) | engine | `meas-h200`  |  |
 | `sync.namedBarrierLatency` | 36 | measured (H200) | observed: bound input, not read by the engine | `meas-h200`  |  |
+| `sync.barArriveCycles` | 0 | inferred | engine | `meas-a100`  |  |
 | `sync.tryWaitLimit` | 1941 | inferred (B200) | engine | `meas`  |  |
 | `sync.tryWaitWake` | 16 | inferred (B200) | engine | `meas`  |  |
 | `sync.barSync` | 64: 16, 128: 20, 256: 28, 512: 44, 1024: 76 | measured (H200) | observed: bound input, not read by the engine | `meas-h200`  |  |

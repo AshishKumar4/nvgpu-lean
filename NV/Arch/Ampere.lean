@@ -210,6 +210,7 @@ def sync : SyncParams where
   clusterMbarrierLatency := doc 0 "cuda-guide" "§5.1 Table 32: no clusters before 9.0"
   clusterBarrierCycles := doc 0 "cuda-guide" "§5.1 Table 32: no clusters before 9.0"
   namedBarrierLatency := onH200 Hopper.namedBarrierLatency
+  barArriveCycles := inferred 0 "meas-a100" "" ""
   barSync := onH200 Hopper.barSync
   fenceProxyAsync := onH200 Hopper.fenceProxyAsync
   fenceAcqRelCta := onH200 Hopper.fenceAcqRelCta
