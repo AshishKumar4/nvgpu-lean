@@ -310,7 +310,7 @@ def known (_scale : Nat) : Tally := Id.run do
   return t
 
 /-- Every finite encoding rounds to itself in every mode; widening and narrowing back is the
-identity, NaN becoming the canonical NaN. -/
+identity, NaN becoming the canonical NaN (binary32 through binary64 the same NaN, quieted). -/
 def roundTrips (_scale : Nat) : Tally := Id.run do
   let mut t : Tally := { name := "round trips: encode ∘ decode, and F → G → F for F ⊂ G" }
   for (n, f) in small do
@@ -330,7 +330,7 @@ def roundTrips (_scale : Nat) : Tally := Id.run do
       -- binary32 sampled at every 2^16-th encoding plus its low bits
       let b := if f.width ≤ 16 then i else i * 65521 % 2 ^ 32
       let back := cvt g f .rn {} (cvt f g .rn {} b)
-      let want := if f.isNaN b then f.nan else b
+      let want := if !f.isNaN b then b else if f == .f32 && g == .f64 then b ||| 0x400000 else f.nan
       t := t.check (back == want) fun _ => s!"{n} {hex b} → {hex back}"
   return t
 
