@@ -71,7 +71,7 @@ while read -r d; do
   # shellcheck disable=SC2086
   r=$(timeout 900 "$exports/lift-run" "$d/$arch.cubin" "$d" 3 $helpers 2>&1); c=$?
   set -e
-  echo "$name: $(echo "$r" | grep -E 'helper|BIT-EXACT|MISMATCH|CLOCK-DEPENDENT|differing|kernel time|fault flags|CUDA|fit' | tr '\n' ' ' | cut -c1-500) exit $c"
+  echo "$name: $(echo "$r" | grep -E 'helper|BIT-EXACT|MISMATCH|CLOCK-DEPENDENT|differ|kernel time|fault flags|CUDA|fit' | tr '\n' ' ' | cut -c1-1200) exit $c"
   case $c in 0) ok=$((ok + 1)) ;; 5) clock=$((clock + 1)) ;; *) bad=$((bad + 1)) ;; esac
 done < "$exports/launches.txt"
 if [ "$run" = 1 ]; then echo "bit-exact $ok, clock-dependent $clock, failed $bad"
