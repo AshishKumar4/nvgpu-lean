@@ -1103,29 +1103,33 @@ def f_f2i(i):
 
 @form("I2F")
 def f_i2f(i):
-    # `I2F[.F16][.type][.RZ|.RM|.RP] Rd, Ra`: to binary32 (or binary16 in the low half).
+    # `I2F[.F16|.F64][.type][.RZ|.RM|.RP] Rd, Ra`: to binary32 (binary16 in the low half, binary64
+    # in the pair); a 64-bit integer from the pair Ra:Ra+1.
     mods = i["mods"]
-    if any(m not in RND_F and m not in INTS and m != "F16" for m in mods):
+    if any(m not in RND_F and m not in INTS and m not in ("F16", "F64") for m in mods):
         raise Lift(f"I2F {mods}")
     ty, w = next((INTS[m] for m in mods if m in INTS), ("s32", 32))
-    if w == 64 or w == 8:
+    if w == 8 or ("F16" in mods and w == 64):
         raise Lift(f"I2F {mods}")
     rnd = next((RND_F[m] for m in mods if m in RND_F), "rn")
     o = i["ops"]
-    src = f"(unsigned short){val(o[1])}" if w == 16 else val(o[1])
-    rc = "h" if w == 16 else "r"
+    # A 64-bit integer from the register pair.
+    src = f"(unsigned short){val(o[1])}" if w == 16 else f"U64({val(o[1])}, {hi(o[1])})" if w == 64 else val(o[1])
+    rc = "h" if w == 16 else "l" if w == 64 else "r"
+    if "F64" in mods:
+        return wr64(o[0], f"([&]{{ double _v; asm(\"cvt.{rnd}.f64.{ty} %0, %1;\" : \"=d\"(_v) : \"{rc}\"({src})); return (uint64_t)__double_as_longlong(_v); }}())")
     if "F16" in mods:
         return wr(o[0], f"([&]{{ unsigned short _v; asm(\"cvt.{rnd}.f16.{ty} %0, %1;\" : \"=h\"(_v) : \"{rc}\"({src})); return (uint32_t)_v; }}())")
     return wr(o[0], f"([&]{{ uint32_t _v; asm(\"cvt.{rnd}.f32.{ty} %0, %1;\" : \"=r\"(_v) : \"{rc}\"({src})); return _v; }}())")
 
 
-@form("VIMNMX")
+@form("VIMNMX", "IMNMX")
 def f_vimnmx(i):
-    # `VIMNMX[.U32] Rd, a, b, P` and sm_100a's `VIMNMX[.U32] Rd, PT, PT, a, b, P` (`NV.SASS.Sem`):
-    # the minimum when P holds, else the maximum.
+    # `[V]IMNMX[.U32] Rd, a, b, P` (`IMNMX` before sm_90) and sm_100a's `VIMNMX[.U32] Rd, PT, PT,
+    # a, b, P` (`NV.SASS.Sem`): the minimum when P holds, else the maximum.
     ops, mods = i["ops"], i["mods"]
     if [m for m in mods if m not in ("U32", "S32")]:
-        raise Lift(f"VIMNMX {mods}")
+        raise Lift(f"{i['op']} {mods}")
     k = 2 if len(ops) == 6 else 0
     if k and not (all(ops[j]["k"] == "reg" and ops[j]["r"]["f"] == "p" and ops[j]["r"]["i"] == 7 and not ops[j]["not"] for j in (1, 2))):
         raise Lift("VIMNMX leading predicates other than PT")

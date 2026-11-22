@@ -2,7 +2,8 @@
 // transposed (.x2.trans) from shared memory; mma.sync m16n8k16 of f16 and of bf16 and m16n8k8 of
 // tf32, into f32; a saturated epilogue (FFMA.SAT); and, sm_90 on, stmatrix of the f16 product's
 // halves (.x2, and .x1.trans). Each warp works on its own 512 input words, pseudo-random bits. And
-// a NaN-propagating maximum (FMNMX.NAN) and byte and half parameters (narrow constant loads).
+// a NaN-propagating maximum (FMNMX.NAN), byte and half parameters (narrow constant loads), 64-bit
+// integers to floats (I2F.U64.RP, .S64, .F64.S64), and integer minima and maxima (IMNMX on sm_80).
 extern "C" __global__ void mma_sync(const unsigned* in, unsigned* out, unsigned char s, unsigned short h) {
   __shared__ alignas(16) unsigned short a[4][16][16], b[4][16][8], st[4][16][8], st2[4][8][8];
   const int w = threadIdx.x / 32, l = threadIdx.x % 32, g = blockIdx.x * 4 + w;
@@ -43,6 +44,13 @@ extern "C" __global__ void mma_sync(const unsigned* in, unsigned* out, unsigned 
     dst[640 + 4 * l + i] = __float_as_uint(m);
   }
   dst[768 + l] = (unsigned)s * (unsigned)l + (unsigned)h;
+  const unsigned long long u = ((unsigned long long)src[2 * l] << 32) | src[2 * l + 1];
+  dst[800 + l] = __float_as_uint(__ull2float_ru(u));
+  dst[832 + l] = __float_as_uint(__ll2float_rz((long long)u));
+  const double dd = __ll2double_rn((long long)u);
+  dst[864 + 2 * l] = (unsigned)__double_as_longlong(dd);
+  dst[865 + 2 * l] = (unsigned)(__double_as_longlong(dd) >> 32);
+  dst[928 + l] = (unsigned)min((int)src[l], (int)src[l + 32]) ^ max(src[l + 64], src[l + 96]);
 #if __CUDA_ARCH__ >= 900
   const unsigned h0 = (__float_as_uint(d[0]) >> 16) | (__float_as_uint(d[1]) & 0xffff0000u);
   const unsigned h1 = (__float_as_uint(d[2]) >> 16) | (__float_as_uint(d[3]) & 0xffff0000u);
