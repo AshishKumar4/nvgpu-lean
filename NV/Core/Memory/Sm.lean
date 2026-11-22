@@ -961,6 +961,9 @@ private def arriveStage (m : SmMem) (t : Nat) (msg : Msg) (snapshot : Store) : E
       let rest := ((m.mshr.get? x.line).getD #[]).filter (·.1 != txn)
       m := { m with l1 := (m.l1.fill x.line x.fills false).1,
                     mshr := if rest.isEmpty then m.mshr.erase x.line else m.mshr.insert x.line rest }
+    -- A load's data returns through the L1's data stage to the registers; an async unit's (a bulk
+    -- copy's source) goes on to its shared-memory destination, whose write takes the stage then.
+    if r.async && x.fills == 0 then return m.complete x.req l
     let (_, last, m') := m.take .data l c.wavefrontCycles
     let ready := last + c.backL1
     m := m'.complete x.req ready
