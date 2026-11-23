@@ -47,4 +47,13 @@ def main : IO UInt32 := do
     IO.println s!"engine-smoke: {repr res.counters}"
     if bad > 0 || res.counters.cycles == 0 || res.counters.instExecuted != 8 * 8 then
       IO.eprintln s!"engine-smoke: {bad} wrong outputs"; return 1
+  -- Module data a terabyte or more from the launch's global memory: an error, not a page table
+  -- spanning the gap.
+  let far : Kernel := { kernel with data := #[(0x7eff_f000_0000, #[1, 2, 3, 4])] }
+  match run NV.Arch.h200 { kernel := far, grid := (1, 1, 1), block := (32, 1, 1), params,
+                           global := Store.empty 0x10000000 1024 } with
+  | .ok _ => IO.eprintln "engine-smoke: module data far from global memory ran"; return 1
+  | .error e =>
+    unless (e.splitOn "a terabyte or more").length > 1 do
+      IO.eprintln s!"engine-smoke: module data far from global memory: {e}"; return 1
     return 0

@@ -1961,6 +1961,11 @@ private def runOnWith {m : Type → Type} {σ : Type} [Monad m] (pool : Pool m �
   for i in [0:l.params.size] do
     global := global.writeByte ((paramAddr - global.base).toNat + i) l.params[i]!
   for (addr, bytes) in if k.dataLoaded then #[] else k.data do
+    -- The store's page table spans what it covers: module data a terabyte or more from the
+    -- launch's memory would take more host memory than the machine has (`Elf.dataBase`).
+    let hex (n : Nat) : String := "0x" ++ String.ofList (Nat.toDigits 16 n)
+    if (max (global.base.toNat + global.size) (addr + bytes.size)) - min global.base.toNat addr ≥ 1 <<< 40 then
+      return .error s!"the module's data at {hex addr} is a terabyte or more from the launch's global memory at {hex global.base.toNat}: place the launch's buffers near the module's data (`Elf.dataBase`)"
     global := global.cover addr.toUInt64 bytes.size
     for i in [0:bytes.size] do
       global := global.writeByte (addr - global.base.toNat + i) bytes[i]!
