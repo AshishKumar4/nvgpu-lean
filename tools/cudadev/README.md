@@ -93,7 +93,10 @@ libraries and frameworks built on it load them where they would load NVIDIA's, a
   bit-compares two runs' outputs: the emulated device's with a real GPU's. With JAX 0.12.0.1
   (`jax[cuda12]`), all 11 outputs of the emulated H100 equal a GH200's bit for bit, and all 11 of
   the emulated A100 an A100-SXM4-40GB's (2026-11-21; the device-jax row's outputs against
-  `jax_check.py run` on each GPU).
+  `jax_check.py run` on each GPU). The emulated device provides the driver only: XLA's GEMMs use NVIDIA's math
+  libraries, which `jax[cuda12]` installs as `nvidia-*-cu12` wheels; an environment without them
+  (a host with no CUDA toolkit) must install them and put their `lib` directories on
+  `LD_LIBRARY_PATH`, or XLA's compile fails.
 * `torch_check.py` runs the same kind of programs through PyTorch. Its softmax, reductions and
   layer_norm cases (PyTorch 2.9.1, CUDA 12.9 wheels: sums, max, argmax, variance, logsumexp,
   cumsum, GELU, exp and tanh, a layer norm) on the emulated H100 and A100 equal a GH200's and an
