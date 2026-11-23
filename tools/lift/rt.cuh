@@ -44,7 +44,8 @@ struct Ctx {
   // The work pool (`Pool`): the launch's CTAs, then its helper CTAs; this CTA's index.
   uint32_t ctas, helpers, cta;
   struct Pool* pool;
-  struct Slot* slots;      // one per lifted warp (`cta * LIFT_WARPS + warp`), with helpers only
+  struct Slot* slots;      // one per lifted warp (`cta * LIFT_WARPS + warp`), with helpers or `selfHelp`
+  uint32_t selfHelp;       // no helpers: a warp's copy jobs shared with its CTA's waiting warps (`helpCta`)
   uint32_t* acc;           // per slot, a warpgroup MMA's 16 x 256 accumulator words for its helpers
   unsigned long long* ring;  // published jobs, `ringSize` positions
   uint32_t ringSize;
@@ -1038,12 +1039,13 @@ __device__ inline uint32_t* mmaOut(const Ctx& x, const MmaJob& j, uint32_t* buf,
 }
 
 // MMA task `t`, a tile, run by `n` lanes of one warp (`r` this lane's rank, `sync` the warp's
-// barrier) with its operands decoded once into the warp's stage `st`. `own`: the lanes'
+// barrier) with its operands decoded once into the warp's stage `st`; `aKept`: the stage holds the
+// tile's A already (the warp's previous task was the same rows'). `own`: the lanes'
 // accumulators, when the issuing warp runs a warpgroup MMA's task whole (its outputs are the lanes'
 // own values, `tilePos`).
 template <class Sync>
 static __device__ __noinline__ void mmaTask(const Ctx& x, const MmaJob& j, uint32_t* buf, uint32_t t, uint32_t r, uint32_t n,
-                               uint32_t* st, Sync sync, uint32_t* own) {
+                               uint32_t* st, Sync sync, uint32_t* own, bool aKept) {
   const int man = j.ty == BF16 ? 7 : 10;
   const Codec c = j.ty == BF16 ? codecIeee(8, 7) : codecIeee(5, 10);
   const Datapath dp = prepareF32(25, -133, 23, false, man, man);
@@ -1087,7 +1089,7 @@ static __device__ __noinline__ void mmaTask(const Ctx& x, const MmaJob& j, uint3
   uint32_t* A = st;
   uint32_t* B = st + 256;
   sync();
-  for (uint32_t e = r; e < 16 * (nr + nc); e += n) {
+  for (uint32_t e = aKept ? 16 * nr + r : r; e < 16 * (nr + nc); e += n) {
     if (e < 16 * nr) A[e] = mmaElem(x, j, true, j.aRow0 + row0 + e / 16, (int)(e % 16), c);
     else B[e - 16 * nr] = mmaElem(x, j, false, col0 + (e - 16 * nr) / 16, (int)((e - 16 * nr) % 16), c);
   }
@@ -1169,8 +1171,8 @@ static __device__ __noinline__ void copyTask(const Ctx& x, const CopyJob& j, uin
 
 template <class Sync>
 __device__ inline void runTask(const Job& j, uint32_t t, uint32_t r, uint32_t n, uint32_t* st, Sync sync,
-                               uint32_t* own) {
-  if (j.kind == 0) mmaTask(j.x, j.mma, j.buf, t, r, n, st, sync, own);
+                               uint32_t* own, bool aKept = false) {
+  if (j.kind == 0) mmaTask(j.x, j.mma, j.buf, t, r, n, st, sync, own, aKept);
   else copyTask(j.x, j.copy, t, r, n);
 }
 
@@ -1192,8 +1194,26 @@ __device__ inline int claimTask(Slot* s, unsigned long long gen, uint32_t tasks)
 template <class Sync, class Back>
 static __device__ __noinline__ void runJob(const Ctx& x, const Job& j, uint32_t warp, uint32_t r, uint32_t n, uint32_t mask,
                               Sync sync, uint32_t* own, bool work, Back back) {
+  // No helpers: a copy job of more than one task published in the warp's slot, its tasks claimed
+  // beside the CTA's warps that wait on an mbarrier meanwhile (`helpCta`), and waited for.
+  if (x.helpers == 0 && x.selfHelp && j.kind == 1 && j.tasks > 1 && n == 1) {
+    Slot* s = x.slots + x.cta * LIFT_WARPS + warp;
+    s->job = j;
+    s->done = 0;
+    const unsigned long long gen = (ldAcq(&s->claim) >> 32) + 1;
+    stRel(&s->claim, gen << 32);
+    uint32_t self = 0;
+    for (int t; (t = claimTask(s, gen, j.tasks)) >= 0; ++self) runTask(j, (uint32_t)t, 0, 1, x.stage, sync, own);
+    for (unsigned ns = 32; ldAcq(&s->done) + self < j.tasks; ns = min(2 * ns, 256u)) __nanosleep(ns);
+    // Closed: a waiting warp that reads the claim now finds no task.
+    stRel(&s->claim, (gen << 32) | 0xffffffffull);
+    back(0);
+    return;
+  }
   if (x.helpers == 0) {
-    for (uint32_t t = 0; t < j.tasks; ++t) runTask(j, t, r, n, x.stage, sync, own);
+    // In order, so a row of tiles decodes its A once.
+    const uint32_t blocks = j.kind == 0 ? (j.mma.cols + j.mma.tileCols - 1) / j.mma.tileCols : 1;
+    for (uint32_t t = 0; t < j.tasks; ++t) runTask(j, t, r, n, x.stage, sync, own, t % blocks != 0);
     return;
   }
   const uint32_t slot = x.cta * LIFT_WARPS + warp, leader = __ffs(mask) - 1;
@@ -1224,6 +1244,40 @@ static __device__ __noinline__ void runJob(const Ctx& x, const Job& j, uint32_t 
     for (unsigned ns = 32; ldAcq(&s->done) + self < j.tasks; ns = min(2 * ns, 256u)) __nanosleep(ns);
   sync();
   back(mine);
+}
+
+// A warp waiting on an mbarrier (`SYNCS.PHASECHK`, before it polls again) with lanes `act`, when the
+// launch has no helpers: a task of a copy job another warp of its CTA has published (`runJob`),
+// if one is left, run by its lanes.
+static __device__ __noinline__ void helpCta(const Ctx& x, uint32_t warp, uint32_t lane, uint32_t act) {
+  if (x.helpers != 0 || !x.selfHelp) return;
+  const uint32_t leader = __ffs(act) - 1, n = __popc(act), r = __popc(act & ((1u << lane) - 1));
+  for (uint32_t w = 0; w < LIFT_WARPS; ++w) {
+    if (w == warp) continue;
+    Slot* s = x.slots + x.cta * LIFT_WARPS + w;
+    unsigned long long c = 0;
+    if (lane == leader) c = ldAcq(&s->claim);
+    c = __shfl_sync(act, c, leader);
+    if ((uint32_t)c == 0xffffffffu || (c >> 32) == 0) continue;
+    const Job* j = &s->job;
+    if (__ldcg(&j->kind) != 1) continue;
+    const uint32_t tasks = __ldcg(&j->tasks);
+    while (true) {
+      int t = 0;
+      if (lane == leader) t = claimTask(s, c >> 32, tasks);
+      t = __shfl_sync(act, t, leader);
+      if (t < 0) break;
+      CopyJob cj;
+      for (uint32_t k = 0; k < sizeof(CopyJob) / 4; ++k) ((uint32_t*)&cj)[k] = __ldcg((const uint32_t*)&j->copy + k);
+      Ctx jx;
+      for (uint32_t k = 0; k < sizeof(Ctx) / 4; ++k) ((uint32_t*)&jx)[k] = __ldcg((const uint32_t*)&j->x + k);
+      copyTask(jx, cj, (uint32_t)t, r, n);
+      __threadfence();
+      __syncwarp(act);
+      if (lane == leader) atomicAdd(&s->done, 1u);
+    }
+    return;
+  }
 }
 
 // A helper CTA's warps: the job at the ring's head, its tasks claimed one by one until none is

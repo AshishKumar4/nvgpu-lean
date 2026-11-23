@@ -222,8 +222,11 @@ static int runDir(const Kernel& k, const std::string& dir, bool out1, int reps, 
   uint64_t helpers = resident >= 2 * ctas ? resident - ctas : 0;
   if (helpersMax >= 0) helpers = std::min(helpers, (uint64_t)helpersMax);
   if (ctas + helpers > 0x7fffffffull) { fprintf(runLog, "a grid of %llu CTAs\n", (unsigned long long)(ctas + helpers)); return 1; }
-  const uint64_t slots = helpers ? ctas * warps : 0;
-  ctx.ctas = (uint32_t)ctas; ctx.helpers = (uint32_t)helpers;
+  // Without helpers, a warp's copies are shared with its CTA's waiting warps through its slot
+  // (`helpCta`), when the slots take at most 256 MB.
+  const bool selfHelp = !helpers && ctas * warps * sizeof(lift::Slot) <= (256ull << 20);
+  const uint64_t slots = helpers || selfHelp ? ctas * warps : 0;
+  ctx.ctas = (uint32_t)ctas; ctx.helpers = (uint32_t)helpers; ctx.selfHelp = selfHelp;
   ctx.ringSize = (uint32_t)std::max<uint64_t>(2 * slots, 1);
   lift::Pool* dPool; CK(arena.alloc(&dPool, sizeof(lift::Pool)));
   lift::Slot* dSlots; CK(arena.alloc(&dSlots, sizeof(lift::Slot) * std::max<uint64_t>(slots, 1)));

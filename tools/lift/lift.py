@@ -1408,9 +1408,11 @@ def f_syncs(i):
     if "PHASECHK" in mods:
         # Polled plainly; once the phase has completed, read again with acquire (the copies that
         # completed it may have been written from other SMs: the work pool's helpers).
+        # A warp whose wait is not over helps with its CTA's copies meanwhile (`helpCta`).
         return (f"{{ unsigned long long* _w = MB(ctx, (uint32_t){addr(ops[1])}); "
                 f"bool _done = (uint32_t)(*(volatile unsigned long long*)_w >> 63) != ({val(ops[2])} >> 31); "
                 f"if (_done) (void)ldAcq(_w); "
+                f"if (__all_sync(__EXEC__, !_done)) helpCta(ctx, warp, lane, __EXEC__); "
                 + wrP(ops[0], "_done") + " }")
     if "ARRIVE" in mods:
         tx = f"{val(ops[2])}" if ops[2]["k"] == "reg" and ops[2]["r"]["i"] != 255 else "0u"
