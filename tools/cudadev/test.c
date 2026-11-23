@@ -443,6 +443,42 @@ static void textureChecks(void) {
   CK(cuModuleUnload(m));
 }
 
+// Managed memory: the host writes an array through its pointer, a kernel (axpy, y = 2x + y)
+// updates it in place from another managed array, the host reads the result through the same
+// pointer after synchronizing, and a copy reads it too.
+static void managedChecks(void) {
+  enum { N = 3000 };
+  CUdeviceptr x, y;
+  CK(cuMemAllocManaged(&x, N * sizeof(float), CU_MEM_ATTACH_GLOBAL));
+  CK(cuMemAllocManaged(&y, N * sizeof(float), CU_MEM_ATTACH_GLOBAL));
+  float *hx = (float *)x, *hy = (float *)y;
+  for (int i = 0; i < N; i++) { hx[i] = (float)i; hy[i] = 1.0f; }
+  unsigned isManaged = 0;
+  CK(cuPointerGetAttribute(&isManaged, CU_POINTER_ATTRIBUTE_IS_MANAGED, y));
+  CUmodule m;
+  CK(cuModuleLoadData(&m, ptx));
+  CUfunction axpy;
+  CK(cuModuleGetFunction(&axpy, m, "axpy"));
+  float a = 2.0f;
+  unsigned n = N;
+  void *args[] = {&x, &y, &a, &n};
+  CK(cuLaunchKernel(axpy, (N + 127) / 128, 1, 1, 128, 1, 1, 0, NULL, args, NULL));
+  CK(cuCtxSynchronize());
+  int ok = isManaged == 1;
+  for (int i = 0; i < N; i++) ok = ok && hy[i] == 2.0f * (float)i + 1.0f;
+  check("a kernel updates managed memory the host wrote, and the host reads it", ok);
+  hx[5] = 100.0f;
+  CK(cuLaunchKernel(axpy, (N + 127) / 128, 1, 1, 128, 1, 1, 0, NULL, args, NULL));
+  CK(cuCtxSynchronize());
+  float z[N];
+  CK(cuMemcpyDtoH(z, y, sizeof z));
+  ok = z[5] == 211.0f && z[6] == 25.0f;
+  check("a host write between launches reaches the next, and a copy reads the result", ok);
+  CK(cuMemFree(x));
+  CK(cuMemFree(y));
+  CK(cuModuleUnload(m));
+}
+
 int main(int argc, char **argv) {
   // A deadlock in a broken driver must terminate the test process, including on the parent.
   alarm(120);
@@ -501,6 +537,14 @@ int main(int argc, char **argv) {
     else if (!strcmp(argv[1], "graph")) graphSubmissionChecks();
     else if (!strcmp(argv[1], "legacy")) legacySubmissionChecks();
     else if (!strcmp(argv[1], "peer")) peerChecks();
+    else if (!strcmp(argv[1], "managed")) {
+      CUcontext c0;
+      CUdevice d0;
+      CK(cuDeviceGet(&d0, 0));
+      CK(cuDevicePrimaryCtxRetain(&c0, d0));
+      CK(cuCtxSetCurrent(c0));
+      managedChecks();
+    }
     else if (!strcmp(argv[1], "texture")) {
       CUcontext c0;
       CUdevice d0;

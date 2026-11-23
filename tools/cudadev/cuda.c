@@ -230,6 +230,9 @@ static void publish(int64_t delta) {
 // the host reads it, and what the host writes here sent there at the next launch.
 static int resPull(CUdeviceptr a, size_t n);
 static int resWrote(CUdeviceptr a, size_t n, int before);
+// Managed memory (managed.h): the host's mapping of [a, a + n) when a managed allocation holds it
+// whole, which holds its bytes between device work (the lock held).
+static uint8_t *managedHost(CUdeviceptr a, size_t n);
 
 // The lock held: the calling thread on device `g` until `gpuLeave`.
 static int gpuEnter(int g) { int was = gcur; if (g >= 0) gcur = g; return was; }
@@ -238,6 +241,12 @@ static void gpuLeave(int was) { gcur = was; }
 static CUresult devWrite(CUdeviceptr dst, const void *src, size_t n) {
   if (n == 0) return CUDA_SUCCESS;
   pthread_mutex_lock(&lock);
+  uint8_t *mh = managedHost(dst, n);
+  if (mh) {
+    memmove(mh, src, n);
+    pthread_mutex_unlock(&lock);
+    return CUDA_SUCCESS;
+  }
   int was = gpuEnter(gpuAt(dst));
   enterLean();
   CUresult r = CUDA_ERROR_ILLEGAL_ADDRESS;
@@ -254,6 +263,12 @@ static CUresult devWrite(CUdeviceptr dst, const void *src, size_t n) {
 static CUresult devRead(void *dst, CUdeviceptr src, size_t n) {
   if (n == 0) return CUDA_SUCCESS;
   pthread_mutex_lock(&lock);
+  const uint8_t *mh = managedHost(src, n);
+  if (mh) {
+    memmove(dst, mh, n);
+    pthread_mutex_unlock(&lock);
+    return CUDA_SUCCESS;
+  }
   int was = gpuEnter(gpuAt(src));
   lean_object *b = resPull(src, n) ? ioValue(nvgpu_read(lend(), src, n, lean_io_mk_world())) : NULL;
   gpuLeave(was);
@@ -302,8 +317,11 @@ uint64_t nvgpuLeanCollectiveNs(int g, int kind, int ranks, uint64_t bytes) {
 
 static CUresult devCopy(CUdeviceptr dst, CUdeviceptr src, size_t n) {
   if (n == 0) return CUDA_SUCCESS;
-  // Between devices (a peer copy): through the host.
-  if (gpuAt(dst) != gpuAt(src)) {
+  pthread_mutex_lock(&lock);
+  int managed = managedHost(dst, n) || managedHost(src, n);
+  pthread_mutex_unlock(&lock);
+  // Between devices (a peer copy) or to or from managed memory: through the host.
+  if (managed || gpuAt(dst) != gpuAt(src)) {
     void *b = malloc(n);
     CUresult r = b ? devRead(b, src, n) : CUDA_ERROR_OUT_OF_MEMORY;
     if (r == CUDA_SUCCESS) r = devWrite(dst, b, n);
@@ -324,6 +342,12 @@ static CUresult devCopy(CUdeviceptr dst, CUdeviceptr src, size_t n) {
 static CUresult devSet(CUdeviceptr dst, uint8_t v, size_t n) {
   if (n == 0) return CUDA_SUCCESS;
   pthread_mutex_lock(&lock);
+  uint8_t *mh = managedHost(dst, n);
+  if (mh) {
+    memset(mh, v, n);
+    pthread_mutex_unlock(&lock);
+    return CUDA_SUCCESS;
+  }
   int was = gpuEnter(gpuAt(dst));
   enterLean();
   CUresult r = CUDA_ERROR_ILLEGAL_ADDRESS;
@@ -492,6 +516,11 @@ CUresult CUDAAPI cuDeviceGetAttribute(int *v, CUdevice_attribute a, CUdevice d) 
   int x;
   if (!partAttribute(gpus[d].part, a, &x)) return CUDA_ERROR_INVALID_VALUE;
   if (a == CU_DEVICE_ATTRIBUTE_PCI_BUS_ID) x += d;  // each device on its own bus
+  // Managed memory, which the host must not touch while a kernel runs (managed.h).
+  if (a == CU_DEVICE_ATTRIBUTE_MANAGED_MEMORY) x = 1;
+  if (a == CU_DEVICE_ATTRIBUTE_CONCURRENT_MANAGED_ACCESS || a == CU_DEVICE_ATTRIBUTE_PAGEABLE_MEMORY_ACCESS ||
+      a == CU_DEVICE_ATTRIBUTE_DIRECT_MANAGED_MEM_ACCESS_FROM_HOST)
+    x = 0;
   *v = x;
   queryTrace("cuDeviceGetAttribute(%d) = %d", (int)a, x);
   return CUDA_SUCCESS;
@@ -771,8 +800,16 @@ CUresult CUDAAPI cuMemAllocPitch(CUdeviceptr *p, size_t *pitch, size_t width, si
   return allocRange(p, *pitch * height, ALLOC_ALIGN, 0);
 }
 
+#include "managed.h"
+
+static uint8_t *managedHost(CUdeviceptr a, size_t n) {
+  Managed *m = managedList ? managedAt(a, n) : NULL;
+  return m ? (uint8_t *)a : NULL;
+}
+
 CUresult CUDAAPI cuMemFree(CUdeviceptr p) {
   NEED_INIT();
+  managedFree(p);
   return freeRange(p, 0);
 }
 
@@ -902,7 +939,11 @@ static CUresult pointerAttribute(void *data, CUpointer_attribute a, CUdeviceptr 
       *(void **)data = onDevice ? NULL : (void *)p;
       return onDevice ? CUDA_ERROR_INVALID_VALUE : CUDA_SUCCESS;
     case CU_POINTER_ATTRIBUTE_DEVICE_ORDINAL: *(int *)data = onDevice ? gpuAt(p) : gcur; return CUDA_SUCCESS;
-    case CU_POINTER_ATTRIBUTE_IS_MANAGED: *(unsigned int *)data = 0; return CUDA_SUCCESS;
+    case CU_POINTER_ATTRIBUTE_IS_MANAGED:
+      pthread_mutex_lock(&lock);
+      *(unsigned int *)data = managedAt(p, 1) != NULL;
+      pthread_mutex_unlock(&lock);
+      return CUDA_SUCCESS;
     case CU_POINTER_ATTRIBUTE_MAPPED: *(unsigned int *)data = 1; return CUDA_SUCCESS;
     case CU_POINTER_ATTRIBUTE_SYNC_MEMOPS: *(unsigned int *)data = 1; return CUDA_SUCCESS;
     case CU_POINTER_ATTRIBUTE_IS_LEGACY_CUDA_IPC_CAPABLE: *(unsigned int *)data = 0; return CUDA_SUCCESS;

@@ -219,7 +219,13 @@ static CUresult runKernel(Op *o) {
   clock_gettime(CLOCK_MONOTONIC, &t0);
   uint64_t c0 = G.lean ? nvgpu_device_cycles(lend()) : 0;
   CUresult r = CUDA_SUCCESS;
-  if (accelArch())
+  // Managed memory the host changed, to the device first (managed.h).
+  int gm = gcur;
+  if (managedList && !managedPush()) r = CUDA_ERROR_LAUNCH_FAILED;
+  gcur = gm;
+  if (r != CUDA_SUCCESS)
+    ;
+  else if (accelArch())
     r = getenv("NVGPU_LEAN_ACCEL_CHECK") ? accelChecked(o) : accelKernel(o);
   else if (ngpus > 1) {
     // A mesh: the kernel may reach a peer's memory, so it runs over every device's.
@@ -247,6 +253,11 @@ static CUresult runKernel(Op *o) {
       r = CUDA_ERROR_LAUNCH_FAILED;
     } else if (!take(res))
       r = CUDA_ERROR_LAUNCH_FAILED;
+  }
+  if (r == CUDA_SUCCESS && managedList) {
+    int gm2 = gcur;
+    if (!managedPull()) r = CUDA_ERROR_LAUNCH_FAILED;
+    gcur = gm2;
   }
   if (state) {
     state->busy = 0;

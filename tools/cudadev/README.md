@@ -45,6 +45,10 @@ libraries and frameworks built on it load them where they would load NVIDIA's, a
   window holds it), page-locked host memory, virtual
   memory reservations and pools, errors, and the entry points by name (`cuGetProcAddress`, with
   the older ABIs a runtime of an earlier CUDA asks for).
+* `managed.h`: managed memory, device memory the host maps at the same address: the host's
+  mapping holds its bytes between device work, a launch takes the pages the host changed and
+  gives back the pages it changed (the host must not touch memory a running kernel writes: no
+  concurrent managed access).
 * `tex.h`: CUDA arrays (pitch-linear device memory, which a texture or surface instruction cannot
   tell from the hardware's block-linear layout) and texture and surface objects over arrays, linear
   and pitched memory (each the device's table entry its handle names, `Device.setTextures`, as the
@@ -133,7 +137,7 @@ JAX's CUDA 13 plugin (its runtime asks the driver for a table not provided; the 
 `jax[cuda12]`, runs). PyTorch's matmuls: NVIDIA's math libraries, as PyTorch 2.9's CUDA 12
 wheels load them, ask the runtime for a table entry the device does not provide
 (`runtime_tables.h` has only ZLUDA's), and stop; PyTorch's own kernels run (the `device-torch`
-row). Managed memory, IPC, mipmapped arrays and texture resource views,
+row). IPC, mipmapped arrays and texture resource views,
 conditional graph nodes (they need the device runtime's `cudaGraphSetConditional`), batch
 memory-operation nodes, external memory and semaphores, and kernels dereferencing host memory:
 each fails with a CUDA error naming it.
