@@ -17,6 +17,7 @@ One parameter set each (`NV/Arch/`), every number a `Fact` with its kind and sou
 | key | part | target |
 |---|---|---|
 | `h200` | H200 SXM 141 GB | `sm_90a` |
+| `gh200` | GH200 480 GB (its GPU) | `sm_90a` |
 | `h100` | H100 SXM5 80 GB | `sm_90a` |
 | `h100-pcie` | H100 PCIe 80 GB | `sm_90a` |
 | `h100-nvl` | H100 NVL 94 GB | `sm_90a` |

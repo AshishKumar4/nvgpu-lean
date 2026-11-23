@@ -83,6 +83,7 @@ import NV.Core.Engine
 import NV.Arch.Table
 import NV.Arch.Hopper
 import NV.Arch.H200
+import NV.Arch.GH200
 import NV.Arch.H100
 import NV.Arch.Ampere
 import NV.Arch.A100

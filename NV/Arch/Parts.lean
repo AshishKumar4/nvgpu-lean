@@ -2,6 +2,7 @@ import NV.Arch.H100
 import NV.Arch.A100
 import NV.Arch.RTXPro6000
 import NV.Arch.B200
+import NV.Arch.GH200
 
 /-!
 # The parts
@@ -15,7 +16,7 @@ namespace NV.Arch
 open NV.Core
 
 def parts : List (String × Params) :=
-  [("h200", h200), ("h100", h100), ("h100-pcie", h100Pcie), ("h100-nvl", h100Nvl),
+  [("h200", h200), ("gh200", gh200), ("h100", h100), ("h100-pcie", h100Pcie), ("h100-nvl", h100Nvl),
    ("a100-40", a100_40), ("a100-80", a100_80), ("rtxpro6000", rtxPro6000), ("b200", b200),
    ("b300", b300)]
 
