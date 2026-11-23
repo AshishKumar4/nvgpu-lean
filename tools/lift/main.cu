@@ -17,7 +17,17 @@
 //        lift-run --serve
 //   The same runs for an accelerated backend, one process for all of them: a line `CUBIN DIR` on
 //   stdin runs `CUBIN DIR --out` (its output to DIR/run.log) and answers `exit N`. Each cubin is
-//   loaded once.
+//   loaded once. Its device memory may instead stay on this GPU between runs (resident): lines
+//     shm NAME BYTES        map the staging buffer the backend shares (POSIX shared memory)
+//     seg S BASE SIZE       segment S (the backend's number) covers [BASE, BASE + SIZE),
+//                           its bytes kept where the old and new ranges overlap, new bytes zero
+//     put S OFF N           N bytes from the staging buffer to segment S at OFF
+//     get S OFF N           N bytes of segment S at OFF to the staging buffer
+//     run CUBIN DIR G M     run as above on resident segments G (allocations) and M (module data;
+//                           DIR without global.bin and
+//                           module.bin); the segments then hold the device's memory, which the
+//                           backend reads back (`get`) only where it needs it
+//   each answered `ok` (or `exit N` for a run; `fail` when a request cannot be met).
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <algorithm>
@@ -31,6 +41,9 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <unistd.h>
 
 // rt.cuh's types (`Ctx`, the work pool's) do not depend on the block size; its device functions
 // are the kernel's, not this program's.
@@ -103,19 +116,25 @@ struct Arena {
   }
 };
 
+// The resident segments (`--serve`'s `seg`): device memory kept between runs, at the addresses
+// their bases name.
+struct Segment { uint8_t* d = nullptr; uint64_t base = 0, size = 0; };
+static std::map<unsigned, Segment> segs;
 static double msSince(std::chrono::steady_clock::time_point t) {
   return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t).count();
 }
 
-static int runDir(const Kernel& k, const std::string& dir, bool out1, int reps, long long helpersMax) {
+static int runDir(const Kernel& k, const std::string& dir, bool out1, int reps, long long helpersMax,
+                  bool onDevice = false, unsigned gSeg = 0, unsigned mSeg = 1) {
   const auto t0 = std::chrono::steady_clock::now();
   double tRead = 0, tSetup = 0, tRun = 0;
   auto meta = readMeta(dir + "/meta.txt");
   const double tMeta = msSince(t0);
   std::vector<uint8_t> const0, global, module, final_;
-  if (!readFile(dir + "/const0.bin", &const0) || !readFile(dir + "/global.bin", &global)) return 1;
+  // `onDevice`: the segments are on the device already (`--serve`'s `run`).
+  if (!readFile(dir + "/const0.bin", &const0) || (!onDevice && !readFile(dir + "/global.bin", &global))) return 1;
   bool hasModule = meta.count("moduleBase") > 0;
-  if (hasModule && !readFile(dir + "/module.bin", &module)) return 1;
+  if (hasModule && !onDevice && !readFile(dir + "/module.bin", &module)) return 1;
   if (!out1 && !readFile(dir + "/final.bin", &final_)) return 1;
   const double tFiles = msSince(t0) - tMeta;
   dim3 grid(meta["grid"][0], meta["grid"][1], meta["grid"][2]);
@@ -142,11 +161,19 @@ static int runDir(const Kernel& k, const std::string& dir, bool out1, int reps, 
 
   Arena arena;
   uint8_t *dGlobal, *dShared, *dConst; uint32_t* dFault;
-  CK(arena.alloc(&dGlobal, global.size()));
+  if (onDevice) {
+    if (segs[gSeg].base != globalBase || segs[gSeg].size < meta["globalSize"][0]) {
+      fprintf(runLog, "the resident allocations do not cover the launch's\n");
+      return 1;
+    }
+    dGlobal = segs[gSeg].d;
+  } else {
+    CK(arena.alloc(&dGlobal, global.size()));
+    CK(cudaMemcpy(dGlobal, global.data(), global.size(), cudaMemcpyHostToDevice));
+  }
   CK(arena.alloc(&dShared, sharedBytes * ctas));
   CK(arena.alloc(&dConst, const0.size() + 256));
   CK(arena.alloc(&dFault, 4));
-  CK(cudaMemcpy(dGlobal, global.data(), global.size(), cudaMemcpyHostToDevice));
   CK(cudaMemcpy(dConst, const0.data(), const0.size(), cudaMemcpyHostToDevice));
 
   lift::Ctx ctx{};
@@ -154,7 +181,15 @@ static int runDir(const Kernel& k, const std::string& dir, bool out1, int reps, 
   ctx.globalDelta = (int64_t)((uint64_t)dGlobal - globalBase);
   ctx.hiBase = ~0ull;
   uint8_t* dModule = nullptr;
-  if (hasModule) {
+  if (hasModule && onDevice) {
+    if (segs[mSeg].base != meta["moduleBase"][0] || segs[mSeg].size < meta["moduleSize"][0]) {
+      fprintf(runLog, "the resident module data do not cover the launch's\n");
+      return 1;
+    }
+    dModule = segs[mSeg].d;
+    ctx.hiBase = meta["moduleBase"][0];
+    ctx.hiDelta = (int64_t)((uint64_t)dModule - ctx.hiBase);
+  } else if (hasModule) {
     CK(arena.alloc(&dModule, module.size() + 1));
     CK(cudaMemcpy(dModule, module.data(), module.size(), cudaMemcpyHostToDevice));
     ctx.hiBase = meta["moduleBase"][0];
@@ -248,6 +283,12 @@ static int runDir(const Kernel& k, const std::string& dir, bool out1, int reps, 
   if (run(&first)) return 1;
   tRun = msSince(t0) - tRead - tSetup;
   uint32_t fault; CK(cudaMemcpy(&fault, dFault, 4, cudaMemcpyDeviceToHost));
+  if (onDevice) {
+    fprintf(runLog, "fault flags %#x, kernel time %.3f ms\n", fault, first);
+    fprintf(runLog, "phases: read %.1f ms (meta %.1f, files %.1f of %zu bytes), setup %.1f ms, run %.1f ms, out %.1f ms\n",
+            tRead, tMeta, tFiles, const0.size(), tSetup, tRun, msSince(t0) - tRead - tSetup - tRun);
+    return fault == 0 ? 0 : 4;
+  }
   std::vector<uint8_t> out(global.size());
   CK(cudaMemcpy(out.data(), dGlobal, out.size(), cudaMemcpyDeviceToHost));
   if (out1) {
@@ -292,8 +333,60 @@ int main(int argc, char** argv) {
   CK(cudaFree(nullptr));  // the primary context, which the driver calls below share
   if (argc == 2 && std::string(argv[1]) == "--serve") {
     std::map<std::string, Kernel> kernels;
-    std::string cubin, dir;
-    while (std::cin >> cubin >> dir) {
+    uint8_t* stage = nullptr;
+    uint64_t stageBytes = 0;
+    std::string line;
+    while (std::getline(std::cin, line)) {
+      std::istringstream in(line);
+      std::string cmd;
+      in >> cmd;
+      // The staging buffer the backend shares: a fixed window that `put` and `get` move bytes
+      // through, never a whole segment.
+      if (cmd == "shm") {
+        std::string name; in >> name >> stageBytes;
+        int fd = shm_open(name.c_str(), O_RDWR, 0);
+        void* p = fd < 0 ? MAP_FAILED : mmap(nullptr, stageBytes, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+        if (fd >= 0) close(fd);
+        stage = p == MAP_FAILED ? nullptr : (uint8_t*)p;
+        printf(stage ? "ok\n" : "fail\n");
+        fflush(stdout);
+        continue;
+      }
+      if (cmd == "seg") {
+        unsigned i; uint64_t base, size; in >> i >> base >> size;
+        bool ok = true;
+        if (segs[i].base != base || segs[i].size != size) {
+          // A new range: the bytes where the old and the new overlap kept, the rest zero.
+          uint8_t* d = nullptr;
+          ok = cudaMalloc(&d, size ? size : 1) == cudaSuccess && cudaMemset(d, 0, size ? size : 1) == cudaSuccess;
+          const uint64_t lo = std::max(base, segs[i].base), hi = std::min(base + size, segs[i].base + segs[i].size);
+          if (ok && segs[i].d && lo < hi)
+            ok = cudaMemcpy(d + (lo - base), segs[i].d + (lo - segs[i].base), hi - lo, cudaMemcpyDeviceToDevice) == cudaSuccess;
+          if (ok) {
+            if (segs[i].d) cudaFree(segs[i].d);
+            segs[i].d = d; segs[i].base = base; segs[i].size = size;
+          } else if (d) cudaFree(d);
+        }
+        printf(ok ? "ok\n" : "fail\n");
+        fflush(stdout);
+        continue;
+      }
+      if (cmd == "put" || cmd == "get") {
+        unsigned i; uint64_t off, n; in >> i >> off >> n;
+        bool ok = stage && segs.count(i) && n <= stageBytes && off + n <= segs[i].size;
+        if (ok && n) ok = (cmd == "put" ? cudaMemcpy(segs[i].d + off, stage, n, cudaMemcpyHostToDevice)
+                                        : cudaMemcpy(stage, segs[i].d + off, n, cudaMemcpyDeviceToHost)) == cudaSuccess;
+        printf(ok ? "ok\n" : "fail\n");
+        fflush(stdout);
+        continue;
+      }
+      // `run CUBIN DIR` on the resident segments, or `CUBIN DIR` from the files in DIR.
+      const bool resident = cmd == "run";
+      std::string cubin = resident ? "" : cmd, dir;
+      unsigned gSeg = 0, mSeg = 1;
+      if (resident) in >> cubin;
+      in >> dir;
+      if (resident) in >> gSeg >> mSeg;
       FILE* f = fopen((dir + "/run.log").c_str(), "w");
       runLog = f ? f : stderr;
       int code = 0;
@@ -303,7 +396,7 @@ int main(int argc, char** argv) {
         code = loadKernel(cubin, &k);
         if (code == 0) it = kernels.emplace(cubin, k).first;
       }
-      if (code == 0) code = runDir(it->second, dir, true, 0, -1);
+      if (code == 0) code = runDir(it->second, dir, true, 0, -1, resident, gSeg, mSeg);
       if (f) fclose(f);
       runLog = stdout;
       printf("exit %d\n", code);

@@ -376,10 +376,13 @@ static CUresult openModuleOnce(CUmodule m) {
   if (!m->open[gcur]) {
     enterLean();
     lean_object *ls = lean_mk_string(sass), *le = lean_mk_string(elf);
-    if (take(nvgpu_module_open(G.lean, ls, le, G.moduleNext))) {
+    // Resident (accel.h): the page the module's data starts in made current here first (an earlier
+    // module's data may share it), and its data sent to the host's GPU at the next launch.
+    if (resPull(G.moduleNext, 1) && take(nvgpu_module_open(G.lean, ls, le, G.moduleNext))) {
       m->index[gcur] = G.modulesOpened++;
       m->open[gcur] = 1;
       uint64_t end = nvgpu_module_data_end(lend(), m->index[gcur], G.moduleNext);
+      resWrote(G.moduleNext, end - G.moduleNext, 0);
       G.moduleNext = (end + 255) & ~(uint64_t)255;
     } else
       m->failed = CUDA_ERROR_INVALID_IMAGE;

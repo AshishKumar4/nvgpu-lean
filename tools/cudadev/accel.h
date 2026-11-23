@@ -10,6 +10,14 @@
 // takes back the pages it changed. Functional: it counts no cycles. A fault the lifted kernel
 // detects, or a kernel the lifter cannot translate, fails the launch.
 //
+// Resident (unless NVGPU_LEAN_ACCEL_CHECK or NVGPU_LEAN_ACCEL_SPILL): the harness keeps each
+// emulated device's memory, its allocations and its module data, on the host's GPU between
+// launches, and the device memory here (the Lean store) is brought up to date only where the host
+// reads it. Each 64 KB page is current here, on the host's GPU, or both: a launch first sends the
+// pages written here since (`resPush`), and after it the host's GPU holds every page; a read here
+// fetches the pages it covers (`resPull`), a write here marks them sent next (`resWrote`). Bytes
+// move through a fixed staging window of shared memory, never a whole segment.
+//
 // Environment: NVGPU_LEAN_LIFT (the tools/lift directory; its mufu_tables.cuh is used when there, as
 // in a copy without the repository's NV/Num/MufuTables.lean, else generated), NVGPU_LEAN_ACCEL_NVCC (default nvcc)
 // and NVGPU_LEAN_ACCEL_NVCC_FLAGS (its further flags: a wheel's include and library directories),
@@ -181,7 +189,7 @@ static int accelServer(void) {
     // rt.cuh, which main.cu includes for its types, includes the special-function tables.
     snprintf(cmd, sizeof cmd,
              "{ cp '%s/mufu_tables.cuh' '%s/' 2>/dev/null || python3 '%s/lift.py' --tables '%s/mufu_tables.cuh'; } && "
-             "'%s' -std=c++17 -arch=%s %s -I'%s' -I'%s' -o '%s.tmp' '%s/main.cu' -lcuda && mv '%s.tmp' '%s'",
+             "'%s' -std=c++17 -arch=%s %s -I'%s' -I'%s' -o '%s.tmp' '%s/main.cu' -lcuda -lrt && mv '%s.tmp' '%s'",
              lift, sdir, lift, sdir, nvcc, accelArch(), flags, sdir, lift, bin, lift, bin, bin);
     if (!accelRun("building the accelerated mode's harness", cmd, log)) return 0;
   }
@@ -222,11 +230,12 @@ static int accelServer(void) {
   return server.in && server.out;
 }
 
-// The harness runs `cubin` on the launch exported to `dir` (its output in dir/run.log).
-static int accelServe(const char *cubin, const char *dir) {
+// The harness answers `request` (`CUBIN DIR`, or resident `run CUBIN DIR G M`) for the launch
+// exported to `dir` (its output in dir/run.log).
+static int accelServe(const char *request, const char *dir) {
   if (!accelServer()) return 0;
   int code = -1;
-  if (fprintf(server.in, "%s %s\n", cubin, dir) < 0 || fflush(server.in) != 0 || fscanf(server.out, " exit %d", &code) != 1) {
+  if (fprintf(server.in, "%s\n", request) < 0 || fflush(server.in) != 0 || fscanf(server.out, " exit %d", &code) != 1) {
     note("the accelerated mode's harness stopped (its log: %s/accel/harness-*/serve.log)", cacheDir);
     accelServerStop();
     return 0;
@@ -248,6 +257,185 @@ static int accelServe(const char *cubin, const char *dir) {
   note("the lifted kernel failed (exit %d): %.*s", code, (int)(n - from), out ? out + from : "");
   free(out);
   return 0;
+}
+
+// ---- Resident device memory ----
+
+#define RES_PAGE (64ull << 10)
+#define RES_STAGE (64ull << 20)   // the staging window: what one `put` or `get` moves at most
+#define RES_GROW (256ull << 20)   // a segment's size on the host's GPU, rounded up to this
+
+// One segment of an emulated device (0: its allocations, from gpuBase; 1: its module data, after
+// the allocations' range): `size` bytes of it on the host's GPU, and per page (`pages` of them,
+// grown as the host writes) whether this side (`host`) or the host's GPU (`gpu`) holds bytes the
+// other does not. A page neither side has written is zero on both.
+typedef struct {
+  uint64_t size, pages;
+  uint8_t *host, *gpu;
+} ResSeg;
+static struct {
+  pid_t server;   // the harness process the segments live in (0: none yet)
+  uint8_t *stage;
+  ResSeg seg[MAX_GPUS][2];
+} res;
+
+static int resOn(void) {
+  return accelArch() && !getenv("NVGPU_LEAN_ACCEL_CHECK") && !getenv("NVGPU_LEAN_ACCEL_SPILL");
+}
+
+static CUdeviceptr resBase(int i) { return gpuBase(gcur) + (i ? G.part->memBytes : 0); }
+
+// One request to the harness and its `ok` (the lock held).
+static int resAsk(const char *fmt, ...) {
+  char ans[16] = "";
+  va_list ap;
+  va_start(ap, fmt);
+  int bad = vfprintf(server.in, fmt, ap) < 0;
+  va_end(ap);
+  if (bad || fflush(server.in) != 0 || fscanf(server.out, " %15s", ans) != 1 || strcmp(ans, "ok") != 0) {
+    note("the accelerated mode's harness refused a resident-memory request (%s)", ans);
+    return 0;
+  }
+  return 1;
+}
+
+// Segment `i`'s page bitmaps covering `pages` pages.
+static int resGrow(ResSeg *q, uint64_t pages) {
+  if (pages <= q->pages) return 1;
+  uint8_t *h = realloc(q->host, pages), *gp = realloc(q->gpu, pages);
+  if (h) q->host = h;
+  if (gp) q->gpu = gp;
+  if (!h || !gp) return 0;
+  memset(h + q->pages, 0, pages - q->pages);
+  memset(gp + q->pages, 0, pages - q->pages);
+  q->pages = pages;
+  return 1;
+}
+
+// The harness running with the staging window mapped. A harness that has gone takes its segments
+// with it: if they held pages not copied here, the device's memory is lost; else every page this
+// side holds that is not zero is sent again.
+static int resStart(void) {
+  if (!accelServer()) return 0;
+  if (res.server == server.pid) return 1;
+  for (int g = 0; g < MAX_GPUS; g++)
+    for (int i = 0; i < 2; i++) {
+      ResSeg *q = &res.seg[g][i];
+      for (uint64_t p = 0; p < q->pages; p++)
+        if (q->gpu[p]) {
+          note("the accelerated mode's harness stopped with device memory only it held");
+          return 0;
+        }
+      if (res.server) memset(q->host, 1, q->pages);
+      q->size = 0;
+    }
+  // The window's name is gone once the harness has it mapped: nothing is left in /dev/shm.
+  char name[64];
+  snprintf(name, sizeof name, "/nvgpu-lean-%d", (int)getpid());
+  if (res.stage) munmap(res.stage, RES_STAGE);
+  res.stage = NULL;
+  int fd = shm_open(name, O_RDWR | O_CREAT | O_TRUNC, 0600);
+  if (fd < 0 || ftruncate(fd, RES_STAGE) != 0) {
+    if (fd >= 0) close(fd);
+    shm_unlink(name);
+    note("cannot create the staging window %s", name);
+    return 0;
+  }
+  void *p = mmap(NULL, RES_STAGE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+  close(fd);
+  int ok = p != MAP_FAILED && resAsk("shm %s %llu\n", name, (unsigned long long)RES_STAGE);
+  shm_unlink(name);
+  if (!ok) return 0;
+  res.stage = p;
+  res.server = server.pid;
+  return 1;
+}
+
+// Segment `i` of the calling thread's device on the host's GPU covering its first `bytes`, and at
+// most `limit` bytes; its new bytes there zero, as are those here no write has reached.
+static int resCover(int i, uint64_t bytes, uint64_t limit) {
+  ResSeg *q = &res.seg[gcur][i];
+  if (q->size && q->size >= bytes) return 1;
+  uint64_t size = bytes ? (bytes + RES_GROW - 1) / RES_GROW * RES_GROW : RES_GROW;
+  if (size > limit) size = (limit + RES_PAGE - 1) / RES_PAGE * RES_PAGE;
+  if (!resGrow(q, size / RES_PAGE)) return 0;
+  if (!resAsk("seg %d %llu %llu\n", 2 * gcur + i, (unsigned long long)resBase(i), (unsigned long long)size)) return 0;
+  q->size = size;
+  return 1;
+}
+
+// The segment of the calling thread's device holding `a`.
+static ResSeg *resSegOf(CUdeviceptr a, int *i) {
+  for (*i = 0; *i < 2; ++*i) {
+    CUdeviceptr b = resBase(*i);
+    if (a >= b && a < b + (*i ? MODULE_BYTES : G.part->memBytes)) return &res.seg[gcur][*i];
+  }
+  return NULL;
+}
+
+// Pages [p0, p1) of segment `i` moved between here and the host's GPU, in staging-window chunks:
+// `toGpu` sends those current here only, else fetches those current there only.
+static int resMove(int i, uint64_t p0, uint64_t p1, int toGpu) {
+  ResSeg *q = &res.seg[gcur][i];
+  if (p1 > q->pages) p1 = q->pages;
+  uint8_t *mine = toGpu ? q->host : q->gpu;
+  for (uint64_t p = p0; p < p1;) {
+    if (!mine[p]) {
+      p++;
+      continue;
+    }
+    uint64_t e = p;
+    while (e < p1 && mine[e] && (e - p + 1) * RES_PAGE <= RES_STAGE) e++;
+    uint64_t off = p * RES_PAGE, n = (e - p) * RES_PAGE;
+    CUdeviceptr a = resBase(i) + off;
+    if (toGpu) {
+      lean_object *b = ioValue(nvgpu_read(lend(), a, n, lean_io_mk_world()));
+      if (!b) return 0;
+      memcpy(res.stage, lean_sarray_cptr(b), n);
+      lean_dec(b);
+      if (!resAsk("put %d %llu %llu\n", 2 * gcur + i, (unsigned long long)off, (unsigned long long)n)) return 0;
+    } else {
+      if (!resAsk("get %d %llu %llu\n", 2 * gcur + i, (unsigned long long)off, (unsigned long long)n)) return 0;
+      lean_object *b = lean_alloc_sarray(1, n, n);
+      memcpy(lean_sarray_cptr(b), res.stage, n);
+      if (!take(nvgpu_write(G.lean, a, b))) return 0;
+    }
+    memset(mine + p, 0, e - p);
+    p = e;
+  }
+  return 1;
+}
+
+// The bytes [a, a + n) current here, before the host reads them (the lock held).
+static int resPull(CUdeviceptr a, size_t n) {
+  int i;
+  ResSeg *q;
+  if (!res.server || n == 0 || !(q = resSegOf(a, &i))) return 1;
+  CUdeviceptr b = resBase(i);
+  enterLean();
+  return resMove(i, (a - b) / RES_PAGE, (a + n - b + RES_PAGE - 1) / RES_PAGE, 0);
+}
+
+// The host is writing [a, a + n) here: `before`, the pages it covers only in part made current
+// here first (the rest of each is kept); after, every page it covers marked to send at the next
+// launch (the lock held).
+static int resWrote(CUdeviceptr a, size_t n, int before) {
+  int i;
+  ResSeg *q;
+  if (!accelArch() || n == 0 || !(q = resSegOf(a, &i))) return 1;
+  CUdeviceptr b = resBase(i);
+  uint64_t p0 = (a - b) / RES_PAGE, p1 = (a + n - b + RES_PAGE - 1) / RES_PAGE;
+  if (!resGrow(q, p1)) return 0;
+  if (before) {
+    if (!res.server) return 1;
+    enterLean();
+    if ((a - b) % RES_PAGE && !resMove(i, p0, p0 + 1, 0)) return 0;
+    if ((a + n - b) % RES_PAGE && !resMove(i, p1 - 1, p1, 0)) return 0;
+    memset(q->gpu + p0, 0, p1 - p0);
+    return 1;
+  }
+  memset(q->host + p0, 1, p1 - p0);
+  return 1;
 }
 
 // The last accelerated launch's directory.
@@ -272,7 +460,7 @@ static CUresult accelKernel(Op *o) {
     note("cannot create a directory under %s/accel", cacheDir);
     return CUDA_ERROR_LAUNCH_FAILED;
   }
-  CUdeviceptr lo = DEVICE_BASE, hi = DEVICE_BASE, mlo = DEVICE_BASE + G.part->memBytes, mhi = G.moduleNext;
+  CUdeviceptr lo = gpuBase(gcur), hi = lo, mlo = lo + G.part->memBytes, mhi = G.moduleNext;
   for (Alloc *a = G.allocs; a; a = a->next)
     if (a->base + a->size > hi) hi = a->base + a->size;
   char extra[256];
@@ -298,6 +486,28 @@ static CUresult accelKernel(Op *o) {
   }
   lean_dec(msg);
   tp[1] = accelNow();
+  if (resOn()) {
+    // Resident: the pages written here since sent, the launch run on the host's GPU's copy, which
+    // then holds every page.
+    if (!resStart() || !resCover(0, hi - lo, G.part->memBytes) || !resCover(1, mhi - mlo, MODULE_BYTES)) goto done;
+    ResSeg *sg = &res.seg[gcur][0], *sm = &res.seg[gcur][1];
+    if (!resMove(0, 0, sg->size / RES_PAGE, 1) || !resMove(1, 0, sm->size / RES_PAGE, 1)) goto done;
+    tp[2] = accelNow();
+    if (!accelCubin(dir, o->block[0] * o->block[1] * o->block[2], bin, sizeof bin)) goto done;
+    tp[3] = accelNow();
+    char req[1600];
+    snprintf(req, sizeof req, "run %s %s %d %d", bin, dir, 2 * gcur, 2 * gcur + 1);
+    if (!accelServe(req, dir)) goto done;
+    // Any page the launch's memory covers may have changed there.
+    memset(sg->gpu, 1, (hi - lo + RES_PAGE - 1) / RES_PAGE);
+    memset(sm->gpu, 1, (mhi - mlo + RES_PAGE - 1) / RES_PAGE);
+    r = CUDA_SUCCESS;
+    tp[4] = tp[5] = accelNow();
+    if (getenv("NVGPU_LEAN_VERBOSE"))
+      fprintf(stderr, "nvgpu-lean: accel %s (resident): export %.3f s, pages sent %.3f s, build %.3f s, run %.3f s\n",
+              f->name, tp[1] - tp[0], tp[2] - tp[1], tp[3] - tp[2], tp[4] - tp[3]);
+    goto done;
+  }
   if (!(g = accelRead(lo, hi - lo)) || !(m = accelRead(mlo, mhi - mlo))) goto done;
   snprintf(path, sizeof path, "%s/global.bin", dir);
   if (!spill(path, lean_sarray_cptr(g), hi - lo)) goto done;
@@ -306,7 +516,9 @@ static CUresult accelKernel(Op *o) {
   tp[2] = accelNow();
   if (!accelCubin(dir, o->block[0] * o->block[1] * o->block[2], bin, sizeof bin)) goto done;
   tp[3] = accelNow();
-  if (!accelServe(bin, dir)) goto done;
+  char req[1600];
+  snprintf(req, sizeof req, "%s %s", bin, dir);
+  if (!accelServe(req, dir)) goto done;
   tp[4] = accelNow();
   size_t n;
   uint8_t *after;
@@ -346,7 +558,7 @@ done:
 // the simulator's result as final.bin, which `tools/lift/lift-run` compares against); the
 // simulator's result is the one kept. Slow: it simulates every launch.
 static CUresult accelChecked(Op *o) {
-  CUdeviceptr lo = DEVICE_BASE, hi = DEVICE_BASE;
+  CUdeviceptr lo = gpuBase(gcur), hi = lo;
   for (Alloc *a = G.allocs; a; a = a->next)
     if (a->base + a->size > hi) hi = a->base + a->size;
   lean_object *before = accelRead(lo, hi - lo);

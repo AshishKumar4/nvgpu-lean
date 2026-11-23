@@ -35,6 +35,7 @@ libraries and frameworks built on it load them where they would load NVIDIA's, a
 | `NVGPU_LEAN_REPORT=1` | each launch's report to stderr, as `lake exe sim` prints it (cycles, instructions, memory traffic, stalls, the binding resource) |
 | `NVGPU_LEAN_ACCEL` | the host GPU's target (`sm_80`, `sm_90a`, …): launches run on it as the lifter's CUDA (`accel.h`: each kernel compiled once to a cubin and cached, one harness process running every launch), with `NVGPU_LEAN_LIFT` (the `tools/lift` directory), `NVGPU_LEAN_ACCEL_NVCC` and `NVGPU_LEAN_ACCEL_NVCC_FLAGS` (the host's compiler), `NVGPU_LEAN_ACCEL_LIBRARY_PATH` (where the host's libcuda is) |
 | `NVGPU_LEAN_ACCEL_CHECK=1` | every accelerated launch also simulated from the same memory and the results compared; one that differs is reported with its directory, kept with the simulator's result as `final.bin` (`tools/lift/main.cu` compares against it) |
+| `NVGPU_LEAN_ACCEL_SPILL=1` | accelerated launches take the device's memory through files each time (`global.bin`, `module.bin`) instead of keeping it on the host's GPU between launches (`accel.h`'s resident memory: a launch sends only the 64 KB pages written since, a read fetches only the pages it covers, through a fixed 64 MB shared-memory window) |
 
 ## How it works
 
@@ -93,7 +94,9 @@ libraries and frameworks built on it load them where they would load NVIDIA's, a
   equals a GH200's bit for bit and on the emulated A100 the A100's (11 of 11 each), and
   `torch_check.py`'s softmax, reductions and layer norm on the emulated H100 a GH200's and on the
   emulated A100 the A100's (12 of 12 each). Once its 60 kernels are compiled (136 s, once, cached),
-  the transformer case's 60 launches run in 1.3 s (0.2 s on the A100 itself).
+  the transformer case's 60 launches run in 1.3 s (0.2 s on the A100 itself). A two-layer
+  transformer's three Adam steps (325 launches) on the emulated A100 equal the A100's bit for bit,
+  every parameter: 3.4 s with the memory resident, 15.2 s through files.
 
 ## A mesh
 

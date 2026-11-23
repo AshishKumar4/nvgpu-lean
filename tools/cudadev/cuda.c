@@ -23,6 +23,7 @@
 #include <pthread.h>
 #include <signal.h>
 #include <stdarg.h>
+#include <sys/mman.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -198,6 +199,11 @@ static void publish(int64_t delta) {
 
 // ---- Device memory primitives (the lock taken inside) ----
 
+// Accelerated and resident (accel.h): device memory the host's GPU holds made current here before
+// the host reads it, and what the host writes here sent there at the next launch.
+static int resPull(CUdeviceptr a, size_t n);
+static int resWrote(CUdeviceptr a, size_t n, int before);
+
 // The lock held: the calling thread on device `g` until `gpuLeave`.
 static int gpuEnter(int g) { int was = gcur; if (g >= 0) gcur = g; return was; }
 static void gpuLeave(int was) { gcur = was; }
@@ -207,9 +213,12 @@ static CUresult devWrite(CUdeviceptr dst, const void *src, size_t n) {
   pthread_mutex_lock(&lock);
   int was = gpuEnter(gpuAt(dst));
   enterLean();
-  lean_object *b = lean_alloc_sarray(1, n, n);
-  memcpy(lean_sarray_cptr(b), src, n);
-  CUresult r = take(nvgpu_write(G.lean, dst, b)) ? CUDA_SUCCESS : CUDA_ERROR_ILLEGAL_ADDRESS;
+  CUresult r = CUDA_ERROR_ILLEGAL_ADDRESS;
+  if (resWrote(dst, n, 1)) {
+    lean_object *b = lean_alloc_sarray(1, n, n);
+    memcpy(lean_sarray_cptr(b), src, n);
+    if (take(nvgpu_write(G.lean, dst, b)) && resWrote(dst, n, 0)) r = CUDA_SUCCESS;
+  }
   gpuLeave(was);
   pthread_mutex_unlock(&lock);
   return r;
@@ -219,7 +228,7 @@ static CUresult devRead(void *dst, CUdeviceptr src, size_t n) {
   if (n == 0) return CUDA_SUCCESS;
   pthread_mutex_lock(&lock);
   int was = gpuEnter(gpuAt(src));
-  lean_object *b = ioValue(nvgpu_read(lend(), src, n, lean_io_mk_world()));
+  lean_object *b = resPull(src, n) ? ioValue(nvgpu_read(lend(), src, n, lean_io_mk_world())) : NULL;
   gpuLeave(was);
   CUresult r = CUDA_ERROR_ILLEGAL_ADDRESS;
   if (b) {
@@ -277,7 +286,9 @@ static CUresult devCopy(CUdeviceptr dst, CUdeviceptr src, size_t n) {
   pthread_mutex_lock(&lock);
   int was = gpuEnter(gpuAt(dst));
   enterLean();
-  CUresult r = take(nvgpu_copy(G.lean, dst, src, n)) ? CUDA_SUCCESS : CUDA_ERROR_ILLEGAL_ADDRESS;
+  CUresult r = CUDA_ERROR_ILLEGAL_ADDRESS;
+  if (resPull(src, n) && resWrote(dst, n, 1) && take(nvgpu_copy(G.lean, dst, src, n)) && resWrote(dst, n, 0))
+    r = CUDA_SUCCESS;
   gpuLeave(was);
   pthread_mutex_unlock(&lock);
   return r;
@@ -288,7 +299,8 @@ static CUresult devSet(CUdeviceptr dst, uint8_t v, size_t n) {
   pthread_mutex_lock(&lock);
   int was = gpuEnter(gpuAt(dst));
   enterLean();
-  CUresult r = take(nvgpu_memset(G.lean, dst, v, n)) ? CUDA_SUCCESS : CUDA_ERROR_ILLEGAL_ADDRESS;
+  CUresult r = CUDA_ERROR_ILLEGAL_ADDRESS;
+  if (resWrote(dst, n, 1) && take(nvgpu_memset(G.lean, dst, v, n)) && resWrote(dst, n, 0)) r = CUDA_SUCCESS;
   gpuLeave(was);
   pthread_mutex_unlock(&lock);
   return r;
@@ -686,7 +698,9 @@ static CUresult freeRange(CUdeviceptr p, int reserved) {
       if (a->graphOwned) {
         if (G.lean) {
           enterLean();
+          resWrote(a->base, a->size, 1);
           G.lean = nvgpu_release(G.lean, a->base, a->size);
+          resWrote(a->base, a->size, 0);
         }
         gpuLeave(was);
         pthread_mutex_unlock(&lock);
@@ -699,7 +713,9 @@ static CUresult freeRange(CUdeviceptr p, int reserved) {
         // A launch failure consumed the Lean device. Graph ownership still has to unwind.
         if (G.lean) {
           enterLean();
+          resWrote(a->base, a->size, 1);
           G.lean = nvgpu_release(G.lean, a->base, a->size);
+          resWrote(a->base, a->size, 0);
         }
       }
       free(a);
@@ -970,7 +986,9 @@ CUresult CUDAAPI cuMemUnmap(CUdeviceptr p, size_t size) {
   pthread_mutex_lock(&lock);
   int was = gpuEnter(gpuAt(p));
   enterLean();
+  resWrote(p, size, 1);
   G.lean = nvgpu_release(G.lean, p, size);
+  resWrote(p, size, 0);
   gpuLeave(was);
   pthread_mutex_unlock(&lock);
   return CUDA_SUCCESS;

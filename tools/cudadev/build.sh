@@ -26,7 +26,7 @@ cc -shared -fPIC -O2 -Wall -Wno-unused-function -Wno-deprecated-declarations -DL
   -I"$out" -I"$cuda/include" -I"$prefix/include" \
   -L"$lib" -l"$(basename "$devlib" .so | sed 's/^lib//')" -l"$(basename "$nvlib" .so | sed 's/^lib//')" \
   -L"$prefix/lib/lean" -lleanshared \
-  -Wl,-rpath,"$lib" -Wl,-rpath,"$prefix/lib/lean" -lpthread -ldl
+  -Wl,-rpath,"$lib" -Wl,-rpath,"$prefix/lib/lean" -lpthread -ldl -lrt
 ln -sf libcuda.so.1 "$out/libcuda.so"
 # The NCCL a mesh's collectives run on (nccl.c), over this libcuda.
 cc -shared -fPIC -O2 -Wall -Wno-unused-parameter -o "$out/libnccl.so.2" tools/cudadev/nccl.c \
