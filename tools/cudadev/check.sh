@@ -12,7 +12,7 @@ dir=$(dirname "$lib")
 cc -O2 -o "$dir/test" "$root/tools/cudadev/test.c" -pthread -I"$cuda/include" -L"$dir" -lcuda -Wl,-rpath,"$dir"
 nvmlh=$(ls "$cuda"/include/nvml.h "$cuda"/targets/*/include/nvml.h /usr/include/nvml.h 2>/dev/null | head -1)
 if [ -f "$dir/libnvidia-ml.so.1" ]; then
-  cc -O2 -o "$dir/nvmltest" "$root/tools/cudadev/nvmltest.c" -I"$(dirname "$nvmlh")" -L"$dir" -lnvidia-ml \
+  cc -O2 -o "$dir/nvmltest" "$root/tools/cudadev/nvmltest.c" -I"$(dirname "$nvmlh")" -L"$dir" -lnvidia-ml -ldl \
     -Wl,-rpath,"$dir"
 fi
 # The runtime's library: the toolkit's, or its wheel's (NVIDIA's pip package of libcudart).

@@ -4,7 +4,9 @@
 // in use, processes and utilization come from the driver's record. What an emulated device has no
 // value for (temperature, fans, power draw, ECC counts, clocks it does not vary) is reported as
 // not supported, which nvidia-smi shows as N/A. Every other NVML function returns
-// NVML_ERROR_NOT_SUPPORTED (nvml_stubs.h, generated from nvml.h).
+// NVML_ERROR_NOT_SUPPORTED (nvml_stubs.h, generated from nvml.h), and the deprecated unversioned
+// names are there too, as NVIDIA's library has them: those taking what their successors take
+// (`nvmlInit`, `nvmlDeviceGetHandleByIndex`) call them.
 
 #include <nvml.h>
 #include <stdlib.h>
