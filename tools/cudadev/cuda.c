@@ -63,6 +63,10 @@ extern lean_object *nvgpu_launch(lean_obj_arg d, uint32_t k, uint32_t gx, uint32
                                  uint32_t bx, uint32_t by, uint32_t bz, uint32_t cx, uint32_t cy,
                                  uint32_t cz, uint32_t smem, lean_obj_arg params,
                                  uint8_t functional, lean_object *w);
+extern lean_object *nvgpu_launch_mesh(lean_obj_arg ds, uint32_t g, uint32_t k, uint32_t gx, uint32_t gy,
+                                      uint32_t gz, uint32_t bx, uint32_t by, uint32_t bz, uint32_t cx,
+                                      uint32_t cy, uint32_t cz, uint32_t smem, lean_obj_arg params,
+                                      uint8_t functional, lean_object *w);
 extern uint64_t nvgpu_device_cycles(lean_obj_arg d);
 extern uint64_t nvgpu_device_info(lean_obj_arg d, uint32_t what);
 extern lean_object *nvgpu_device_wait(lean_obj_arg d, uint64_t until);
@@ -74,7 +78,10 @@ extern lean_object *nvgpu_tensor_map_address(lean_obj_arg map, uint64_t addr);
 // ---- State ----
 
 #define DEVICE_BASE 0x100000000000ull  // device virtual addresses start here (16 TiB)
-#define DEVICE_STRIDE (1ull << 40)      // device g's addresses from DEVICE_BASE + g * 1 TiB
+// Device g's addresses from DEVICE_BASE + g * the stride: the largest device's memory and module
+// data, in 64 MB steps, so the devices' memories lie end to end (a mesh launch's global memory is
+// all of them, `nvgpu_launch_mesh`).
+static uint64_t deviceStride;
 #define MODULE_BYTES (16ull << 30)      // module data, past the part's memory (ours)
 #define ALLOC_ALIGN 512                 // cuMemAlloc's alignment (the driver guarantees 256)
 #define MAX_GPUS 16
@@ -106,11 +113,11 @@ static Gpu gpus[MAX_GPUS];
 static int ngpus;
 static __thread int gcur;
 #define G (gpus[gcur])  // the calling thread's device
-static CUdeviceptr gpuBase(int g) { return DEVICE_BASE + (CUdeviceptr)g * DEVICE_STRIDE; }
+static CUdeviceptr gpuBase(int g) { return DEVICE_BASE + (CUdeviceptr)g * deviceStride; }
 // The device whose window holds `x`, or -1.
 static int gpuAt(CUdeviceptr x) {
-  if (x < DEVICE_BASE) return -1;
-  CUdeviceptr g = (x - DEVICE_BASE) / DEVICE_STRIDE;
+  if (x < DEVICE_BASE || deviceStride == 0) return -1;
+  CUdeviceptr g = (x - DEVICE_BASE) / deviceStride;
   if ((int)g >= ngpus || x - gpuBase((int)g) >= gpus[g].part->memBytes + MODULE_BYTES) return -1;
   return (int)g;
 }
@@ -176,6 +183,25 @@ static lean_object *ioValue(lean_object *r) {
 static int take(lean_object *pair) {
   G.lean = lean_ctor_get(pair, 0);
   lean_inc(G.lean);
+  lean_object *msg = lean_ctor_get(pair, 1);
+  int ok = lean_string_size(msg) == 1;
+  if (!ok) note("%s", lean_string_cstr(msg));
+  lean_dec(pair);
+  return ok;
+}
+
+// A mesh call's (devices, message) taken back: each device's object, and the message (empty
+// on success, else noted). Every device is lost if the call failed outright.
+static int takeMesh(lean_object *pair) {
+  if (!pair) {
+    for (int d = 0; d < ngpus; d++) gpus[d].lean = NULL;
+    return 0;
+  }
+  lean_object *ds = lean_ctor_get(pair, 0);
+  for (int d = 0; d < ngpus; d++) {
+    gpus[d].lean = lean_array_get_core(ds, d);
+    lean_inc(gpus[d].lean);
+  }
   lean_object *msg = lean_ctor_get(pair, 1);
   int ok = lean_string_size(msg) == 1;
   if (!ok) note("%s", lean_string_cstr(msg));
@@ -363,8 +389,11 @@ CUresult CUDAAPI cuInit(unsigned int flags) {
     lean_init_task_manager();
     leanThread = 1;
     for (int d = 0; d < ngpus; d++) {
-      gpus[d].lean = ioValue(nvgpu_device_create(lean_mk_string(gpus[d].part->name), gpuBase(d),
-                                                 gpus[d].part->memBytes + MODULE_BYTES,
+      uint64_t span = (gpus[d].part->memBytes + MODULE_BYTES + (64ull << 20) - 1) / (64ull << 20) * (64ull << 20);
+      if (span > deviceStride) deviceStride = span;
+    }
+    for (int d = 0; d < ngpus; d++) {
+      gpus[d].lean = ioValue(nvgpu_device_create(lean_mk_string(gpus[d].part->name), gpuBase(d), deviceStride,
                                                  lean_io_mk_world()));
       if (!gpus[d].lean) {
         pthread_mutex_unlock(&lock);
@@ -487,7 +516,7 @@ CUresult CUDAAPI cuDeviceGetByPCIBusId(CUdevice *d, const char *id) {
 }
 
 // Peers: every pair of devices, as on an NVLink/NVSwitch board. Copies between them are
-// stream-ordered work; a kernel reading a peer's memory faults (not modelled).
+// stream-ordered work; a kernel reaches a peer's memory through its pointers (`nvgpu_launch_mesh`).
 CUresult CUDAAPI cuDeviceCanAccessPeer(int *can, CUdevice d, CUdevice peer) {
   NEED_INIT();
   if (d < 0 || d >= ngpus || peer < 0 || peer >= ngpus) return CUDA_ERROR_INVALID_DEVICE;

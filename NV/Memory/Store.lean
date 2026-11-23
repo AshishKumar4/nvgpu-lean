@@ -180,6 +180,35 @@ def release (s : Store) (off n : Nat) : Store := Id.run do
     s := s.setPage i none
   return s
 
+/-- Stores laid end to end as one, each starting where the one before ends, page tables moved
+(not copied) where every store but the last fills whole chunks of the table (a mesh's devices'
+memories, `Device.launchMesh`); `none` if they are not so laid out. -/
+def concat (ss : Array Store) : Option Store := Id.run do
+  let some s0 := ss[0]? | return none
+  let mut chunks : Array (Array (Option ByteArray)) := #[]
+  let mut size := 0
+  for s in ss do
+    if s.base.toNat != s0.base.toNat + size then return none
+    if size % (pageSize * chunkPages) != 0 then return none
+    chunks := chunks ++ s.chunks
+    size := size + s.size
+  let npages := (size + pageSize - 1) / pageSize
+  return some { base := s0.base, size, npages, chunks }
+
+/-- `concat`'s inverse: the stores of `sizes` bytes each, from the store's base, their page tables
+taken from it. -/
+def split (s : Store) (sizes : Array Nat) : Array Store := Id.run do
+  let mut out := #[]
+  let mut base := s.base.toNat
+  let mut c := 0
+  for size in sizes do
+    let n := (size + pageSize - 1) / pageSize
+    let nc := (n + chunkPages - 1) / chunkPages
+    out := out.push { base := base.toUInt64, size, npages := n, chunks := s.chunks.extract c (c + nc) }
+    base := base + size
+    c := c + nc
+  return out
+
 /-- The store extended, if needed, to hold `bytes` bytes at `addr`: the range grows to whole pages
 around both, and the existing contents stay. -/
 def cover (s : Store) (addr : UInt64) (bytes : Nat) : Store := Id.run do

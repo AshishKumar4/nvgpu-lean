@@ -48,6 +48,10 @@ for gpu in h200 a100-80 b200 rtxpro6000; do
     LD_LIBRARY_PATH="$dir" NVGPU_LEAN_GPU=$gpu NVGPU_LEAN_CUDA=$cuda "$dir/$p-$t"
   done
 done
+# A mesh: a kernel reaching a peer's memory, on two of one part and on two different parts.
+for gpu in h100x2 h100,h200; do
+  NVGPU_LEAN_GPU=$gpu NVGPU_LEAN_CUDA=$cuda "$dir/test" peer
+done
 # Family-specific PTX is forward compatible inside its family, never into another family.
 # The -arch shorthand also emits generic compute_100 PTX, which validly runs on sm_120.
 # Request only compute_100f so this program tests the family restriction itself.

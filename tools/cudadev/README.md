@@ -103,7 +103,10 @@ libraries and frameworks built on it load them where they would load NVIDIA's, a
 `NVGPU_LEAN_GPU=b200x8` gives eight devices in one process, as an HGX board's GPUs are to a
 program: each its own memory, contexts, streams and loaded modules, every pair peers
 (`cuDeviceCanAccessPeer`), copies between them stream-ordered work through the host. A kernel
-runs on its stream's device; the devices run one piece of work at a time between them.
+runs on its stream's device and reads and writes a peer's memory through the peer's pointers, as
+over NVLink (the devices' memories lie end to end in its address space; a peer's bytes are timed
+as the device's own, not at the link's latency); the devices run one piece of work at a time
+between them.
 Collectives run on the emulated NCCL, `libnccl.so.2` (`nccl.c`, NCCL 2.32.6's ABI): each call is
 stream-ordered work that meets the other ranks' calls and is performed through the host, with
 reductions in rank order (deterministic, not NVIDIA's ring order). XLA dlopens `libnccl.so.2`; a
@@ -125,8 +128,7 @@ JAX's CUDA 13 plugin (its runtime asks the driver for a table not provided; the 
 `jax[cuda12]`, runs). PyTorch's matmuls: NVIDIA's math libraries, as PyTorch 2.9's CUDA 12
 wheels load them, ask the runtime for a table entry the device does not provide
 (`runtime_tables.h` has only ZLUDA's), and stop; PyTorch's own kernels run (the `device-torch`
-row). Managed memory, IPC, CUDA arrays and texture objects created through the driver, kernels
-reading a peer device's memory,
+row). Managed memory, IPC, CUDA arrays and texture objects created through the driver,
 conditional graph nodes (they need the device runtime's `cudaGraphSetConditional`), batch
 memory-operation nodes, external memory and semaphores, and kernels dereferencing host memory:
 each fails with a CUDA error naming it.

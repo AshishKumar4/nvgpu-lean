@@ -218,8 +218,8 @@ def launchOf (d : Device) (k gx gy gz bx by_ bz cx cy cz smem : UInt32) (params 
       params := params, global := d.global, dynShared := smem.toNat,
       cluster := (cx.toNat, cy.toNat, cz.toNat), functional }
 
-@[export nvgpu_launch]
-def launch (d : Device) (k gx gy gz bx by_ bz cx cy cz smem : UInt32) (params : ByteArray)
+/-- `launch`'s run; `cacheable`: its result may come from, and go to, the launch cache. -/
+def launchWith (cacheable : Bool) (d : Device) (k gx gy gz bx by_ bz cx cy cz smem : UInt32) (params : ByteArray)
     (functional : UInt8) : IO (Device × String) := do
   let some l := launchOf d k gx gy gz bx by_ bz cx cy cz smem params (functional != 0)
     | return (d, s!"no kernel {k}")
@@ -242,7 +242,8 @@ def launch (d : Device) (k gx gy gz bx by_ bz cx cy cz smem : UInt32) (params : 
   -- `NVGPU_LEAN_LAUNCH_CACHE`: a launch whose result is recorded is not simulated (`Cache`); not
   -- with the trace, the spans or the race check, whose output a recorded result does not hold, nor
   -- with a stop, whose result is a sample's.
-  let stores ← if l.trace || l.spans || checks || untilCycle.isSome then pure none else Cache.Stores.fromEnv
+  let stores ← if !cacheable || l.trace || l.spans || checks || untilCycle.isSome then pure none
+    else Cache.Stores.fromEnv
   let mut cacheKey : Option (String × Array UInt64) := none
   if let some st := stores then
     let mut key := ((← Cache.version).str (reprStr d.p)).nat k.toNat
@@ -304,6 +305,29 @@ def launch (d : Device) (k gx gy gz bx by_ bz cx cy cz smem : UInt32) (params : 
       catch err => IO.eprintln s!"nvgpu-lean: {kernel.name}: launch cache entry {hex} unwritten: {err}"
     return ({ d with machine, global := r.global, cycles := d.cycles + r.counters.cycles }, "")
   | .error e => return (d, s!"{kernel.name}: {e}")
+
+@[export nvgpu_launch]
+def launch (d : Device) (k gx gy gz bx by_ bz cx cy cz smem : UInt32) (params : ByteArray)
+    (functional : UInt8) : IO (Device × String) :=
+  launchWith true d k gx gy gz bx by_ bz cx cy cz smem params functional
+
+/-- A launch on device `g` of a mesh whose kernel may reach the other devices' memory (a peer's
+pointer): the devices' memories, laid end to end in their address order (`Store.concat`), are its
+global memory, and are given back to each device after it. The other devices' memory is timed
+as the launching device's own (its L2 and DRAM); the launch cache is not used. -/
+@[export nvgpu_launch_mesh]
+def launchMesh (ds : Array Device) (g : UInt32) (k gx gy gz bx by_ bz cx cy cz smem : UInt32)
+    (params : ByteArray) (functional : UInt8) : IO (Array Device × String) := do
+  let some d := ds[g.toNat]? | return (ds, s!"no device {g}")
+  let sizes := ds.map (·.global.size)
+  let globals := ds.map (·.global)
+  let ds := ds.map fun x => { x with global := default }
+  let some merged := Store.concat globals
+    | return (ds.zipWith (fun x s => { x with global := s }) globals, "the devices' memories are not laid end to end")
+  let (d', msg) ← launchWith false { d with global := merged } k gx gy gz bx by_ bz cx cy cz smem params functional
+  let back := d'.global.split sizes
+  let ds := ds.set! g.toNat { d' with global := default }
+  return (ds.zipWith (fun x s => { x with global := s }) back, msg)
 
 /-- The launch `launch` would run, exported for the accelerated backend into `dir`
 (`Launch.exportLaunchFiles`: its constant bank 0, kernel and shapes, the device memory's segments

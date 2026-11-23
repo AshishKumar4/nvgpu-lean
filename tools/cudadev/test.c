@@ -301,6 +301,63 @@ static void legacySubmissionChecks(void) {
   gateDestroy(&gate);
 }
 
+// A kernel on device 0 reading and writing device 1's memory through device 1's pointers
+// (`axpy`, y = 2x + y): x on device 1, y on device 0, then y on device 1 (its values copied back
+// from device 1).
+static void peerChecks(void) {
+  int n;
+  CK(cuDeviceGetCount(&n));
+  check("a mesh of two devices", n >= 2);
+  if (n < 2) return;
+  CUdevice d0, d1;
+  CK(cuDeviceGet(&d0, 0));
+  CK(cuDeviceGet(&d1, 1));
+  int can;
+  CK(cuDeviceCanAccessPeer(&can, d0, d1));
+  CUcontext c0, c1;
+  CK(cuDevicePrimaryCtxRetain(&c0, d0));
+  CK(cuDevicePrimaryCtxRetain(&c1, d1));
+  enum { N = 1000 };
+  float x[N], y[N], z[N];
+  for (int i = 0; i < N; i++) { x[i] = (float)i; y[i] = 1.0f; }
+  CUdeviceptr dx, dy, dy1;
+  CK(cuCtxSetCurrent(c1));
+  CK(cuMemAlloc(&dx, sizeof x));
+  CK(cuMemAlloc(&dy1, sizeof y));
+  CK(cuMemcpyHtoD(dx, x, sizeof x));
+  CK(cuMemcpyHtoD(dy1, y, sizeof y));
+  CK(cuCtxSetCurrent(c0));
+  CK(cuCtxEnablePeerAccess(c1, 0));
+  CK(cuMemAlloc(&dy, sizeof y));
+  CK(cuMemcpyHtoD(dy, y, sizeof y));
+  CUmodule m;
+  CK(cuModuleLoadData(&m, ptx));
+  CUfunction axpy;
+  CK(cuModuleGetFunction(&axpy, m, "axpy"));
+  float a = 2.0f;
+  unsigned un = N;
+  void *args[] = {&dx, &dy, &a, &un};
+  CK(cuLaunchKernel(axpy, (N + 127) / 128, 1, 1, 128, 1, 1, 0, NULL, args, NULL));
+  CK(cuCtxSynchronize());
+  CK(cuMemcpyDtoH(z, dy, sizeof z));
+  int ok = can == 1;
+  for (int i = 0; i < N; i++) ok = ok && z[i] == 2.0f * (float)i + 1.0f;
+  check("a kernel reads a peer's memory", ok);
+  void *args1[] = {&dx, &dy1, &a, &un};
+  CK(cuLaunchKernel(axpy, (N + 127) / 128, 1, 1, 128, 1, 1, 0, NULL, args1, NULL));
+  CK(cuCtxSynchronize());
+  CK(cuCtxSetCurrent(c1));
+  CK(cuMemcpyDtoH(z, dy1, sizeof z));
+  ok = 1;
+  for (int i = 0; i < N; i++) ok = ok && z[i] == 2.0f * (float)i + 1.0f;
+  check("a kernel writes a peer's memory", ok);
+  CK(cuMemFree(dx));
+  CK(cuMemFree(dy1));
+  CK(cuCtxSetCurrent(c0));
+  CK(cuMemFree(dy));
+  CK(cuModuleUnload(m));
+}
+
 int main(int argc, char **argv) {
   // A deadlock in a broken driver must terminate the test process, including on the parent.
   alarm(120);
@@ -358,6 +415,7 @@ int main(int argc, char **argv) {
     else if (!strcmp(argv[1], "failure")) failureDelivery();
     else if (!strcmp(argv[1], "graph")) graphSubmissionChecks();
     else if (!strcmp(argv[1], "legacy")) legacySubmissionChecks();
+    else if (!strcmp(argv[1], "peer")) peerChecks();
     else return 2;
     return failures != 0;
   }

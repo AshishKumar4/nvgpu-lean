@@ -221,7 +221,21 @@ static CUresult runKernel(Op *o) {
   CUresult r = CUDA_SUCCESS;
   if (accelArch())
     r = getenv("NVGPU_LEAN_ACCEL_CHECK") ? accelChecked(o) : accelKernel(o);
-  else {
+  else if (ngpus > 1) {
+    // A mesh: the kernel may reach a peer's memory, so it runs over every device's.
+    lean_object *pb = lean_alloc_sarray(1, o->paramBytes, o->paramBytes);
+    memcpy(lean_sarray_cptr(pb), o->params, o->paramBytes);
+    lean_object *ds = lean_alloc_array(ngpus, ngpus);
+    for (int d = 0; d < ngpus; d++) {
+      lean_array_set_core(ds, d, gpus[d].lean);
+      gpus[d].lean = NULL;
+    }
+    lean_object *res = ioValue(nvgpu_launch_mesh(ds, (uint32_t)gcur, (uint32_t)f->k[gcur], o->grid[0], o->grid[1],
+                                                 o->grid[2], o->block[0], o->block[1], o->block[2],
+                                                 o->cluster[0], o->cluster[1], o->cluster[2], o->smem, pb,
+                                                 functional, lean_io_mk_world()));
+    if (!takeMesh(res)) r = CUDA_ERROR_LAUNCH_FAILED;
+  } else {
     lean_object *pb = lean_alloc_sarray(1, o->paramBytes, o->paramBytes);
     memcpy(lean_sarray_cptr(pb), o->params, o->paramBytes);
     lean_object *res = ioValue(nvgpu_launch(G.lean, (uint32_t)f->k[gcur], o->grid[0], o->grid[1], o->grid[2],
