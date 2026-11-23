@@ -4,7 +4,9 @@ import NV.Arch.H200
 /-!
 `lake exe engine-smoke`: a hand-assembled kernel run on the H200 parameters:
 every thread stores `3 * tid + ctaid` at `out[ctaid * ntid + tid]`. Two CTAs of 100 threads, so
-the last warp of each is partial. Checks every output word and that the run takes time.
+the last warp of each is partial. Checks every output word and that the run takes time. Then the instruction caches across
+launches: a kernel run again after itself on the same machine (`runOn`) finds its code warm,
+after another kernel's code filled the caches.
 -/
 
 open NV NV.SASS NV.Core
@@ -28,6 +30,20 @@ def code : Array Instr := #[
 ]
 
 def base : UInt64 := 0x7f0000000000
+
+/-- `kb` KB of straight-line independent IMADs, then EXIT, in module `module`. -/
+def straight (module : UInt64) (kb : Nat) : Kernel :=
+  let n := kb * 1024 / 16
+  let body := (Array.range n).map fun i =>
+    ({ pc := 16 * i, opcode := "IMAD", operands := #[r 6, r 0, .imm 3, r 3], ctrl := ctrl 1 } : Instr)
+  { name := s!"straight{module}", code := body.push { pc := 16 * n, opcode := "EXIT", ctrl := ctrl 5 },
+    regs := 8, module }
+
+/-- One warp of `k` on `machine`: the machine after it, and its cycles. -/
+def once (machine : Machine) (k : Kernel) : Except String (Machine × Nat) := do
+  let (m, res) ← runOn NV.Arch.h200 machine { kernel := k, grid := (1, 1, 1), block := (32, 1, 1),
+                                              params := .empty, global := Store.empty base 64 }
+  return (m, res.counters.cycles)
 
 def main : IO UInt32 := do
   let kernel : Kernel := { name := "smoke", code, regs := 8, paramBytes := 8 }
@@ -56,4 +72,18 @@ def main : IO UInt32 := do
   | .error e =>
     unless (e.splitOn "a terabyte or more").length > 1 do
       IO.eprintln s!"engine-smoke: module data far from global memory: {e}"; return 1
+  -- 256 KB of other code leaves the caches full of lines used late in its launch; a 96 KB
+  -- kernel run after it, then again, runs warm the second time: its 6144 instructions from the
+  -- SM's caches, not streamed from L2 (5.4 cycles an instruction).
+  let warm : Except String (Nat × Nat) := do
+    let (m, _) ← once (Machine.fresh NV.Arch.h200) (straight 1 256)
+    let (m, first) ← once m (straight 2 96)
+    let (_, second) ← once m (straight 2 96)
+    return (first, second)
+  match warm with
+  | .error e => IO.eprintln s!"engine-smoke: {e}"; return 1
+  | .ok (first, second) =>
+    IO.println s!"engine-smoke: 96 KB kernel after 256 KB of other code: {first} cycles, again {second}"
+    if second > 3 * 6144 then
+      IO.eprintln "engine-smoke: the kernel run again did not find its code warm"; return 1
     return 0

@@ -352,8 +352,8 @@ port it is refilled through. -/
 structure CodeLevel where
   lines : Std.HashMap Nat Nat := {}
   capacity : Nat
-  /-- Bytes per cycle it is refilled at from the level below. -/
-  rate : Nat
+  /-- Cycles a line takes to refill it from the level below. -/
+  lineCycles : Nat
   fill : Port := {}
   deriving Inhabited
 
@@ -370,20 +370,21 @@ def CodeLevel.touch (lv : CodeLevel) (line t : Nat) : CodeLevel := Id.run do
   return { lv with lines := lines.insert line t }
 
 /-- Bring `line`, at level `j` from `t` (`levels.size`: arrived from the L2), into the nearest
-level: it is refilled level by level down to the nearest through each level's port. The cycle it
-is in the nearest level, and the levels after. -/
-private def refill (levels : Array CodeLevel) (lineBytes line j t : Nat) :
+level: it is refilled level by level down to the nearest through each level's port, its use
+recorded at `epoch + t` (`Kit.codeEpoch`). The cycle it is in the nearest level, and the levels
+after. -/
+private def refill (levels : Array CodeLevel) (line j t epoch : Nat) :
     Array CodeLevel × Nat := Id.run do
   let mut lv := levels
   let mut at_ := t
   for k in [0:j] do
     let i := j - 1 - k
-    let cost := (lineBytes + lv[i]!.rate - 1) / max lv[i]!.rate 1
+    let cost := lv[i]!.lineCycles
     let (start, port) := lv[i]!.fill.reserve at_ cost
     at_ := start + cost
     lv := lv.modify i fun l => { l with fill := port }
   for i in [0:min (j + 1) lv.size] do
-    lv := lv.modify i (·.touch line t)
+    lv := lv.modify i (·.touch line (epoch + t))
   return (lv, at_)
 
 private structure Sm where
@@ -766,6 +767,9 @@ private structure Kit where
   cluster : Nat × Nat × Nat
   /-- The parameter block's address in device memory (`Env.paramAddr`). -/
   paramAddr : UInt64 := 0
+  /-- What the instruction caches' uses are recorded against: the machine's clock at the launch's
+  start (`Machine.clock`), so lines a later launch uses count as newer than an earlier launch's. -/
+  codeEpoch : Nat := 0
 
 /-- The launch's changing state. -/
 private structure St where
@@ -804,7 +808,7 @@ private structure St where
 warp's age (the scheduler's oldest/youngest order) is its CTA's id and warp index. -/
 private def placeCta (kit : Kit) (sm : Sm) (mem : MemSys) (si id start : Nat)
     (traces : Std.HashMap Nat WarpTrace) : Sm × MemSys × Std.HashMap Nat WarpTrace := Id.run do
-  let ⟨_, k, l, _, _, _, _, _, _, _, _, _, smsps, _, const0, threads, nWarps, (cx, cy, cz), _⟩ := kit
+  let ⟨_, k, l, _, _, _, _, _, _, _, _, _, smsps, _, const0, threads, nWarps, (cx, cy, cz), _, _⟩ := kit
   let (gx, gy, _) := l.grid
   let ctaid := (id % gx, (id / gx) % gy, id / (gx * gy))
   let (x, y, z) := ctaid
@@ -853,7 +857,7 @@ stepped. Without, every SM steps and the memory system runs its quanta itself. -
 private def pass (kit : Kit) (focus : Nat) (stop : Nat) (st : St) :
     Except String (St × Bool) := Id.run do
   let ⟨p, k, l, ops, fps, timings, sources, constRefs, constCapacity, lineBytes, prefetch,
-    codeLines, smsps, _, _, _, nWarps, _, _⟩ := kit
+    codeLines, smsps, _, _, _, nWarps, _, _, epoch⟩ := kit
   let banks := max 1 p.regFile.banks.value
   let slots := max 1 (p.regFile.reuseEntriesPerBank.value * p.regFile.reuseSlotsPerEntry.value)
   let clusterOf (c : Ctx) : Nat := clusterOfDims c l.clusterShape
@@ -965,7 +969,7 @@ private def pass (kit : Kit) (focus : Nat) (stop : Nat) (st : St) :
       if let some line := sms[o.sm]!.codeReqs.get? d.id then
         let sm := sms[o.sm]!
         sms := sms.set! o.sm default
-        let (code, r) := refill sm.code lineBytes line sm.code.size d.at_
+        let (code, r) := refill sm.code line sm.code.size d.at_ epoch
         let slots := sm.slots.map fun w =>
           if w.why == .fetch && w.readyAt ≥ pendingAt then { w with readyAt := r } else w
         sms := sms.set! o.sm { sm with code, slots, codeReady := sm.codeReady.insert line r,
@@ -1094,7 +1098,7 @@ private def pass (kit : Kit) (focus : Nat) (stop : Nat) (st : St) :
                 continue
               match sm.code.findIdx? (·.lines.contains l) with
               | some j =>
-                let (code, r) := refill sm.code lineBytes l j t
+                let (code, r) := refill sm.code l j t epoch
                 sm := { sm with code, codeReady := sm.codeReady.insert l r }
               | none =>
                 let (m', id) := mem.issueCode t { sm := si, smsp := q, cta := s.cta, slot := i } (l * lineBytes)
@@ -1106,7 +1110,7 @@ private def pass (kit : Kit) (focus : Nat) (stop : Nat) (st : St) :
               sm := { sm with slots := sm.slots.modify i fun (w : Slot) =>
                 { w with readyAt := ready, why := .fetch } }
               continue
-            sm := { sm with code := sm.code.modify 0 (·.touch line t),
+            sm := { sm with code := sm.code.modify 0 (·.touch line (epoch + t)),
                             codeReady := sm.codeReady.erase line,
                             slots := sm.slots.modify i fun (w : Slot) => { w with codeLine := some line } }
         -- Constant operands: an instruction reading a constant line the SM's constant cache lacks
@@ -1882,8 +1886,8 @@ structure Machine where
 /-- A machine with every cache empty (after a reset, or caches flushed). -/
 def Machine.fresh (p : Params) : Machine where
   code := Array.replicate p.sms.value <|
-    (p.frontEnd.codeCaches.value.map fun (bytes, rate) =>
-      ({ capacity := bytes / p.mem.lineBytes.value, rate } : CodeLevel)).toArray
+    (p.frontEnd.codeCaches.value.map fun (bytes, lineCycles) =>
+      ({ capacity := bytes / p.mem.lineBytes.value, lineCycles } : CodeLevel)).toArray
 
 /-- Run the launch on a machine in a given state, to completion, the SMs' quanta run by `pool`:
 the machine after it, and the launch's result. -/
@@ -1945,7 +1949,7 @@ private def runOnWith {m : Type → Type} {σ : Type} [Monad m] (pool : Pool m �
   let paramAddr := paramAddrOf l
   let kit : Kit := { p, k, l, ops, fps, timings, sources, constRefs, constCapacity, lineBytes,
                      prefetch, codeLines, smsps, nSms, const0, threads, nWarps,
-                     cluster := l.clusterShape, paramAddr }
+                     cluster := l.clusterShape, paramAddr, codeEpoch := machine.clock }
   -- Each cluster's barrier, kept by the master (`ClusterBar`).
   let mut clusterBars : Array ClusterBar := Array.replicate (ctaCount / csize) {}
   let clustered := csize > 1 || k.code.any (·.opcode.startsWith "UCGABAR")
@@ -1982,12 +1986,16 @@ private def runOnWith {m : Type → Type} {σ : Type} [Monad m] (pool : Pool m �
       reuse := Array.replicate smsps (Array.replicate (banks * slots) none), smspHold := Array.replicate smsps 0,
       code := #[], last := Array.replicate smsps none }
   let quantum := mem.quantum
-  -- The kernel's entry line and the prefetcher's window after it are in every SM's instruction
-  -- caches when its CTAs start: they are fetched during the launch.
+  -- The kernel's first `codeLaunchBytes` are in every SM's last instruction cache when its CTAs
+  -- start, and its entry line and the prefetcher's window after it in every one: they are fetched
+  -- during the launch.
   let entry := l.codeBase / lineBytes
+  let launched := min (p.frontEnd.codeLaunchBytes.value / lineBytes) (codeLines - entry)
   let warm (levels : Array CodeLevel) : Array CodeLevel :=
+    let levels := (List.range' entry launched).foldl
+      (fun lv line => lv.modify (lv.size - 1) (·.touch line machine.clock)) levels
     (List.range' entry (min (prefetch + 1) (codeLines - entry))).foldl
-      (fun lv line => lv.map (·.touch line 0)) levels
+      (fun lv line => lv.map (·.touch line machine.clock)) levels
   let run0 : St := { sms := #[], mem := default, memWbs := {}, wbs := {}, printfOut := #[],
                      asyncU := AsyncUnit.init nSms smsps, outs := #[], doneCtas := 0, c := {}, t := 0,
                      hazards := #[], phases := Array.replicate clusterBars.size 0 }

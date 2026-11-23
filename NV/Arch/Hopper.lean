@@ -95,11 +95,14 @@ def frontEnd : FrontEndParams where
   instBufferEntries := inferred 3 "huerta2025" "§5.2: an instruction buffer of three entries per
     warp" ""
     (some "Ampere")
-  codeCaches := inferred [(24576, 14), (49152, 8)] "meas-h200"
+  codeCaches := inferred [(24576, 10), (49152, 16), (147456, 16)] "meas-h200"
     ""
     ""
-  codePrefetchLines := inferred 17 "meas-h200" ""
+  codePrefetchLines := inferred 6 "meas-h200" ""
     ""
+  codeLaunchBytes := inferred 65536 "meas-gh200" ""
+    ""
+    (some "GH200")
   takenBranchCycles := inferred 4 "meas-gh200" ""
     ""
   forwardBranchCycles := inferred 17 "meas-gh200" ""

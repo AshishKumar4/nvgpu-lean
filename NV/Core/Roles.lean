@@ -43,7 +43,7 @@ def roles : List (String × Role) := [
   ("regFile.reuseSlotsPerEntry", .engine),
   ("frontEnd.instBytes", .notModelled), ("frontEnd.fetchPerCycle", .notModelled),
   ("frontEnd.instBufferEntries", .notModelled), ("frontEnd.codeCaches", .engine),
-  ("frontEnd.codePrefetchLines", .engine),
+  ("frontEnd.codePrefetchLines", .engine), ("frontEnd.codeLaunchBytes", .engine),
   ("frontEnd.takenBranchCycles", .engine), ("frontEnd.forwardBranchCycles", .engine), ("frontEnd.stallZeroInterlocks", .engine),
   ("frontEnd.rotateCtaWarps", .engine),
   ("frontEnd.constCacheBytes", .engine), ("frontEnd.constLineBytes", .engine),

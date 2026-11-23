@@ -104,7 +104,8 @@ def b200 : Params := {
   issuePolicy, readRelease
   maxClusterCtas := doc 16 "blackwell-tuning" "§1.4.1.2: B200 allows a nonportable cluster size of 16"
   regFile
-  frontEnd := { frontEnd with codeCaches := onH200 frontEnd.codeCaches }
+  frontEnd := { frontEnd with
+    codeCaches := inferred [(24576, 10), (49152, 25), (147456, 16)] "meas" "" "" }
   barrierCycles := onH200 barrierCycles
   barrierArrivalCycles := onH200 barrierArrivalCycles
   ops := ((((ops : Array OpRule) ++ BlackwellRTX.added).map fun (r : OpRule) =>

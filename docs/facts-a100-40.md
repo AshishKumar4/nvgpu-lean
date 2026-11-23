@@ -54,8 +54,9 @@ The role column says who reads a fact (`NV/Core/Roles.lean`): only `engine` fact
 | `frontEnd.instBytes` | 16 | encoded | not modelled yet | `fixtures`  |  |
 | `frontEnd.fetchPerCycle` | 1 | inferred (Ampere) | not modelled yet | `huerta2025` §5.2: each sub-core fetches and decodes one instruction per cycle |  |
 | `frontEnd.instBufferEntries` | 3 | inferred (Ampere) | not modelled yet | `huerta2025` §5.2: an instruction buffer of three entries per warp |  |
-| `frontEnd.codeCaches` | 24576: 14, 49152: 8 | inferred (H200) | engine | `meas-h200`  |  |
-| `frontEnd.codePrefetchLines` | 17 | inferred (H200) | engine | `meas-h200`  |  |
+| `frontEnd.codeCaches` | 24576: 10, 49152: 16, 147456: 16 | inferred (H200) | engine | `meas-h200`  |  |
+| `frontEnd.codePrefetchLines` | 6 | inferred (H200) | engine | `meas-h200`  |  |
+| `frontEnd.codeLaunchBytes` | 65536 | inferred (GH200) | engine | `meas-gh200`  |  |
 | `frontEnd.takenBranchCycles` | 4 | inferred | engine | `meas-gh200`  |  |
 | `frontEnd.forwardBranchCycles` | 17 | inferred | engine | `meas-gh200`  |  |
 | `frontEnd.stallZeroInterlocks` | false | inferred (Ampere) | engine | `huerta2025` §4: the stall counter is the only wait a fixed-latency dependence has |  |

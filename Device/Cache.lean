@@ -66,7 +66,7 @@ def Digest.hex (d : Digest) : String :=
 
 private def putLevel (b : ByteArray) (lv : CodeLevel) : ByteArray :=
   let ls := lv.lines.toArray.qsort (·.1 < ·.1)
-  let b := putNat (putNat (putNat b lv.fill.free) lv.capacity) lv.rate
+  let b := putNat (putNat (putNat b lv.fill.free) lv.capacity) lv.lineCycles
   ls.foldl (fun b (l, u) => putNat (putNat b l) u) (putNat b ls.size)
 
 private def putTags (b : ByteArray) (t : Memory.Tags) : ByteArray :=
@@ -114,9 +114,9 @@ private def getArray {α : Type} (f : Dec α) : Dec (Array α) := do
 private def getLevel : Dec CodeLevel := do
   let free ← getNat
   let capacity ← getNat
-  let rate ← getNat
+  let lineCycles ← getNat
   let ls ← getArray (do return ((← getNat), (← getNat)))
-  return { lines := ls.foldl (fun m (l, u) => m.insert l u) {}, capacity, rate, fill := { free } }
+  return { lines := ls.foldl (fun m (l, u) => m.insert l u) {}, capacity, lineCycles, fill := { free } }
 
 private def getTags : Dec Memory.Tags := do
   let sets ← getNat

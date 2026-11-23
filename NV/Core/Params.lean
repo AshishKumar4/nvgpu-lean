@@ -191,11 +191,14 @@ structure FrontEndParams where
   /-- Decoded instructions buffered per warp. -/
   instBufferEntries : Fact Nat
   /-- The SM's code caches, smallest first: capacity in bytes (LRU over 128-byte lines) and the
-  bytes per cycle it is refilled at from the level below, the last level from L2. -/
+  cycles a line takes to refill it from the level below, the last level from L2. -/
   codeCaches : Fact (List (Nat × Nat))
   /-- Sequential code lines requested ahead of a warp entering a new line, from L2 (each a line
   request through the memory system, timed like a load). -/
   codePrefetchLines : Fact Nat
+  /-- Bytes of a kernel's code, from its start, in the SM's last code cache when its CTAs start:
+  fetched during the launch. -/
+  codeLaunchBytes : Fact Nat
   /-- Cycles a warp loses to the fetch redirect after a taken branch, call or return back to code
   it has run (a loop's back edge). -/
   takenBranchCycles : Fact Nat

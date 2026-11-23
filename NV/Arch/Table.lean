@@ -103,7 +103,7 @@ def sections (p : Params) : List (String × List Row) :=
     launch, link, ops⟩ := p
   let ⟨banks, readPortsPerBank, operandReadCycles, reuseEntriesPerBank, reuseSlotsPerEntry⟩ :=
     regFile
-  let ⟨instBytes, fetchPerCycle, instBufferEntries, codeCaches, codePrefetchLines,
+  let ⟨instBytes, fetchPerCycle, instBufferEntries, codeCaches, codePrefetchLines, codeLaunchBytes,
     takenBranchCycles, forwardBranchCycles, stallZeroInterlocks,
     constCacheBytes, constLineBytes, constMissCycles, constMissSwitchCycles, rotateCtaWarps⟩ := frontEnd
   let ⟨sectorBytes, lineBytes, l1SmemBytes, smemBanks, smemBankBytes, smemLatency, l1HitLatency,
@@ -144,6 +144,7 @@ def sections (p : Params) : List (String × List Row) :=
      rowN "frontEnd.instBufferEntries" instBufferEntries,
      row "frontEnd.codeCaches" codeCaches showPairs,
      rowN "frontEnd.codePrefetchLines" codePrefetchLines,
+     rowN "frontEnd.codeLaunchBytes" codeLaunchBytes,
      rowN "frontEnd.takenBranchCycles" takenBranchCycles,
      rowN "frontEnd.forwardBranchCycles" forwardBranchCycles,
      row "frontEnd.stallZeroInterlocks" stallZeroInterlocks toString,
