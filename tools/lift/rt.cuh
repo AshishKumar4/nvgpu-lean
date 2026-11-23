@@ -782,6 +782,59 @@ __device__ __forceinline__ MmaModel mmaModel(uint32_t sm, bool tf32) {
   return MmaModel{0, 0, 0};
 }
 
+// Whether this GPU's own `mma.sync` computes as datapath `m` does: its model (`mmaModel` of the
+// architecture compiled for) the same. Then an emulated MMA runs on the tensor cores and gives the
+// simulator's result (the models are the simulator's, which the hardware matches bit for bit);
+// else in software. `LIFT_SOFT_MMA` keeps every MMA in software.
+__device__ __forceinline__ bool nativeMma(MmaModel m, bool tf32) {
+#if defined(__CUDA_ARCH__) && !defined(LIFT_SOFT_MMA)
+  const MmaModel h = mmaModel(__CUDA_ARCH__ / 10, tf32);
+  return h.blockSize != 0 && h.blockSize == m.blockSize && h.alignFrac == m.alignFrac && h.minAlignExp == m.minAlignExp;
+#else
+  return false;
+#endif
+}
+
+// `mma.sync.aligned.m16n8k16.row.col.f32.{f16|bf16}` on this GPU, `d` the accumulator in and out.
+__device__ __forceinline__ void mma16816(bool bf, const uint32_t (&a)[4], const uint32_t (&b)[2], uint32_t (&d)[4]) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
+  if (bf)
+    asm volatile("mma.sync.aligned.m16n8k16.row.col.f32.bf16.bf16.f32 {%0, %1, %2, %3}, {%4, %5, %6, %7}, {%8, %9}, {%0, %1, %2, %3};"
+                 : "+r"(d[0]), "+r"(d[1]), "+r"(d[2]), "+r"(d[3])
+                 : "r"(a[0]), "r"(a[1]), "r"(a[2]), "r"(a[3]), "r"(b[0]), "r"(b[1]));
+  else
+    asm volatile("mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32 {%0, %1, %2, %3}, {%4, %5, %6, %7}, {%8, %9}, {%0, %1, %2, %3};"
+                 : "+r"(d[0]), "+r"(d[1]), "+r"(d[2]), "+r"(d[3])
+                 : "r"(a[0]), "r"(a[1]), "r"(a[2]), "r"(a[3]), "r"(b[0]), "r"(b[1]));
+#endif
+}
+
+// The other `mma.sync` shapes into binary32 (`hmma`'s): m16n8k8 of f16 or bf16 (`w` 16) and
+// m16n8k8 and m16n8k4 of tf32 (`w` 32), on this GPU.
+template <int K, int AW, int BW>
+__device__ __forceinline__ void mmaOther(int w, bool bf, const uint32_t (&a)[AW], const uint32_t (&b)[BW], uint32_t (&d)[4]) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
+  if constexpr (AW == 2 && BW == 1) {
+    if (w == 32)
+      asm volatile("mma.sync.aligned.m16n8k4.row.col.f32.tf32.tf32.f32 {%0, %1, %2, %3}, {%4, %5}, {%6}, {%0, %1, %2, %3};"
+                   : "+r"(d[0]), "+r"(d[1]), "+r"(d[2]), "+r"(d[3]) : "r"(a[0]), "r"(a[1]), "r"(b[0]));
+    else if (bf)
+      asm volatile("mma.sync.aligned.m16n8k8.row.col.f32.bf16.bf16.f32 {%0, %1, %2, %3}, {%4, %5}, {%6}, {%0, %1, %2, %3};"
+                   : "+r"(d[0]), "+r"(d[1]), "+r"(d[2]), "+r"(d[3]) : "r"(a[0]), "r"(a[1]), "r"(b[0]));
+    else
+      asm volatile("mma.sync.aligned.m16n8k8.row.col.f32.f16.f16.f32 {%0, %1, %2, %3}, {%4, %5}, {%6}, {%0, %1, %2, %3};"
+                   : "+r"(d[0]), "+r"(d[1]), "+r"(d[2]), "+r"(d[3]) : "r"(a[0]), "r"(a[1]), "r"(b[0]));
+  } else if constexpr (AW == 4 && BW == 2) {
+    if (w == 32)
+      asm volatile("mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32 {%0, %1, %2, %3}, {%4, %5, %6, %7}, {%8, %9}, {%0, %1, %2, %3};"
+                   : "+r"(d[0]), "+r"(d[1]), "+r"(d[2]), "+r"(d[3])
+                   : "r"(a[0]), "r"(a[1]), "r"(a[2]), "r"(a[3]), "r"(b[0]), "r"(b[1]));
+    else
+      mma16816(bf, a, b, d);
+  }
+#endif
+}
+
 // `HMMA.{16816|1688|1684}.F32[.BF16|.TF32]` by the whole warp: D = A·B + C, 16 x 8 outputs of K
 // products each, every output `Datapath.dot` over blocks of the model's size from C's value
 // (`NV.Num.TensorModel.tileWords`). Lane (g, q) = (lane / 4, lane % 4) holds the PTX fragments
@@ -796,6 +849,11 @@ static __device__ __noinline__ void hmma(const Ctx& x, MmaModel m, int w, const 
                             uint32_t mask) {
   if (mask != 0xffffffffu || m.blockSize == 0) {
     if (lane == __ffs(mask) - 1) atomicOr(x.fault, 32u);
+    return;
+  }
+  if (nativeMma(m, w == 32)) {
+    for (int i = 0; i < 4; ++i) d[i] = cin[i];
+    mmaOther<K, AW, BW>(w, man == 7, a, b, d);
     return;
   }
   uint32_t* A = x.stage;
@@ -938,13 +996,16 @@ __device__ inline void warpExit(const Ctx& x) {
 
 // Element (mn, k) of an MMA's A or B (`Desc.addr`), encoded for the datapath (`Codec.encode`):
 // from the issuer's CTA's shared memory or, past the split, the next cluster rank's.
-__device__ inline uint32_t mmaElem(const Ctx& x, const MmaJob& j, bool isA, uint32_t mn, int k, const Codec& c) {
+__device__ inline uint32_t mmaRaw(const Ctx& x, const MmaJob& j, bool isA, uint32_t mn, int k) {
   uint32_t split = isA ? j.aSplit : j.bSplit, rank = x.clusterRank;
   if (mn >= split) { mn -= split; rank += 1; }
   uint32_t a = descAddr(isA ? j.da : j.db, isA ? j.aK : j.bK, (int)mn, k, x.fault);
   uint16_t v = __ldcg((const unsigned short*)sharedAt(x, (rank << 24) | a));
   if (isA ? j.negA : j.negB) v ^= 0x8000;
-  return encode(c, v);
+  return v;
+}
+__device__ inline uint32_t mmaElem(const Ctx& x, const MmaJob& j, bool isA, uint32_t mn, int k, const Codec& c) {
+  return encode(c, mmaRaw(x, j, isA, mn, k));
 }
 
 // Output `o` of a tile, as row `i` and column `k`: in each 16 x 8 block the warpgroup MMA's
@@ -978,6 +1039,40 @@ static __device__ __noinline__ void mmaTask(const Ctx& x, const MmaJob& j, uint3
   const uint32_t blocks = (j.cols + j.tileCols - 1) / j.tileCols;
   const uint32_t row0 = 16 * (t / blocks), col0 = j.tileCols * (t % blocks);
   const uint32_t nr = min(16u, j.rows - row0), nc = min(j.tileCols, j.cols - col0);
+  // A whole warp on a GPU whose `mma.sync` computes as this datapath does: each 16 x 8 block of
+  // the tile one `mma.sync.m16n8k16`, its fragments the lanes' (`tilePos`: block-major, as
+  // `accPos`), rows and columns past the tile's edge zero and not stored.
+  if (n == 32 && nativeMma(MmaModel{16, 25, -133}, false)) {
+    const uint32_t g = r / 4, q = r % 4;
+    uint32_t a[4];
+    for (int h = 0; h < 4; ++h) {
+      const uint32_t i = g + 8 * (h % 2);
+      const int k = 2 * q + 8 * (h / 2);
+      a[h] = i < nr ? mmaRaw(x, j, true, j.aRow0 + row0 + i, k) | mmaRaw(x, j, true, j.aRow0 + row0 + i, k + 1) << 16 : 0u;
+    }
+    for (uint32_t c0 = 0; c0 < j.tileCols; c0 += 8) {
+      uint32_t b[2], d[4];
+      const uint32_t col = c0 + g;
+      for (int h = 0; h < 2; ++h) {
+        const int k = 2 * q + 8 * h;
+        b[h] = col < nc ? mmaRaw(x, j, false, col0 + col, k) | mmaRaw(x, j, false, col0 + col, k + 1) << 16 : 0u;
+      }
+      for (int v = 0; v < 4; ++v) {
+        const uint32_t i = g + 8 * (v / 2), k = c0 + 2 * q + v % 2;
+        d[v] = 0u;
+        if (j.acc && i < nr && k < nc)
+          d[v] = own ? own[4 * ((col0 + k) / 8) + v] : __ldcg(mmaOut(x, j, buf, row0 + i, col0 + k));
+      }
+      mma16816(j.ty == BF16, a, b, d);
+      for (int v = 0; v < 4; ++v) {
+        const uint32_t i = g + 8 * (v / 2), k = c0 + 2 * q + v % 2;
+        if (i >= nr || k >= nc) continue;
+        if (own) own[4 * ((col0 + k) / 8) + v] = d[v];
+        else *mmaOut(x, j, buf, row0 + i, col0 + k) = d[v];
+      }
+    }
+    return;
+  }
   uint32_t* A = st;
   uint32_t* B = st + 256;
   sync();
@@ -1182,6 +1277,33 @@ template <int N>
 static __device__ __noinline__ void hgmma(const Ctx& x, InType ty, uint64_t da, uint64_t db, bool aK, bool bK, bool negA,
                              bool negB, bool scaleD, uint32_t* acc, uint32_t lane, uint32_t warp, uint32_t mask) {
   if (mask != 0xffffffffu) { if (lane == __ffs(mask) - 1) atomicOr(x.fault, 32u); return; }
+  // On a GPU whose `mma.sync` computes as Hopper's warpgroup MMA does: this warp's 16 rows as N/8
+  // `mma.sync.m16n8k16`, whose accumulator fragments are the lanes' values here (`accPos`), the
+  // operands read from the descriptors' elements.
+  if (nativeMma(mmaModel(90, false), false)) {
+    const uint32_t g = lane / 4, q = lane % 4, row0 = 16 * (warp % 4);
+    auto el = [&](uint64_t desc, bool kMajor, bool neg, uint32_t mn, int k) {
+      const uint32_t at = descAddr(desc, kMajor, (int)mn, k, x.fault);
+      return (uint32_t)(__ldcg((const unsigned short*)sharedAt(x, (x.clusterRank << 24) | at)) ^ (neg ? 0x8000u : 0u));
+    };
+    uint32_t a[4];
+    for (int r = 0; r < 4; ++r) {
+      const uint32_t row = row0 + g + 8 * (r % 2);
+      const int col = 2 * q + 8 * (r / 2);
+      a[r] = el(da, aK, negA, row, col) | el(da, aK, negA, row, col + 1) << 16;
+    }
+    for (uint32_t nb = 0; nb < N / 8; ++nb) {
+      uint32_t b[2], d[4];
+      for (int r = 0; r < 2; ++r) {
+        const int k = 2 * q + 8 * r;
+        b[r] = el(db, bK, negB, 8 * nb + g, k) | el(db, bK, negB, 8 * nb + g, k + 1) << 16;
+      }
+      for (int v = 0; v < 4; ++v) d[v] = scaleD ? acc[4 * nb + v] : 0u;
+      mma16816(ty == BF16, a, b, d);
+      for (int v = 0; v < 4; ++v) acc[4 * nb + v] = d[v];
+    }
+    return;
+  }
   Job j;
   j.x = x; j.kind = 0; j.tasks = N / 8;
   j.buf = x.helpers ? x.acc + (x.cta * LIFT_WARPS + warp) * ACC_WORDS : nullptr;
