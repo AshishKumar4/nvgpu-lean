@@ -26,16 +26,23 @@ What the data-center Blackwell SM (`sm_100a`) adds (PTX ISA 9.5 §9.7.18):
   its word (§9.7.18.10.4.1). One `MmaT` per instruction, its products those of the B200's
   datapath (`NV.Num.Blackwell`, Khattak and Mikaitis).
 
-`.cta_group::2` (a CTA pair, §9.7.18.2.1) with M = 256 (Layout A): A, B and D split between the
-pair, the peer's shared memory through the cluster window and its tensor memory past `2 ^ 24`
-(`peerByte`).
+`.cta_group::2` (a CTA pair, §9.7.18.2.1) with M = 256 (Layout A) or 128 (Layout B, dense A):
+A, B and D split between the pair, the peer's shared memory through the cluster window and its
+tensor memory past `2 ^ 24` (`peerByte`).
 
 FP6 and FP4 inputs (`.kind::f8f6f4`) and block scaling (`.kind::mxf8f6f4`, `mxf4`, `mxf4nvf4`,
 §9.7.18.10.7) on SF Tensor's measured datapaths (`Blackwell.f8f32`, `NV.Num.Scaled`), and
 `tcgen05.cp` and `tcgen05.shift` (§9.7.18.9). Where the ISA draws no layout (`CpShape.lanes`,
 `sfaByte`, the FP6/FP4 bit orders, the shift), the model's is the B200's, measured on one.
 
-Not modelled, and a fault: `.cta_group::2` with M = 128 or A in tensor memory, `.ws`, sparse A,
+`tcgen05.mma.ws` (§9.7.18.10.10.3, weight stationary) of M = 32, 64 or 128 and N = 64, 128 or 256
+(Table 48): D in Layout G, E or D (§9.7.18.10.5): with M = 64 a row `r` in lane `r` for D's first
+N/2 columns and lane `64 + r` for the rest, with M = 32 in lane `r + 32 q` for the q-th quarter of
+the columns, each part from D's column. The collector-buffer qualifiers change no result.
+
+Not modelled, and a fault: `.cta_group::2` with A in tensor memory or with M = 128 and scale
+factors, `.ws` with A in tensor memory, a zero-column mask that zeroes columns or shifts them, or
+B's shifts, sparse A,
 MN-major FP6 and FP4 operands, A's scale factors in 128 lanes, K of 96 or 128, `.kind::ti16`,
 `tcgen05.cp` to a lane other than 0, the collector-buffer hints (which change no result).
 -/
@@ -227,8 +234,15 @@ structure Inst where
   The model has M = 256 (Layout A, §9.7.18.10.5.1, Figure 211): rows 0–127 of A and D in the
   issuer's shared and tensor memory (A in either), rows 128–255 in the peer's, at the same addresses; B's
   columns split the same way, its first N/2 the issuer's (CUTLASS `SM100_MMA_F16BF16_2x1SM_SS`,
-  which loads each CTA's half of B). -/
+  which loads each CTA's half of B). And M = 128 (Layout B, §9.7.18.10.5.2, Figures 213–214): A's
+  rows 0–63 and D's in the issuer, 64–127 in the peer, B split as for 256; in each CTA a D row `r`
+  (of its 64) is in lane `r` for D's first N/2 columns and lane `64 + r` for the rest, at
+  columns from D's own (the second half's from D's column again). -/
   pair : Option (Nat × Nat) := none
+  /-- `tcgen05.mma.ws`. -/
+  ws : Bool := false
+  /-- `.ws`'s zero-column mask descriptor (§9.7.18.4.3); 0, none. -/
+  zeroMask : Nat := 0
   /-- The scale factors of a block-scaled kind. -/
   scales : Option Scales := none
   deriving Inhabited
@@ -273,6 +287,9 @@ def Inst.op (x : Inst) (addr : Nat → UInt64) (cluster : Nat → Nat → UInt64
   let idc := x.idesc
   if idc.sparse then throw "tcgen05.mma: sparse A is not modelled"
   if idc.maxShift != 0 then throw "tcgen05.mma: .ws shifts are not modelled"
+  -- A zero-column mask with bit 39 clear generates no zero column; one shifting B is not either.
+  if (x.zeroMask >>> 39) % 2 != 0 || (x.zeroMask >>> 56) % 64 != 0 then
+    throw "tcgen05.mma.ws: a zero-column mask that zeroes or shifts columns is not modelled"
   if x.kind.scaled != x.scales.isSome then throw "tcgen05.mma: scale factors with a kind that does not take them"
   let ta ← inType x.kind idc.atype
   let tb ← inType x.kind idc.btype
@@ -282,8 +299,18 @@ def Inst.op (x : Inst) (addr : Nat → UInt64) (cluster : Nat → Nat → UInt64
   if !float && acc != .s32 then throw "tcgen05.mma: .kind::i8 accumulates into S32"
   let M := idc.m
   let N := idc.n
-  if x.pair.isSome then
-    unless M == 256 do throw s!"tcgen05.mma.cta_group::2: M = {M} (only 256, Layout A, is modelled)"
+  if x.ws then
+    if x.pair.isSome then throw "tcgen05.mma.ws: .cta_group::2"
+    if x.kind.scaled then throw "tcgen05.mma.ws: a block-scaled kind"
+    unless M == 32 || M == 64 || M == 128 do throw s!"tcgen05.mma.ws: M = {M}"
+    unless N == 64 || N == 128 || N == 256 do throw s!"tcgen05.mma.ws: N = {N}"
+    if (match x.a with | .tmem _ => true | .smem _ => false) then
+      throw "tcgen05.mma.ws: A in tensor memory is not modelled"
+  else if x.pair.isSome then
+    unless M == 256 || M == 128 do throw s!"tcgen05.mma.cta_group::2: M = {M}"
+    if M == 128 && x.scales.isSome then throw "tcgen05.mma.cta_group::2: block scaling with M = 128"
+    if M == 128 && (match x.a with | .tmem _ => true | .smem _ => false) then
+      throw "tcgen05.mma.cta_group::2: A in tensor memory with M = 128"
   else
     unless M == 64 || M == 128 do throw s!"tcgen05.mma.cta_group::1: M = {M}"
     if x.scales.isSome && M != 128 then throw s!"tcgen05.mma: block scaling with M = {M}"
@@ -294,8 +321,13 @@ def Inst.op (x : Inst) (addr : Nat → UInt64) (cluster : Nat → Nat → UInt64
   -- Elements of an FP6 or FP4 operand per 16-byte chunk of shared memory.
   let perChunk := if x.kind.packed then 32 else 16
   let (dl, dc) := (laneOf x.d, colOf x.d)
-  unless (if M == 64 then dl == 0 || dl == 16 else dl == 0) do throw s!"tcgen05.mma: D at lane {dl} for M = {M}"
-  unless dc + N ≤ columns do throw s!"tcgen05.mma: D's columns {dc}…{dc + N} pass column {columns}"
+  unless (if M == 64 && !x.ws then dl == 0 || dl == 16 else dl == 0) do throw s!"tcgen05.mma: D at lane {dl} for M = {M}"
+  -- Layout B folds D's second half of columns into lanes 64–127.
+  -- Layouts B and E fold D's second half of columns into lanes 64–127, G its quarters into the
+  -- lanes' quarters.
+  let parts := if (x.pair.isSome && M == 128) || (x.ws && M == 64) then 2 else if x.ws && M == 32 then 4 else 1
+  let dCols := N / parts
+  unless dc + dCols ≤ columns do throw s!"tcgen05.mma: D's columns {dc}…{dc + dCols} pass column {columns}"
   -- A pair's second half is the peer's, at the same addresses (`peerShared` on).
   let half (n i : Nat) : Nat × Nat :=
     if x.pair.isSome && i ≥ n / 2 then (peerShared, i - n / 2) else (0, i)
@@ -328,8 +360,17 @@ def Inst.op (x : Inst) (addr : Nat → UInt64) (cluster : Nat → Nat → UInt64
     | .smem _ => pure #[]
   -- D: per row, its N columns, 16 bytes a chunk; a pair's rows 128 on in the peer's.
   let dByte (r q : Nat) : Nat := match x.pair with
-    | some (_, peer) => if r ≥ 128 then peerByte peer (byteAt (r - 128) (dc + 4 * q)) else byteAt r (dc + 4 * q)
-    | none => byteAt (rowLane M dl r) (dc + 4 * q)
+    | some (_, peer) =>
+      if M == 128 then
+        let r' := r % 64
+        let (lane, col) := if 4 * q ≥ N / 2 then (64 + r', dc + 4 * q - N / 2) else (r', dc + 4 * q)
+        if r ≥ 64 then peerByte peer (byteAt lane col) else byteAt lane col
+      else if r ≥ 128 then peerByte peer (byteAt (r - 128) (dc + 4 * q)) else byteAt r (dc + 4 * q)
+    | none =>
+      if parts == 1 then byteAt (rowLane M dl r) (dc + 4 * q)
+      else
+        let part := 4 * q / dCols
+        byteAt (r + (128 / parts) * part) (dc + 4 * q - part * dCols)
   let dChunks := (Array.range M).flatMap fun r => (Array.range (N / 4)).map fun q => dByte r q
   let cT := if x.accumulate then dChunks else #[]
   -- Scale factors: the words of A's rows and of B's columns for each lane quarter, a pair's rows

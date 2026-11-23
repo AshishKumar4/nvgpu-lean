@@ -1546,19 +1546,29 @@ def f_ldsm(i):
 @form("UTCHMMA")
 def f_utchmma(i):
     ops, mods = i["ops"], i["mods"]
-    if [m for m in mods if m != "2CTA"]:
+    if [m for m in mods if m not in ("2CTA", "WS")]:
         raise Lift(f"UTCHMMA {mods}")
-    if ops[0]["k"] != "gdesc" or ops[1]["k"] != "gdesc" or ops[0]["mods"] or ops[1]["mods"]:
+    ws = "WS" in mods
+    # `.WS`'s collector-buffer hints on B (`.B_KEEP`, ...) change no result.
+    if ops[0]["k"] != "gdesc" or ops[1]["k"] != "gdesc" or ops[0]["mods"] or (ops[1]["mods"] and not ws):
         raise Lift("UTCHMMA with A from tensor memory")
     a, b = ops[0]["r"]["i"], ops[1]["r"]["i"]
     d = tmem_op(ops[2])
     if ops[3]["k"] != "udesc" or ops[4]["k"] != "udesc" or ops[4]["kind"] != "idesc":
         raise Lift("UTCHMMA operands")
     x, idx = ops[3]["r"]["i"], ops[4]["r"]["i"]
-    acc = pred(ops[5]) if len(ops) > 5 else "true"
+    rest = ops[5:]
+    # `.WS`'s zero-column mask: a pair of uniform registers before enable-input-d.
+    mask = "0ull"
+    if ws and rest and rest[0]["k"] == "reg" and rest[0]["r"]["f"] == "ur":
+        m = rest[0]["r"]["i"]
+        mask = "0ull" if m == 255 else f"U64(UR({m}), UR({m + 1}))"
+        rest = rest[1:]
+    acc = pred(rest[0]) if rest else "true"
     pair = "true" if "2CTA" in mods else "false"
     return (f"if (lane == __ffs(__EXEC__) - 1) {{ if (UR({x}) != 0u) atomicOr(&FAULT, 32u); "
-            f"else utcmma(ctx, U64(UR({a}), UR({a + 1})), U64(UR({b}), UR({b + 1})), {d}, UR({idx}), {acc}, {pair}, lane, warp); }}")
+            f"else utcmma(ctx, U64(UR({a}), UR({a + 1})), U64(UR({b}), UR({b + 1})), {d}, UR({idx}), {acc}, {pair}, "
+            f"lane, warp, {str(ws).lower()}, {mask}); }}")
 
 
 @form("UTCBAR")

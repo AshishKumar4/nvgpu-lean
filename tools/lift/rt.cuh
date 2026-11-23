@@ -934,7 +934,7 @@ struct MmaJob {
   uint32_t aSplit, bSplit;  // A rows, B columns from these on are the next cluster rank's (`.2CTA`); NONE
   uint32_t rows, cols, tileCols;
   uint32_t dl, dc, M;       // into tensor memory (`toTmem`): its lane and column, the MMA's M
-  uint8_t ty, aK, bK, negA, negB, acc, toTmem, pair;
+  uint8_t ty, aK, bK, negA, negB, acc, toTmem, pair, ws;  // ws: `.ws`'s Layouts E and G for M 64, 32
 };
 
 // A copy: a TMA box (`kind` 0 load, 1 store) or bytes (`kind` 2).
@@ -1018,9 +1018,20 @@ __device__ __forceinline__ void tilePos(uint32_t o, uint32_t* i, uint32_t* k) {
 }
 
 // The word output (row, col) of an MMA lands in: `buf`'s, or tensor memory's (`UTCHMMA`'s rows:
-// a pair's rows from 128 on in the peer's).
+// a pair's rows from 128 on in the peer's; with M = 128, Layout B, rows from 64 on in the peer's,
+// each CTA's row r in lane r for the first half of the columns and 64 + r for the second).
 __device__ inline uint32_t* mmaOut(const Ctx& x, const MmaJob& j, uint32_t* buf, uint32_t row, uint32_t col) {
   if (!j.toTmem) return buf + row * j.cols + col;
+  if (j.pair && j.M == 128) {
+    const uint32_t half = j.cols / 2, lane = row % 64 + (col >= half ? 64 : 0), c = j.dc + col % half;
+    return (uint32_t*)tmemAt(x, row >= 64 ? ((x.clusterRank + 2) << 24) + tmemByte(lane, c) : tmemByte(lane, c));
+  }
+  // `.ws` with M 64 (Layout E: the columns' halves in lanes 0–63 and 64–127) or 32 (Layout G:
+  // their quarters in the lanes' quarters).
+  if (j.ws && j.M < 128) {
+    const uint32_t parts = 128 / j.M, part = col / (j.cols / parts);
+    return (uint32_t*)tmemAt(x, tmemByte(row + j.M * part, j.dc + col - part * (j.cols / parts)));
+  }
   uint32_t b = j.pair && row >= 128 ? ((x.clusterRank + 2) << 24) + tmemByte(row - 128, j.dc + col)
                                     : tmemByte(j.pair ? row : rowLane(j.M, j.dl, row), j.dc + col);
   return (uint32_t*)tmemAt(x, b);
@@ -1329,26 +1340,35 @@ static __device__ __noinline__ void hgmma(const Ctx& x, InType ty, uint64_t da, 
 
 // `UTCHMMA[.2CTA]`: one `tcgen05.mma` of `.kind::f16` (f16 or bf16 inputs into f32), A and B from
 // shared memory, issued by one thread (`Tcgen05.Inst.op`): D = A·B (+ D), the B200's datapath
-// (`NV.Num.Blackwell.f16f32`: Hopper's), in tiles of 16 x 16. `pair`: `.cta_group::2`, M 256, rows
-// and columns 128/N2 on the peer (the next rank). Others set the fault flag.
+// (`NV.Num.Blackwell.f16f32`: Hopper's), in tiles of 16 x 16. `pair`: `.cta_group::2`, M 256 (rows
+// and columns from 128 and N/2 on the peer, the next rank) or 128 (rows from 64, `mmaOut`'s Layout
+// B). Others set the fault flag.
 static __device__ __noinline__ void utcmma(const Ctx& x, uint64_t da, uint64_t db, uint32_t d, uint32_t idesc, bool accumulate,
-                              bool pair, uint32_t lane, uint32_t warp) {
+                              bool pair, uint32_t lane, uint32_t warp, bool ws = false, uint64_t zeroMask = 0) {
   auto f = [&](int lo, int w) { return (idesc >> lo) & ((1u << w) - 1); };
   uint32_t dtype = f(4, 2), atype = f(7, 3), btype = f(10, 3);
   bool negA = f(13, 1), negB = f(14, 1), transA = f(15, 1), transB = f(16, 1);
   uint32_t N = f(17, 6) << 3, M = f(24, 5) << 4;
-  bool bad = f(2, 1) || f(30, 2) || dtype != 1 || atype > 1 || btype != atype ||
-             (pair ? M != 256 : (M != 64 && M != 128)) || N < 8 || N > 256 || ((da >> 61) & 1) || ((db >> 61) & 1) ||
+  // `.ws`: M 32, 64 or 128, N 64, 128 or 256, a zero-column mask that zeroes or shifts nothing.
+  const bool wsBad = ws && (pair || (M != 32 && M != 64 && M != 128) || (N != 64 && N != 128 && N != 256) ||
+                            ((zeroMask >> 39) & 1) || ((zeroMask >> 56) & 63));
+  bool bad = wsBad || f(2, 1) || f(30, 2) || dtype != 1 || atype > 1 || btype != atype ||
+             (ws ? false : pair ? (M != 256 && M != 128) : (M != 64 && M != 128)) || N < 8 || N > 256 ||
+             ((da >> 61) & 1) || ((db >> 61) & 1) ||
              ((da >> 46) & 7) != 1 || ((db >> 46) & 7) != 1;
   uint32_t dl = d >> 16, dc = d & 0xffffu;
-  if (bad || dc + N > 512 || (M == 64 ? (dl != 0 && dl != 16) : dl != 0)) { atomicOr(x.fault, 32u); return; }
+  const uint32_t parts = (pair && M == 128) || (ws && M == 64) ? 2 : ws && M == 32 ? 4 : 1;
+  if (bad || dc + N / parts > 512 || (M == 64 && !ws ? (dl != 0 && dl != 16) : dl != 0)) {
+    atomicOr(x.fault, 32u);
+    return;
+  }
   Job j;
   j.x = x; j.kind = 0; j.buf = nullptr; j.tasks = (M / 16) * ((N + 15) / 16);
   MmaJob& m = j.mma;
-  m.da = da; m.db = db; m.aRow0 = 0; m.aSplit = pair ? 128u : NONE; m.bSplit = pair ? N / 2 : NONE;
+  m.da = da; m.db = db; m.aRow0 = 0; m.aSplit = pair ? M / 2 : NONE; m.bSplit = pair ? N / 2 : NONE;
   m.rows = M; m.cols = N; m.tileCols = 16; m.dl = dl; m.dc = dc; m.M = M;
   m.ty = (uint8_t)(atype == 1 ? BF16 : F16); m.aK = !transA; m.bK = !transB; m.negA = negA; m.negB = negB;
-  m.acc = accumulate; m.toTmem = 1; m.pair = pair;
+  m.acc = accumulate; m.toTmem = 1; m.pair = pair; m.ws = ws;
   runJob(x, j, warp, 0, 1, 1u << lane, [] {}, (uint32_t*)nullptr, false, [](unsigned long long) {});
   __threadfence();
 }

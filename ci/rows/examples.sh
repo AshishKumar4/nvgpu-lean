@@ -20,6 +20,10 @@ lake exe sim examples/specs/tcgen05_gemm.json --gpu b200
 lake exe sim examples/specs/tcgen05_gemm.json --gpu b200 --functional
 lake exe sim examples/specs/tcgen05_pair.json --gpu b200
 lake exe sim examples/specs/tcgen05_pair.json --gpu b200 --functional
+lake exe sim examples/specs/tcgen05_pair128.json --gpu b200
+lake exe sim examples/specs/tcgen05_pair128.json --gpu b200 --functional
+lake exe sim examples/specs/tcgen05_ws.json --gpu b200
+lake exe sim examples/specs/tcgen05_ws.json --gpu b200 --functional
 lake exe sim examples/specs/tcgen05_gemm.json --gpu b300
 # --until stops a launch early: the GEMM (4,000 cycles and more whole) stopped at 2000 reports the
 # cycles it ran, the stop rounded up to the engine's quantum (within 200).

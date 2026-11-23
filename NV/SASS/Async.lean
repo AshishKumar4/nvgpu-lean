@@ -59,9 +59,10 @@ listing):
   bookkeeping is ordinary shared memory in the kernel's reserved window.
   `tcgen05.relinquish_alloc_permit` (`UVIRTCOUNT.DEALLOC.SMPOOL`) changes nothing the model
   holds, nor do `tcgen05.wait::ld/st` (the dependence counters order the registers) or the fences
-  (`FENCE.VIEW.ASYNC.T`). `.2CTA` (`.cta_group::2`): the MMA from the even CTA of a pair (M = 256), the commit to the
+  (`FENCE.VIEW.ASYNC.T`). `.2CTA` (`.cta_group::2`): the MMA from the even CTA of a pair (M = 256 or 128), the commit to the
   pair's mbarriers (`UTCBAR.2CTA.MULTICAST`), the allocator in the even CTA's word. `UTCCP` and
-  `UTCSHIFT` are `tcgen05.cp` and `tcgen05.shift` (`utccp`). Not modelled, and a fault: `.WS`.
+  `UTCSHIFT` are `tcgen05.cp` and `tcgen05.shift` (`utccp`). `.WS`: `tcgen05.mma.ws`, its zero-column
+  mask a pair of uniform registers before enable-input-d.
 
 Shared addresses in registers are in the shared-window form: the CTA's cluster rank in bits
 24 and up, the offset below.
@@ -546,7 +547,8 @@ in a pair of uniform registers: `UTCQMMA` is then `.kind::mxf8f6f4`, `UTCOMMA` `
 `::mxf4nvf4` (the same encoding; the descriptor's scale type tells UE4M3 from
 UE8M0), two factors a row, four with `.4X`. -/
 def utcmma (env : Env) (w : View) (i : Instr) : Except String Op := do
-  if i.mods.any (fun m => m != "2CTA" && m != "4X") then throw s!"{i.mods.toList} is not modelled"
+  if i.mods.any (fun m => m != "2CTA" && m != "4X" && m != "WS") then throw s!"{i.mods.toList} is not modelled"
+  let ws := i.hasMod "WS"
   let pair ← pairOf env i
   let ops := i.operands
   let some (Operand.udesc "idesc" ri _) := (ops[4]? : Option Operand)
@@ -578,15 +580,20 @@ def utcmma (env : Env) (w : View) (i : Instr) : Except String Op := do
       | some x => pure (.tmem x)
       | none => throw "A operand"
     | none => throw "A operand"
+  -- `.B_KEEP` and its kin are `.ws`'s collector-buffer hints, which change no result.
   let b ← match (ops[1]? : Option Operand) with
     | some (.gdesc ⟨.ur, u⟩ ms) =>
-      if !ms.isEmpty then throw s!"descriptor suffixes {ms.toList} are not modelled"
+      if !ms.isEmpty && !ws then throw s!"descriptor suffixes {ms.toList} are not modelled"
       Tcgen05.sdesc (ur64 w u)
     | _ => throw "B operand"
   let some d := ops[2]?.bind (tmemAddr w) | throw "D operand"
   let some x := ops[3]?.bind (tmemAddr w) | throw "fourth operand"
   if x != 0 then throw "a nonzero low word of the instruction descriptor (sparse metadata) is not modelled"
   let en := if sf.isSome then 6 else 5
+  -- `.ws`'s zero-column mask: a pair of uniform registers before enable-input-d.
+  let (zeroMask, en) := match ws, (ops[en]? : Option Operand) with
+    | true, some (.reg ⟨.ur, u⟩ _) => ((ur64 w u).toNat, en + 1)
+    | _, _ => (0, en)
   let accumulate ← match (ops[en]? : Option Operand) with
     | some (.reg ⟨.up, p⟩ m) => pure (w.getUP p != m.not)
     | none => pure true
@@ -594,7 +601,7 @@ def utcmma (env : Env) (w : View) (i : Instr) : Except String Op := do
   let scales := match form, sf with
     | some form, some (sa, sb) => some { form, a := sa, b := sb : Tcgen05.Scales }
     | _, _ => none
-  let inst : Tcgen05.Inst := { kind, idesc, a, b, d, accumulate, pair, scales }
+  let inst : Tcgen05.Inst := { kind, idesc, a, b, d, accumulate, pair, scales, ws, zeroMask }
   return .mmaT (← inst.op (·.toUInt64))
 
 /-- `UTCCP.T.S[.shape][.U6x16P32|.U4x16P64][.2CTA] tmem[URd], gdesc[URs]`: one `tcgen05.cp`: no shape modifier is `.128x256b`, `4dp256bit` `.4x256b`, `128dp128bit`

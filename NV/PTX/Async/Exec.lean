@@ -581,12 +581,14 @@ def tcScaleVec (k : Tcgen05.Kind) : Nat :=
   else if pi.i.has .scaleVec1X then 1
   else if k == .mxf8f6f4 then 1 else 2
 
-/-- `tcgen05.mma.cta_group::1.kind [d], a-desc|[a], b-desc, idesc, enable-input-d` and
+/-- `tcgen05.mma.cta_group::1.kind [d], a-desc|[a], b-desc, idesc, enable-input-d`,
 `.kind.block_scale [d], a-desc|[a], b-desc, idesc, [scale-A], [scale-B], enable-input-d`
-(§9.7.18.10.9): the executing thread's MMA. -/
+(§9.7.18.10.9) and `tcgen05.mma.ws.cta_group::1.kind{.collector_usage} [d], a-desc, b-desc, idesc,
+enable-input-d{, zero-column-mask-desc}` (§9.7.18.10.10.3): the executing thread's MMA. -/
 def tcMma : X (Effect Thread) := do
   let pair ← pairOf t pi
-  if pi.i.has .sp || pi.i.has .ws then throw "sparse and .ws MMAs are not modelled"
+  if pi.i.has .sp then throw "sparse MMAs are not modelled"
+  let ws := pi.i.has .ws
   let kind ← tcKind pi
   if kind.scaled != pi.i.has .blockScale then throw ".block_scale goes with .kind::mxf8f6f4, mxf4 and mxf4nvf4"
   let d ← taddr t pi 0
@@ -600,9 +602,12 @@ def tcMma : X (Effect Thread) := do
       let scales : Tcgen05.Scales := { form, a := ← taddr t pi 4, b := ← taddr t pi 5 }
       pure (idesc, some scales, 6)
     else pure (Tcgen05.IDesc.decode word, none, 4)
-  if pi.args.size != en + 1 then throw "operands after enable-input-d (disable-output-lane, scale) are not modelled"
+  let masked := ws && pi.args.size == en + 2
+  if pi.args.size != en + 1 && !masked then
+    throw "operands after enable-input-d (disable-output-lane, scale) are not modelled"
   let accumulate := (← rd e t pi en .pred) != 0
-  let inst : Tcgen05.Inst := { kind, idesc, a, b, d, accumulate, scales, pair }
+  let zeroMask ← if masked then (·.toNat) <$> rd e t pi (en + 1) .b64 else pure 0
+  let inst : Tcgen05.Inst := { kind, idesc, a, b, d, accumulate, scales, pair, ws, zeroMask }
   let op ← inst.op (·.toUInt64) (clusterOf e t)
   let op := if e.skipMma then { op with result := fun _ => Array.replicate (idesc.m * idesc.n) 0 } else op
   return issue t (.mmaT op)

@@ -1,0 +1,4 @@
+{ "code": "tcgen05_ws.cu", "function": "tcgen05_ws", "grid": [1], "block": [128],
+  "buffers": [ { "name": "out", "bytes": 65536 } ],
+  "params": [ { "ordinal": 0, "ptr": "out" } ],
+  "expect": [ { "buffer": "out", "file": "tcgen05_ws.expected.bin" } ] }
