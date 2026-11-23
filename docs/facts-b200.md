@@ -323,6 +323,7 @@ The role column says who reads a fact (`NV/Core/Roles.lean`): only `engine` fact
 | `mem.xbarWriteBytesPerCycle` | 32 | inferred (GH200) | engine | `meas-gh200`  |  |
 | `mem.xbarRedBytesPerCycle` | 25 | inferred (GH200) | engine | `meas-gh200`  |  |
 | `mem.l2RedF32BytesPerSec` | 6927000000000 | inferred (H200) | engine | `meas-h200`  |  |
+| `mem.l2AtomicCycles` | 258 | measured | engine | `meas`  |  |
 | `mem.dsmemBytesPerCycle` | 16 | inferred (H800 PCIe) | engine | `luo2024` §IV-E, Fig. 8: SM-to-SM throughput peaks near 3.27 TB/s at cluster size 2 |  |
 | `mem.smemCarveoutsKB` | 0, 8, 16, 32, 64, 100, 132, 164, 196, 228 | inferred | engine | `cuda-guide` §5.1.3 Table 35, compute capability 9.0 |  |
 | `mem.l2FarBytesPerCycle` | 2900 | inferred | engine | `meas`  |  |

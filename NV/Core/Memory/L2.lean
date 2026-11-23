@@ -350,7 +350,7 @@ private def sliceStage (m : L2Mem) (t id : Nat) : Except String L2Mem := do
 private def atomStage (m : L2Mem) (t id : Nat) : L2Mem :=
   let y := m.txns[id]!
   let (_, last, m) := m.take (.atom y.x.slice) t y.x.lanes.size
-  m.push last (.ret id)
+  m.push (last + m.cfg.atomCycles) (.ret id)
 
 /-- A recorded fill has arrived: forget it, unless a later one for the line replaced it. -/
 private def filledStage (m : L2Mem) (s line ready : Nat) : L2Mem :=

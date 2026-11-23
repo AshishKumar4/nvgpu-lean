@@ -112,7 +112,7 @@ def sections (p : Params) : List (String × List Row) :=
     lsuInterval, addressInterval, storeRegCycles, l1BytesPerCycle, l1TagSectorsPerCycle, l1Ways, l1Mshrs,
     l1StoreInvalidates, l2Ways, l2SliceBytesPerCycle, l2SliceWriteBytesPerCycle, xbarBytesPerCycle, xbarWriteBytesPerCycle, xbarRedBytesPerCycle, l2RedF32BytesPerSec,
     dsmemBytesPerCycle, smemCarveoutsKB, l2FarBytesPerCycle, smemAtomicInterval,
-    l2FarCopiesNear, l2ClockRefMHz, l2LatencyFixedPermille, l2LatencyRefMHz, dramTurnaroundPs⟩ := mem
+    l2FarCopiesNear, l2ClockRefMHz, l2LatencyFixedPermille, l2LatencyRefMHz, dramTurnaroundPs, l2AtomicCycles⟩ := mem
   let ⟨fmaPerCycle16, fmaPerCycle8, fmaPerCycleTF32, fmaPerCycleF64, wgmmaLatency, wgmmaLatencyRS,
     mmaSyncLatency, wgmmaOperandDataPermille, wgmmaIssueSharePermille, wgmmaPipeSharePermille, tcgen05Latency, tmemLatency⟩ := tensor
   let ⟨mbarrierLatency, clusterMbarrierLatency, clusterBarrierCycles, namedBarrierLatency, barArriveCycles, barSync,
@@ -176,6 +176,7 @@ def sections (p : Params) : List (String × List Row) :=
      rowN "mem.xbarBytesPerCycle" xbarBytesPerCycle, rowN "mem.xbarWriteBytesPerCycle" xbarWriteBytesPerCycle,
      rowN "mem.xbarRedBytesPerCycle" xbarRedBytesPerCycle,
      rowN "mem.l2RedF32BytesPerSec" l2RedF32BytesPerSec,
+     rowN "mem.l2AtomicCycles" l2AtomicCycles,
      rowN "mem.dsmemBytesPerCycle" dsmemBytesPerCycle,
      row "mem.smemCarveoutsKB" smemCarveoutsKB showList,
      rowN "mem.l2FarBytesPerCycle" l2FarBytesPerCycle,

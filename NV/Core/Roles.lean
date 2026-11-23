@@ -55,7 +55,7 @@ def roles : List (String × Role) := [
   ("mem.xbarWriteBytesPerCycle", .engine), ("mem.xbarRedBytesPerCycle", .engine),
   ("mem.l2SliceWriteBytesPerCycle", .engine),
   ("mem.l2ClockRefMHz", .engine), ("mem.l2LatencyFixedPermille", .engine), ("mem.l2LatencyRefMHz", .engine),
-  ("mem.dramTurnaroundPs", .engine),
+  ("mem.dramTurnaroundPs", .engine), ("mem.l2AtomicCycles", .engine),
   ("tma.storeCreditBytes", .engine),
   ("tensor.fmaPerCycle16", .engine), ("tensor.fmaPerCycle8", .engine),
   ("tensor.fmaPerCycleTF32", .engine), ("tensor.wgmmaLatency", .engine),

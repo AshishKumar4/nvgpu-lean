@@ -167,6 +167,10 @@ structure MemoryParams where
   l2LatencyRefMHz : Fact Nat
   /-- Picoseconds a DRAM channel loses each time it turns between reading and writing. -/
   dramTurnaroundPs : Fact Nat
+  /-- Cycles an atomic or reduction spends in its L2 slice's atomic unit beyond a hit, before
+  its answer leaves (`L2.atomStage`); 0 where the unit answers with the hit's latency. -/
+  l2AtomicCycles : Fact Nat :=
+    { value := 0, kind := .inferred, source := { ref := "meas-h200", loc := "benchA.txt: atom_relaxed_gpu" } }
   deriving Repr, Inhabited
 
 /-- A sub-partition's register file: banks, read ports and the operand reuse cache. -/

@@ -138,6 +138,9 @@ def b200 : Params := {
       ""
     l2RedF32BytesPerSec := inferred 6927000000000 "meas-h200" ""
       "" (some "H200")
+    -- A relaxed atomic round trip runs 886 cycles on the B200 against the model's 628 at the
+    -- far hit's latency: the atomic unit holds it the difference (sync.txt; reductions likewise).
+    l2AtomicCycles := measOn 258 ""
     dramLatency := inferred 781 "jarmusch2025" "§V"
       "" (some "B200")
     dramBusBits := measOn 7680 ""

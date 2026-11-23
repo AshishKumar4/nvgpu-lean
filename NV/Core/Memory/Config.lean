@@ -95,6 +95,8 @@ structure Config where
   turnBytes : Nat := 0
   /-- Atomic operations per slice. -/
   atom : Rate
+  /-- Cycles an atomic spends in the atomic unit beyond a hit (`MemParams.l2AtomicCycles`). -/
+  atomCycles : Nat := 0
   dsmem : Rate
   dsmemOut : Nat
   dsmemBack : Nat
@@ -192,6 +194,7 @@ def Config.ofParams (p : Params) (smemDemand : Nat) : Config :=
     channel := Rate.perSecond m.dramBytesPerSec.value (p.clockMHz.value * channels)
     turnBytes := m.dramTurnaroundPs.value * (m.dramBytesPerSec.value / channels) / 1000000000000
     atom := Rate.perSecond (m.l2RedF32BytesPerSec.value / 4) (p.clockMHz.value * slices)
+    atomCycles := m.l2AtomicCycles.value
     dsmem := { units := m.dsmemBytesPerCycle.value }
     dsmemOut := dsExtra / 2
     dsmemBack := dsExtra - dsExtra / 2

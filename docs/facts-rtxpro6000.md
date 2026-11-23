@@ -303,6 +303,7 @@ The role column says who reads a fact (`NV/Core/Roles.lean`): only `engine` fact
 | `mem.xbarWriteBytesPerCycle` | 32 | inferred (GH200) | engine | `meas-gh200`  |  |
 | `mem.xbarRedBytesPerCycle` | 25 | inferred (GH200) | engine | `meas-gh200`  |  |
 | `mem.l2RedF32BytesPerSec` | 1700000000000 | inferred (H200) | engine | `meas-h200`  |  |
+| `mem.l2AtomicCycles` | 0 | inferred | engine | `meas-h200` benchA.txt: atom_relaxed_gpu |  |
 | `mem.dsmemBytesPerCycle` | 16 | inferred (H800 PCIe) | engine | `luo2024` §IV-E, Fig. 8: SM-to-SM throughput peaks near 3.27 TB/s at cluster size 2 |  |
 | `mem.smemCarveoutsKB` | 0, 8, 16, 32, 64, 100 | documented | engine | `cuda-guide` §5.1.3 Table 35, compute capability 12.0 |  |
 | `mem.l2FarBytesPerCycle` | 0 | documented | engine | `rtxpro-whitepaper` p. 9: one L2, no far partition |  |

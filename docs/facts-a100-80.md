@@ -271,6 +271,7 @@ The role column says who reads a fact (`NV/Core/Roles.lean`): only `engine` fact
 | `mem.xbarWriteBytesPerCycle` | 32 | inferred (GH200) | engine | `meas-gh200`  |  |
 | `mem.xbarRedBytesPerCycle` | 25 | inferred (GH200) | engine | `meas-gh200`  |  |
 | `mem.l2RedF32BytesPerSec` | 2309000000000 | inferred (H200) | engine | `meas-h200`  |  |
+| `mem.l2AtomicCycles` | 0 | inferred | engine | `meas-h200` benchA.txt: atom_relaxed_gpu |  |
 | `mem.dsmemBytesPerCycle` | 0 | documented | engine | `cuda-guide` §5.1 Table 32: no distributed shared memory before 9.0 |  |
 | `mem.smemCarveoutsKB` | 0, 8, 16, 32, 64, 100, 132, 164 | documented | engine | `ampere-tuning` §1.4.2.3: shared memory capacity 0, 8, 16, 32, 64, 100, 132 or 164 KB |  |
 | `mem.l2FarBytesPerCycle` | 1280 | inferred | engine | `a100-whitepaper` p. 35: L2 read bandwidth 5120 bytes/clk |  |
