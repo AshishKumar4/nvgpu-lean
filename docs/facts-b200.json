@@ -6718,7 +6718,7 @@
    "measuredOn": null,
    "kind": "measured"},
   {"value":
-   "MEMBAR.ALL.CTA: 22, FENCE.VIEW.ASYNC.S: 0, MEMBAR.ALL.GPU: 259, MEMBAR.SC.GPU: 258, MEMBAR.ALL.SYS: 1694",
+   "MEMBAR.ALL.CTA: 7, FENCE.VIEW.ASYNC.S: 15, MEMBAR.ALL.GPU: 259, MEMBAR.SC.GPU: 258, MEMBAR.ALL.SYS: 1694",
    "source": {"ref": "meas", "loc": ""},
    "section": "Synchronization (cycles unless the name says otherwise)",
    "role": "engine",

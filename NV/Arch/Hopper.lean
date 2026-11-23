@@ -669,7 +669,7 @@ def fenceScGpu : Fact Nat := meas 273 ""
 def fenceAcqRelSys : Fact Nat := meas 1155 ""
 
 def fenceCycles : Fact (List (String × Nat)) :=
-  inferred [("MEMBAR.ALL.CTA", 14), ("FENCE.VIEW.ASYNC.S", 0), ("MEMBAR.ALL.GPU", 257),
+  inferred [("MEMBAR.ALL.CTA", 0), ("FENCE.VIEW.ASYNC.S", 17), ("MEMBAR.ALL.GPU", 257),
     ("MEMBAR.SC.GPU", 256), ("MEMBAR.ALL.SYS", 1138)] "meas-h200"
     ""
     ""

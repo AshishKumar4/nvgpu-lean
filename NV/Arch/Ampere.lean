@@ -217,8 +217,8 @@ def sync : SyncParams where
   fenceAcqRelGpu := onH200 Hopper.fenceAcqRelGpu
   fenceScGpu := onH200 Hopper.fenceScGpu
   fenceAcqRelSys := onH200 Hopper.fenceAcqRelSys
-  fenceCycles := inferred [("MEMBAR.ALL.CTA", 14), ("FENCE.VIEW.ASYNC.S", 0), ("MEMBAR.ALL.GPU", 183),
-    ("MEMBAR.SC.GPU", 176), ("MEMBAR.ALL.SYS", 3299)] "meas-a100"
+  fenceCycles := inferred [("MEMBAR.ALL.CTA", 0), ("FENCE.VIEW.ASYNC.S", 0), ("MEMBAR.ALL.GPU", 151),
+    ("MEMBAR.SC.GPU", 149), ("MEMBAR.ALL.SYS", 3299)] "meas-a100"
     ""
     "" (some "A100 SXM4 40GB")
   redReleaseGpu := onH200 Hopper.redReleaseGpu

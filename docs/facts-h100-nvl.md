@@ -337,7 +337,7 @@ The role column says who reads a fact (`NV/Core/Roles.lean`): only `engine` fact
 | `sync.fenceAcqRelGpu` | 274 | measured (H200) | observed: bound input, not read by the engine | `meas-h200`  |  |
 | `sync.fenceScGpu` | 273 | measured (H200) | observed: bound input, not read by the engine | `meas-h200`  |  |
 | `sync.fenceAcqRelSys` | 1155 | measured (H200) | observed: bound input, not read by the engine | `meas-h200`  |  |
-| `sync.fenceCycles` | MEMBAR.ALL.CTA: 14, FENCE.VIEW.ASYNC.S: 0, MEMBAR.ALL.GPU: 257, MEMBAR.SC.GPU: 256, MEMBAR.ALL.SYS: 1138 | inferred (H200) | engine | `meas-h200`  |  |
+| `sync.fenceCycles` | MEMBAR.ALL.CTA: 0, FENCE.VIEW.ASYNC.S: 17, MEMBAR.ALL.GPU: 257, MEMBAR.SC.GPU: 256, MEMBAR.ALL.SYS: 1138 | inferred (H200) | engine | `meas-h200`  |  |
 | `sync.redReleaseGpu` | 426 | measured (H200) | observed: bound input, not read by the engine | `meas-h200`  |  |
 | `sync.atomAcqRelGpu` | 882 | measured (H200) | observed: bound input, not read by the engine | `meas-h200`  |  |
 | `sync.atomRelaxedGpu` | 470 | measured (H200) | observed: bound input, not read by the engine | `meas-h200`  |  |

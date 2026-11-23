@@ -175,7 +175,7 @@ def b200 : Params := {
     fenceAcqRelGpu := measOn 275 "" ""
     fenceScGpu := measOn 274 "" ""
     fenceAcqRelSys := measOn 1710 "" ""
-    fenceCycles := inferred [("MEMBAR.ALL.CTA", 22), ("FENCE.VIEW.ASYNC.S", 0), ("MEMBAR.ALL.GPU", 259),
+    fenceCycles := inferred [("MEMBAR.ALL.CTA", 7), ("FENCE.VIEW.ASYNC.S", 15), ("MEMBAR.ALL.GPU", 259),
       ("MEMBAR.SC.GPU", 258), ("MEMBAR.ALL.SYS", 1694)] "meas" ""
       ""
     redReleaseGpu := measOn 796 "" ""

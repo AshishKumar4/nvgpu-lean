@@ -1740,7 +1740,13 @@ def decodeMem (d : Dec) : Option Run :=
   | "MEMBAR" =>
     let scope := if i.hasMod "GPU" then NV.PTX.Scope.gpu else if i.hasMod "SYS" then .sys else .cta
     some <| d.run fun x => .sync (.fence true scope) (x.fin x.w)
-  | "FENCE" | "ERRBAR" | "CGAERRBAR" | "CCTL" => some <| d.run fun x => .next (x.fin x.w)
+  -- `FENCE.VIEW.ASYNC.S` (`fence.proxy.async`): a proxy fence, which waits for the warp's earlier
+  -- accesses as a fence does (`SyncParams.fenceCycles` its own cost).
+  | "FENCE" =>
+    if i.hasMod "VIEW" && i.hasMod "ASYNC" && i.hasMod "S" then
+      some <| d.run fun x => .sync (.proxyFence .async) (x.fin x.w)
+    else some <| d.run fun x => .next (x.fin x.w)
+  | "ERRBAR" | "CGAERRBAR" | "CCTL" => some <| d.run fun x => .next (x.fin x.w)
   | _ => none
 
 /-- A decoded instruction. A structure rather than a bare `Run` so that decoding happens once:
