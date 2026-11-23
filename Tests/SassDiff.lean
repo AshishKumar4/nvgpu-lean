@@ -109,6 +109,11 @@ def cases : List Case := [
   { file := "tests/diff/f64divrel.ptx", kernel := "f64divrel", threads := 256, per := 4,
     bufs := [Array.replicate (4 * 256) 0, #[0x0, 0x0, 0x0, 0x80000000, 0x1, 0x0, 0xffffffff, 0xfffff, 0x0, 0x1, 0x0, 0x100000, 0x0, 0x1a700000, 0x0, 0x3ff00000, 0x1, 0x3ff00000, 0x0, 0x40080000, 0x0, 0x65700000, 0xffffffff, 0x7fefffff, 0x0, 0x7fe00000, 0x0, 0x7ff00000, 0x0, 0x7ff80000, 0x0, 0x81700000, 0x0, 0x0, 0x0, 0x80000000, 0x1, 0x0, 0xffffffff, 0xfffff, 0x0, 0x1, 0x0, 0x100000, 0x0, 0x1a700000, 0x0, 0x3ff00000, 0xffffffff, 0x3fefffff, 0x0, 0xc0080000, 0x0, 0x65700000, 0xffffffff, 0x7fefffff, 0x0, 0x80000, 0x0, 0x7ff00000, 0x0, 0x7ff80000, 0x0, 0x3cb00000]],
     formTargets := ["sm_80", "sm_90a", "sm_120a"] },
+  -- Binary32 to 16-bit integers, widened back: edge values (saturation, NaN, signed zeros) and
+  -- values of either sign in range.
+  { file := "tests/diff/f2i16.ptx", kernel := "f2i16", threads := 256, per := 4,
+    bufs := [Array.replicate (4 * 256) 0, (inputs edges32 256).map fun w =>
+      if w % 3 == 0 then (w &&& 0x80ffffff) ||| 0x46000000 else w] },
   -- mma.sync fragments: moderate values (exact products are not the point; the datapath's
   -- rounding is) with edge values in some lanes.
   { file := "tests/diff/mma.ptx", kernel := "mmas", threads := 32, per := 16,

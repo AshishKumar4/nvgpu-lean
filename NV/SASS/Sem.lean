@@ -1097,12 +1097,15 @@ def decodeFloat (d : Dec) : Option Run :=
       let v := NV.Num.ofInt dst r signed width bits
       if dst == .f64 then wr64 (x.o 0) l v.toUInt64 else wr (x.o 0) l v.toUInt32
   | "F2I" =>
-    -- `F2I[.FTZ][.U32|.S64…][.TRUNC|.FLOOR|.CEIL][.NTZ] Rd, Ra`: rounded, clamped (`cvt.r?i`).
+    -- `F2I[.FTZ][.U32|.S64…][.TRUNC|.FLOOR|.CEIL][.NTZ] Rd, Ra`: rounded, clamped (`cvt.r?i`); a
+    -- signed result narrower than the register sign-extended into it (nvcc stores `(int)(short)`
+    -- of an `F2I.S16` as it is).
     let srcF := if i.hasMod "F64" then NV.Num.Format.f64 else f32
     let (signed, width) := (i.mods.findSome? Float.intType).getD (true, 32)
     some <| d.res d.uniform fun x l => do
       let a ← if srcF == .f64 then f64 x l 1 else fs x l 1
       let v := NV.Num.toInt srcF r signed width ftz a
+      let v := if signed && width < 32 && v ≥ 2 ^ (width - 1) then v + 2 ^ 32 - 2 ^ width else v
       if width == 64 then wr64 (x.o 0) l v.toUInt64 else wr (x.o 0) l v.toUInt32
   | "F2IP" =>
     -- `F2IP.{S8|U8|S16|U16}.F32[.TRUNC|.FLOOR|.CEIL].NTZ Rd, a, b, c`: a and b converted as

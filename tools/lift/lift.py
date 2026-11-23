@@ -898,6 +898,11 @@ def f_dfloat(i):
             return v
         if x["k"] == "imm":
             return f"__longlong_as_double({x['v']:#x}ll)"
+        # A constant pair (`Float.src64`), `-c[…]` with its sign flipped.
+        if x["k"] == "c":
+            return f"__hiloint2double((int){cword(x, 4)}, (int){cword(x, 0)})"
+        if x["k"] == "neg" and x["o"]["k"] == "c":
+            return f"(-__hiloint2double((int){cword(x['o'], 4)}, (int){cword(x['o'], 0)}))"
         raise Lift("binary64 source")
     if i["op"] == "DFMA":
         e = f"__fma_rn({d(o[1])}, {d(o[2])}, {d(o[3])})"
@@ -1028,9 +1033,13 @@ def f_hfma2(i):
     mods = [m for m in i["mods"] if m != "MMA"]
     bf = "BF16_V2" in mods
     mods = [m for m in mods if m != "BF16_V2"]
+    o = i["ops"]
+    # `.F32` (`HADD2.F32 Rd, -RZ, Ra.H0_H0`): the low halves' sum as binary32.
+    if i["op"] == "HADD2" and mods == ["F32"] and not bf:
+        lo = lambda x: f"__half2float(__ushort_as_half((unsigned short)({hpair(x)} & 0xffffu)))"
+        return wr(o[0], f"__float_as_uint(__fadd_rn({lo(o[1])}, {lo(o[2])}))")
     if mods:
         raise Lift(f"{i['op']} modifiers {mods}")
-    o = i["ops"]
     ty, cv, back = (("__nv_bfloat162", "__halves2bfloat162", "bf2u") if bf else ("__half2", "__halves2half2", "h2u"))
     f = {"HFMA2": "__hfma2", "HADD2": "__hadd2", "HMUL2": "__hmul2"}[i["op"]]
     args = ", ".join(f"u2{'bf' if bf else 'h'}({hpair(x)})" for x in o[1:4 if i["op"] == "HFMA2" else 3])
@@ -1136,6 +1145,10 @@ def f_f2i(i):
     rnd = next((RND_I[m] for m in mods if m in RND_I), "rni")
     ftz = ".ftz" if "FTZ" in mods else ""
     o = i["ops"]
+    if w == 16:
+        # Clamped to the 16-bit type, then sign- or zero-extended to the register.
+        ext = "(uint32_t)(int32_t)(int16_t)_v" if ty == "s16" else "(uint32_t)_v"
+        return wr(o[0], f"([&]{{ unsigned short _v; asm(\"cvt.{rnd}{ftz}.{ty}.f32 %0, %1;\" : \"=h\"(_v) : \"f\"(__uint_as_float({fsrc(o[1])}))); return {ext}; }}())")
     if w == 64:
         return wr64(o[0], f"([&]{{ uint64_t _v; asm(\"cvt.{rnd}{ftz}.{ty}.f32 %0, %1;\" : \"=l\"(_v) : \"f\"(__uint_as_float({fsrc(o[1])}))); return _v; }}())")
     if w < 32:
@@ -1165,14 +1178,15 @@ def f_frnd(i):
 @form("F2F")
 def f_f2f(i):
     # `F2F[.FTZ].dst.src[.RZ|.RM|.RP] Rd, Ra`: between binary64 (a register pair), binary32 and
-    # binary16 (the low half), rounded (PTX `cvt`; a widening is exact and takes no mode).
+    # binary16 (the low half), rounded (PTX `cvt`; a widening is exact and takes no mode); and
+    # binary32 narrowed to bfloat16 (the low half).
     mods = i["mods"]
-    fmts = [m for m in mods if m in ("F64", "F32", "F16")]
-    if len(fmts) != 2 or any(m not in RND_F and m not in ("FTZ", "F64", "F32", "F16") for m in mods):
+    fmts = [m for m in mods if m in ("F64", "F32", "F16", "BF16")]
+    if len(fmts) != 2 or any(m not in RND_F and m not in ("FTZ", "F64", "F32", "F16", "BF16") for m in mods):
         raise Lift(f"F2F {mods}")
     dst, srcf = fmts
-    width = {"F64": 64, "F32": 32, "F16": 16}
-    if dst == srcf:
+    width = {"F64": 64, "F32": 32, "F16": 16, "BF16": 16}
+    if dst == srcf or ("BF16" in fmts and (fmts != ["BF16", "F32"] or "FTZ" in mods)):
         raise Lift(f"F2F {mods}")
     rnd = "" if width[dst] > width[srcf] else "." + next((RND_F[m] for m in mods if m in RND_F), "rn")
     ftz = ".ftz" if "FTZ" in mods and "F32" in fmts else ""
@@ -1186,7 +1200,7 @@ def f_f2f(i):
         src, sc = f"__uint_as_float({fsrc(x)})", "f"
     else:
         src, sc = f"(unsigned short)({val(x)} & 0xffffu)", "h"
-    ty = {"F64": "f64", "F32": "f32", "F16": "f16"}
+    ty = {"F64": "f64", "F32": "f32", "F16": "f16", "BF16": "bf16"}
     asm = f"cvt{rnd}{ftz}.{ty[dst]}.{ty[srcf]} %0, %1;"
     if dst == "F64":
         return wr64(o[0], f"([&]{{ double _v; asm(\"{asm}\" : \"=d\"(_v) : \"{sc}\"({src})); return (uint64_t)__double_as_longlong(_v); }}())")
