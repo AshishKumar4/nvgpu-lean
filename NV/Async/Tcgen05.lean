@@ -40,9 +40,14 @@ FP6 and FP4 inputs (`.kind::f8f6f4`) and block scaling (`.kind::mxf8f6f4`, `mxf4
 N/2 columns and lane `64 + r` for the rest, with M = 32 in lane `r + 32 q` for the q-th quarter of
 the columns, each part from D's column. The collector-buffer qualifiers change no result.
 
+`tcgen05.mma.sp` (§9.7.18.10.9) of `.cta_group::1` and the kinds without scale factors: A's stored
+elements, half of K, each meets the row of B its metadata names (`metaCell`, `sparsePos`), on the
+dense instruction's datapath over those products (inferred: the products of A's zeros are not
+formed).
+
 Not modelled, and a fault: `.cta_group::2` with A in tensor memory or with M = 128 and scale
 factors, `.ws` with A in tensor memory, a zero-column mask that zeroes columns or shifts them, or
-B's shifts, sparse A,
+B's shifts, sparse A with `.ws`, `.cta_group::2` or scale factors,
 MN-major FP6 and FP4 operands, A's scale factors in 128 lanes, K of 96 or 128, `.kind::ti16`,
 `tcgen05.cp` to a lane other than 0, the collector-buffer hints (which change no result).
 -/
@@ -76,6 +81,8 @@ def colOf (a : Nat) : Nat := a % 2 ^ 16
 /-- The instruction descriptor of `.kind::tf32`, `::f16`, `::f8f6f4` and `::i8` (Table 51). -/
 structure IDesc where
   sparse : Bool
+  /-- The sparsity selector (bits 0–1): which metadata column of a 16-bit kind's pair. -/
+  selector : Nat := 0
   saturate : Bool
   /-- D's type: 0 F16, 1 F32, 2 S32. -/
   dtype : Nat
@@ -95,7 +102,7 @@ structure IDesc where
 
 def IDesc.decode (d : Nat) : IDesc :=
   let f (lo w : Nat) : Nat := (d >>> lo) % 2 ^ w
-  { sparse := f 2 1 == 1, saturate := f 3 1 == 1, dtype := f 4 2, atype := f 7 3, btype := f 10 3,
+  { sparse := f 2 1 == 1, selector := f 0 2, saturate := f 3 1 == 1, dtype := f 4 2, atype := f 7 3, btype := f 10 3,
     negA := f 13 1 == 1, negB := f 14 1 == 1, transA := f 15 1 == 1, transB := f 16 1 == 1,
     n := f 17 6 <<< 3, m := f 24 5 <<< 4, maxShift := f 30 2 }
 
@@ -245,7 +252,29 @@ structure Inst where
   zeroMask : Nat := 0
   /-- The scale factors of a block-scaled kind. -/
   scales : Option Scales := none
+  /-- `tcgen05.mma.sp`: the sparse metadata's `tcgen05` address (`metaCell`). -/
+  spMeta : Option Nat := none
   deriving Inhabited
+
+/-- Sparse A (§9.7.18.10.9): a row of A holds half of the K elements its row of the product has,
+and a 4-bit field of the metadata for each chunk of K (four elements, two under `.kind::tf32`) names
+where in the chunk they are: under `tf32` bits 0–1 name its stored element's 16-bit half pair
+(`0b00`, the first; `0b10`, the second), under the others bits 0–1 its first stored element's place
+and bits 2–3 its second's (Figures 283–284). Row `r`'s field of chunk `c` (Figures 287–292): of a
+16-bit kind (`f16`, `tf32`), 8 chunks a row, in the lane of row `16 (r / 16) + 8 (c / 4) + r % 8`
+of the metadata's layout (D's for `M`), at bit `16 ((r % 16) / 8) + 4 (c % 4)` of the
+column the sparsity selector picks; of an 8-bit kind, 16 chunks a row, in row `r`'s lane, at bit
+`4 (c % 8)` of column `c / 8`. Returns the row whose lane holds it, the column past the
+metadata's, and the bit. -/
+def metaCell (wide : Bool) (selector r c : Nat) : Nat × Nat × Nat :=
+  if wide then (16 * (r / 16) + 8 * (c / 4) + r % 8, selector, 16 * (r % 16 / 8) + 4 * (c % 4))
+  else (r, c / 8, 4 * (c % 8))
+
+/-- Where stored element `s` of a sparse row sits among the row's K, from the row's metadata
+fields (`field c`): chunk `s` under `tf32`, else chunk `s / 2`, place by the field. -/
+def sparsePos (tf32 : Bool) (field : Nat → Nat) (s : Nat) : Nat :=
+  if tf32 then 2 * s + field s % 4 / 2
+  else 4 * (s / 2) + (if s % 2 == 0 then field (s / 2) % 4 else field (s / 2) / 4 % 4)
 
 /-- 16-byte chunks of tensor memory: each address four columns of one lane. -/
 def tmemReqs (op : MemOp) (addrs : Array Nat) (data : Array UInt32 := #[]) : Array Req :=
@@ -285,7 +314,9 @@ A takes the row's scale factor `k / (K / vec)` (the byte past `SFA_ID`), likewis
 def Inst.op (x : Inst) (addr : Nat → UInt64) (cluster : Nat → Nat → UInt64 := rankAddr) :
     Except String MmaT := do
   let idc := x.idesc
-  if idc.sparse then throw "tcgen05.mma: sparse A is not modelled"
+  if idc.sparse != x.spMeta.isSome then throw "tcgen05.mma: sparse metadata without the sparse flag, or the flag without it"
+  if idc.sparse && (x.ws || x.pair.isSome || x.kind.scaled) then
+    throw "tcgen05.mma.sp: .ws, .cta_group::2 and block-scaled kinds are not modelled"
   if idc.maxShift != 0 then throw "tcgen05.mma: .ws shifts are not modelled"
   -- A zero-column mask with bit 39 clear generates no zero column; one shifting B is not either.
   if (x.zeroMask >>> 39) % 2 != 0 || (x.zeroMask >>> 56) % 64 != 0 then
@@ -315,7 +346,9 @@ def Inst.op (x : Inst) (addr : Nat → UInt64) (cluster : Nat → Nat → UInt64
     unless M == 64 || M == 128 do throw s!"tcgen05.mma.cta_group::1: M = {M}"
     if x.scales.isSome && M != 128 then throw s!"tcgen05.mma: block scaling with M = {M}"
   unless N % (if M == 64 then 8 else 16) == 0 && 8 ≤ N && N ≤ 256 do throw s!"tcgen05.mma: N = {N} for M = {M}"
+  -- K: A's elements a row; B's rows, twice as many when A is sparse.
   let K := if x.kind.packed then 64 else ta.k
+  let KB := if idc.sparse then 2 * K else K
   let sub (t : InType) : Bool := t.width < 8
   if (sub ta && idc.transA) || (sub tb && idc.transB) then throw "tcgen05.mma: MN-major FP6 and FP4 operands are not modelled"
   -- Elements of an FP6 or FP4 operand per 16-byte chunk of shared memory.
@@ -338,7 +371,7 @@ def Inst.op (x : Inst) (addr : Nat → UInt64) (cluster : Nat → Nat → UInt64
     | .smem d => ((Array.range M).flatMap fun r => (Array.range K).map fun k =>
         let (o, r) := half M r; (at_ d ta (!idc.transA) r k).map (o + ·)).mapM id
     | .tmem _ => pure #[]
-  let bAddrs ← ((Array.range N).flatMap fun c => (Array.range K).map fun k =>
+  let bAddrs ← ((Array.range N).flatMap fun c => (Array.range KB).map fun k =>
     let (o, c) := half N c; (at_ x.b tb (!idc.transB) c k).map (o + ·)).mapM id
   let cs := chunks (aAddrs ++ bAddrs)
   -- A in tensor memory: per row, the columns holding its K elements, 16 bytes a chunk; FP4 two to
@@ -372,6 +405,18 @@ def Inst.op (x : Inst) (addr : Nat → UInt64) (cluster : Nat → Nat → UInt64
         let part := 4 * q / dCols
         byteAt (r + (128 / parts) * part) (dc + 4 * q - part * dCols)
   let dChunks := (Array.range M).flatMap fun r => (Array.range (N / 4)).map fun q => dByte r q
+  -- Sparse metadata: per row's lane, the 16-byte chunks holding the columns its fields are in.
+  let wide := ta.bits ≥ 16
+  let (ml, mc) := match x.spMeta with | some a => (laneOf a, colOf a) | none => (dl, 0)
+  if idc.sparse then
+    unless ml == dl do throw s!"tcgen05.mma.sp: metadata at lane {ml}, D at lane {dl}"
+    if wide && idc.selector > 1 then throw s!"tcgen05.mma.sp: sparsity selector {idc.selector}"
+    if !wide && idc.selector != 0 then throw s!"tcgen05.mma.sp: sparsity selector {idc.selector} of an 8-bit kind"
+  let mCols := if wide then #[mc + idc.selector] else #[mc, mc + 1]
+  let mChunks := (mCols.map (· / 4 * 4)).toList.eraseDups.toArray
+  let mT : Array Nat := if idc.sparse then
+      (Array.range M).flatMap fun r => mChunks.map (byteAt (rowLane M ml r) ·)
+    else #[]
   let cT := if x.accumulate then dChunks else #[]
   -- Scale factors: the words of A's rows and of B's columns for each lane quarter, a pair's rows
   -- 128 on in the peer's.
@@ -389,7 +434,7 @@ def Inst.op (x : Inst) (addr : Nat → UInt64) (cluster : Nat → Nat → UInt64
         if c ≥ peerShared then cluster peer (addr (c - peerShared)).toNat
         else cluster own (addr c).toNat).map ({ · with space := .sharedCluster })
     | none => loadReqs cs addr
-  let loads := sLoads ++ tmemReqs .ld aT ++ tmemReqs .ld cT ++ tmemReqs .ld sT
+  let loads := sLoads ++ tmemReqs .ld aT ++ tmemReqs .ld cT ++ tmemReqs .ld sT ++ tmemReqs .ld mT
   let neg (t : InType) (on : Bool) (v : Nat) : Nat := t.negate (float && on) v
   let get (img : Std.HashMap Nat (Array UInt32)) (t : InType) (a k : Nat) : Nat :=
     if sub t then chunkBits img a (t.width * (k % perChunk)) t.width else elem img t.bits a
@@ -398,6 +443,13 @@ def Inst.op (x : Inst) (addr : Nat → UInt64) (cluster : Nat → Nat → UInt64
     let at0 := 4 * cs.size
     let ct0 := at0 + 4 * aT.size
     let st0 := ct0 + 4 * cT.size
+    let mt0 := st0 + 4 * sT.size
+    -- Row `r`'s metadata field of chunk `c`.
+    let field (r c : Nat) : Nat :=
+      let (r', col, bit) := metaCell wide idc.selector r c
+      let ci := (mChunks.idxOf? ((mc + col) / 4 * 4)).getD 0
+      let w := (data[mt0 + 4 * (r' * mChunks.size + ci) + (mc + col) % 4]?.getD 0).toNat
+      (w >>> bit) % 16
     let aRow : Array (Array Nat) := match x.a with
       | .smem _ => (Array.range M).map fun r => (Array.range K).map fun k =>
           neg ta idc.negA (get img ta aAddrs[r * K + k]! k)
@@ -406,8 +458,13 @@ def Inst.op (x : Inst) (addr : Nat → UInt64) (cluster : Nat → Nat → UInt64
           let v := (w >>> (aBits * (k % per))) % 2 ^ aBits
           -- An FP4 element in its own byte sits in bits 2–5, an FP6 one in bits 0–5.
           neg ta idc.negA (if aBits == 8 && sub ta then (v >>> (if ta == .e2m1 then 2 else 0)) % 2 ^ ta.width else v)
-    let bs : Array (Array Nat) := (Array.range N).map fun c => (Array.range K).map fun k =>
-      neg tb idc.negB (get img tb bAddrs[c * K + k]! k)
+    let bs : Array (Array Nat) := (Array.range N).map fun c => (Array.range KB).map fun k =>
+      neg tb idc.negB (get img tb bAddrs[c * KB + k]! k)
+    -- B as row `r` of a sparse A meets it: the rows its stored elements stand for.
+    let bOf (r : Nat) : Array (Array Nat) :=
+      let pos := (Array.range K).map (sparsePos (x.kind == .tf32) (field r))
+      bs.map fun col => pos.map (col[·]!)
+    let bRows := if idc.sparse then (Array.range M).map bOf else #[]
     let cm : Array Nat := (Array.range (M * N)).map fun e =>
       if x.accumulate then
         let w := (data[ct0 + e]?.getD 0).toNat
@@ -442,13 +499,18 @@ def Inst.op (x : Inst) (addr : Nat → UInt64) (cluster : Nat → Nat → UInt64
           (Array.range (M * N)).map fun e =>
             md.dotVals (ta.format.man + sF.man) (tb.format.man + sF.man) Format.f32 av[e / N]!
               bv[e / N / 32]![e % N]! cm[e]!
-      | some md, none => md.tile ta.format tb.format (if acc == .f16 then Format.f16 else Format.f32) aRow bs cm
+      | some md, none =>
+        let fo := if acc == .f16 then Format.f16 else Format.f32
+        if idc.sparse then
+          (Array.range M).flatMap fun r => md.tile ta.format tb.format fo #[aRow[r]!] bRows[r]! (cm.extract (r * N) (r * N + N))
+        else md.tile ta.format tb.format fo aRow bs cm
       | none, _ =>
         let sg (t : InType) (v : Nat) : Int := if t == .s8 then signed8 v else v
         (Array.range (M * N)).map fun e =>
           let cv : Nat := cm[e]!
           let cInt : Int := if cv ≥ 2 ^ 31 then (cv : Int) - 2 ^ 32 else (cv : Int)
-          let d := dotInt (aRow[e / N]!.map (sg ta)) (bs[e % N]!.map (sg tb)) cInt idc.saturate
+          let b := if idc.sparse then bRows[e / N]![e % N]! else bs[e % N]!
+          let d := dotInt (aRow[e / N]!.map (sg ta)) (b.map (sg tb)) cInt idc.saturate
           (if d < 0 then d + 2 ^ 32 else d).toNat
     dm.map fun v => (if acc == .f16 then v % 2 ^ 16 else v).toUInt32
   return { loads, result, stores := fun d => tmemReqs .st dChunks d, macs := M * N * K, n := N,

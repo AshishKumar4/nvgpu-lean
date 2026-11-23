@@ -588,7 +588,9 @@ def utcmma (env : Env) (w : View) (i : Instr) : Except String Op := do
     | _ => throw "B operand"
   let some d := ops[2]?.bind (tmemAddr w) | throw "D operand"
   let some x := ops[3]?.bind (tmemAddr w) | throw "fourth operand"
-  if x != 0 then throw "a nonzero low word of the instruction descriptor (sparse metadata) is not modelled"
+  -- The sparse metadata's address, or 0.
+  if x != 0 && !idesc.sparse then throw "sparse metadata without the descriptor's sparse flag"
+  let spMeta := if idesc.sparse then some x else none
   let en := if sf.isSome then 6 else 5
   -- `.ws`'s zero-column mask: a pair of uniform registers before enable-input-d.
   let (zeroMask, en) := match ws, (ops[en]? : Option Operand) with
@@ -601,7 +603,7 @@ def utcmma (env : Env) (w : View) (i : Instr) : Except String Op := do
   let scales := match form, sf with
     | some form, some (sa, sb) => some { form, a := sa, b := sb : Tcgen05.Scales }
     | _, _ => none
-  let inst : Tcgen05.Inst := { kind, idesc, a, b, d, accumulate, pair, scales, ws, zeroMask }
+  let inst : Tcgen05.Inst := { kind, idesc, a, b, d, accumulate, pair, scales, ws, zeroMask, spMeta }
   return .mmaT (← inst.op (·.toUInt64))
 
 /-- `UTCCP.T.S[.shape][.U6x16P32|.U4x16P64][.2CTA] tmem[URd], gdesc[URs]`: one `tcgen05.cp`: no shape modifier is `.128x256b`, `4dp256bit` `.4x256b`, `128dp128bit`

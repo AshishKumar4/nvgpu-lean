@@ -582,12 +582,12 @@ def tcScaleVec (k : Tcgen05.Kind) : Nat :=
   else if k == .mxf8f6f4 then 1 else 2
 
 /-- `tcgen05.mma.cta_group::1.kind [d], a-desc|[a], b-desc, idesc, enable-input-d`,
-`.kind.block_scale [d], a-desc|[a], b-desc, idesc, [scale-A], [scale-B], enable-input-d`
-(§9.7.18.10.9) and `tcgen05.mma.ws.cta_group::1.kind{.collector_usage} [d], a-desc, b-desc, idesc,
+`.kind.block_scale [d], a-desc|[a], b-desc, idesc, [scale-A], [scale-B], enable-input-d`,
+`tcgen05.mma.sp` with the sparse metadata's `[sp-meta]` before `idesc` (§9.7.18.10.9) and `tcgen05.mma.ws.cta_group::1.kind{.collector_usage} [d], a-desc, b-desc, idesc,
 enable-input-d{, zero-column-mask-desc}` (§9.7.18.10.10.3): the executing thread's MMA. -/
 def tcMma : X (Effect Thread) := do
   let pair ← pairOf t pi
-  if pi.i.has .sp then throw "sparse MMAs are not modelled"
+  let sp := if pi.i.has .sp then 1 else 0
   let ws := pi.i.has .ws
   let kind ← tcKind pi
   if kind.scaled != pi.i.has .blockScale then throw ".block_scale goes with .kind::mxf8f6f4, mxf4 and mxf4nvf4"
@@ -596,18 +596,19 @@ def tcMma : X (Effect Thread) := do
     | .addr .. => pure (Tcgen05.ASrc.tmem (← taddr t pi 1))
     | _ => pure (.smem (← Tcgen05.sdesc (← rd e t pi 1 .b64)))
   let b ← Tcgen05.sdesc (← rd e t pi 2 .b64)
-  let word := (← rd e t pi 3 .b32).toNat
+  let spMeta ← if sp == 1 then some <$> taddr t pi 3 else pure none
+  let word := (← rd e t pi (3 + sp) .b32).toNat
   let (idesc, scales, en) ← if kind.scaled then do
       let (idesc, form) ← Tcgen05.IDesc.decodeScaled kind (tcScaleVec pi kind) word
-      let scales : Tcgen05.Scales := { form, a := ← taddr t pi 4, b := ← taddr t pi 5 }
-      pure (idesc, some scales, 6)
-    else pure (Tcgen05.IDesc.decode word, none, 4)
+      let scales : Tcgen05.Scales := { form, a := ← taddr t pi (4 + sp), b := ← taddr t pi (5 + sp) }
+      pure (idesc, some scales, 6 + sp)
+    else pure (Tcgen05.IDesc.decode word, none, 4 + sp)
   let masked := ws && pi.args.size == en + 2
   if pi.args.size != en + 1 && !masked then
     throw "operands after enable-input-d (disable-output-lane, scale) are not modelled"
   let accumulate := (← rd e t pi en .pred) != 0
   let zeroMask ← if masked then (·.toNat) <$> rd e t pi (en + 1) .b64 else pure 0
-  let inst : Tcgen05.Inst := { kind, idesc, a, b, d, accumulate, scales, pair, ws, zeroMask }
+  let inst : Tcgen05.Inst := { kind, idesc, a, b, d, accumulate, scales, pair, ws, zeroMask, spMeta }
   let op ← inst.op (·.toUInt64) (clusterOf e t)
   let op := if e.skipMma then { op with result := fun _ => Array.replicate (idesc.m * idesc.n) 0 } else op
   return issue t (.mmaT op)
