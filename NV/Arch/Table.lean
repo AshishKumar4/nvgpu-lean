@@ -104,7 +104,7 @@ def sections (p : Params) : List (String × List Row) :=
   let ⟨banks, readPortsPerBank, operandReadCycles, reuseEntriesPerBank, reuseSlotsPerEntry⟩ :=
     regFile
   let ⟨instBytes, fetchPerCycle, instBufferEntries, codeCaches, codePrefetchLines, codeLaunchBytes,
-    takenBranchCycles, forwardBranchCycles, stallZeroInterlocks,
+    takenBranchCycles, forwardBranchCycles, indirectMissCycles, stallZeroInterlocks,
     constCacheBytes, constLineBytes, constMissCycles, constMissSwitchCycles, rotateCtaWarps⟩ := frontEnd
   let ⟨sectorBytes, lineBytes, l1SmemBytes, smemBanks, smemBankBytes, smemLatency, l1HitLatency,
     dsmemLatency, l2Bytes, l2Slices, l2Partitions, l2NearHitLatency, l2FarHitLatency, dramLatency,
@@ -147,6 +147,7 @@ def sections (p : Params) : List (String × List Row) :=
      rowN "frontEnd.codeLaunchBytes" codeLaunchBytes,
      rowN "frontEnd.takenBranchCycles" takenBranchCycles,
      rowN "frontEnd.forwardBranchCycles" forwardBranchCycles,
+     rowN "frontEnd.indirectMissCycles" indirectMissCycles,
      row "frontEnd.stallZeroInterlocks" stallZeroInterlocks toString,
      row "frontEnd.rotateCtaWarps" rotateCtaWarps toString,
      rowN "frontEnd.constCacheBytes" constCacheBytes,

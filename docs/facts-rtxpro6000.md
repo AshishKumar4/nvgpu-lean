@@ -59,6 +59,7 @@ The role column says who reads a fact (`NV/Core/Roles.lean`): only `engine` fact
 | `frontEnd.codeLaunchBytes` | 65536 | inferred (GH200) | engine | `meas-gh200`  |  |
 | `frontEnd.takenBranchCycles` | 4 | inferred | engine | `meas-gh200`  |  |
 | `frontEnd.forwardBranchCycles` | 19 | measured | engine | `meas`  |  |
+| `frontEnd.indirectMissCycles` | 40 | inferred (GH200) | engine | `meas-gh200`  |  |
 | `frontEnd.stallZeroInterlocks` | true | published (RTX PRO 6000 Blackwell Server Edition) | engine | `blackwell-isa-stallfix` sm120.json |  |
 | `frontEnd.rotateCtaWarps` | true | measured | engine | `meas`  |  |
 | `frontEnd.constCacheBytes` | 8192 | documented | engine | `cuda-guide` §5.1.3 Table 34: 8 KB constant cache working set |  |

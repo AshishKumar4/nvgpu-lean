@@ -59,6 +59,7 @@ The role column says who reads a fact (`NV/Core/Roles.lean`): only `engine` fact
 | `frontEnd.codeLaunchBytes` | 65536 | inferred (GH200) | engine | `meas-gh200`  |  |
 | `frontEnd.takenBranchCycles` | 4 | inferred | engine | `meas-gh200`  |  |
 | `frontEnd.forwardBranchCycles` | 17 | inferred | engine | `meas-gh200`  |  |
+| `frontEnd.indirectMissCycles` | 40 | inferred (GH200) | engine | `meas-gh200`  |  |
 | `frontEnd.stallZeroInterlocks` | false | inferred (Ampere) | engine | `huerta2025` §4: the stall counter is the only wait a fixed-latency dependence has |  |
 | `frontEnd.rotateCtaWarps` | true | measured | engine | `meas`  |  |
 | `frontEnd.constCacheBytes` | 8192 | documented | engine | `cuda-guide` §5.1.3 Table 34: cache working set per SM for constant memory, 8 KB |  |

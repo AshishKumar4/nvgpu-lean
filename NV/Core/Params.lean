@@ -205,6 +205,9 @@ structure FrontEndParams where
   /-- A taken forward branch's redirect: a cycle an instruction it skips, the fetch having gone on
   past the branch, up to this many. -/
   forwardBranchCycles : Fact Nat
+  /-- An indirect branch (`BRX`, `JMX`) taken to a target other than the one the warp took from it
+  last: the cycles the warp loses to the redirect (to the same target, a direct branch's). -/
+  indirectMissCycles : Fact Nat
   /-- Whether an instruction encoded with a stall count of 0 interlocks: the next instruction
   waits for the fixed-latency results it reads. -/
   stallZeroInterlocks : Fact Bool

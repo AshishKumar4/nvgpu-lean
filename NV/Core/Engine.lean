@@ -299,6 +299,8 @@ private structure Slot where
   atomWb : Option (Resp → Warp → Warp) := none
   /-- The code line the warp last fetched from. -/
   codeLine : Option Nat := none
+  /-- Per indirect branch (its code index), the target the warp last took from it. -/
+  indirectLast : Std.HashMap Nat Nat := {}
   /-- The id the warp's next pending writeback takes in its trace. -/
   nextLand : Nat := 0
   deriving Inhabited
@@ -1505,12 +1507,19 @@ private def pass (kit : Kit) (focus : Nat) (stop : Nat) (st : St) :
       -- moves on (Huerta et al. 2025 §4; measured on Ampere, inferred for Hopper). A taken
       -- control transfer redirects the warp's fetch: back to code it has run (`takenBranchCycles`),
       -- or forward a cycle an instruction it skips, to `forwardBranchCycles`.
+      -- An indirect branch to a target other than the one it took last costs
+      -- `indirectMissCycles`; to the same one, as a direct branch there.
+      let indirect := ins.opcode == "BRX" || ins.opcode == "JMX"
       let redirect : Nat := match s.w.current with
         | some (next, _) =>
           if next == pc + 1 || !transfers.contains ins.opcode then 0
+          else if indirect && s.indirectLast[pc]? != some next then p.frontEnd.indirectMissCycles.value
           else if next > pc then min (next - pc - 1) p.frontEnd.forwardBranchCycles.value
           else p.frontEnd.takenBranchCycles.value
         | none => 0
+      if indirect then
+        if let some (next, _) := s.w.current then
+          s := { s with indirectLast := s.indirectLast.insert pc next }
       -- Functionally a warp waits for every other warp's turn (none is ever stalled, so the
       -- greedy choice would keep a spinning warp).
       let hold := if l.functional then sm.slots.size else
