@@ -3,7 +3,8 @@
 // tf32, into f32; a saturated epilogue (FFMA.SAT); and, sm_90 on, stmatrix of the f16 product's
 // halves (.x2, and .x1.trans). Each warp works on its own 512 input words, pseudo-random bits. And
 // a NaN-propagating maximum (FMNMX.NAN), byte and half parameters (narrow constant loads), 64-bit
-// integers to floats (I2F.U64.RP, .S64, .F64.S64), and integer minima and maxima (IMNMX on sm_80).
+// integers to floats (I2F.U64.RP, .S64, .F64.S64), and integer minima and maxima (IMNMX on sm_80);
+// and integer mma.sync, m16n8k32 of s8 saturating and m16n8k16 of u8 by s8 (IMMA).
 extern "C" __global__ void mma_sync(const unsigned* in, unsigned* out, unsigned char s, unsigned short h) {
   __shared__ alignas(16) unsigned short a[4][16][16], b[4][16][8], st[4][16][8], st2[4][8][8];
   const int w = threadIdx.x / 32, l = threadIdx.x % 32, g = blockIdx.x * 4 + w;
@@ -51,6 +52,17 @@ extern "C" __global__ void mma_sync(const unsigned* in, unsigned* out, unsigned 
   dst[864 + 2 * l] = (unsigned)__double_as_longlong(dd);
   dst[865 + 2 * l] = (unsigned)(__double_as_longlong(dd) >> 32);
   dst[928 + l] = (unsigned)min((int)src[l], (int)src[l + 32]) ^ max(src[l + 64], src[l + 96]);
+  unsigned id[4], iu[4];
+  asm volatile("mma.sync.aligned.m16n8k32.row.col.satfinite.s32.s8.s8.s32 {%0, %1, %2, %3}, {%4, %5, %6, %7}, {%8, %9}, {%10, %11, %12, %13};"
+               : "=r"(id[0]), "=r"(id[1]), "=r"(id[2]), "=r"(id[3])
+               : "r"(ra[0]), "r"(ra[1]), "r"(ra[2]), "r"(ra[3]), "r"(rb[0]), "r"(rb[1]),
+                 "r"(src[4 * l]), "r"(src[4 * l + 1]), "r"(src[4 * l + 2]), "r"(src[4 * l + 3]));
+  asm volatile("mma.sync.aligned.m16n8k16.row.col.s32.u8.s8.s32 {%0, %1, %2, %3}, {%4, %5}, {%6}, {%7, %8, %9, %10};"
+               : "=r"(iu[0]), "=r"(iu[1]), "=r"(iu[2]), "=r"(iu[3])
+               : "r"(t0), "r"(t1), "r"(t2), "r"(src[64 + 4 * l] >> 8), "r"(src[65 + 4 * l] >> 8),
+                 "r"(src[66 + 4 * l] >> 8), "r"(src[67 + 4 * l] >> 8));
+  dst[960 + 2 * l] = id[0] ^ (id[1] * 3u) ^ (iu[0] * 5u) ^ (iu[1] * 7u);
+  dst[961 + 2 * l] = id[2] ^ (id[3] * 3u) ^ (iu[2] * 5u) ^ (iu[3] * 7u);
 #if __CUDA_ARCH__ >= 900
   const unsigned h0 = (__float_as_uint(d[0]) >> 16) | (__float_as_uint(d[1]) & 0xffff0000u);
   const unsigned h1 = (__float_as_uint(d[2]) >> 16) | (__float_as_uint(d[3]) & 0xffff0000u);

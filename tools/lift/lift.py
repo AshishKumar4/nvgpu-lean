@@ -1470,6 +1470,37 @@ def f_hmma(i):
             f"_a, _b, _c, _d, lane, __EXEC__); {out} }}")
 
 
+@form("IMMA")
+def f_imma(i):
+    # `mma.sync` of 8- or 4-bit integers into s32 (`IMMA.{16816|16832|16864}.ta.tb[.SAT] Rd, Ra, Rb,
+    # Rc`): exact (`.SAT` clamps to s32), so the hardware's own `mma.sync` gives the simulator's
+    # result; the operands are the PTX fragments in order (`Sem.decodeMma`).
+    mods = i["mods"]
+    shape = {"16816": 16, "16832": 32, "16864": 64}.get(mods[0] if mods else "")
+    tys = [m for m in mods[1:] if m != "SAT"]
+    bits = {"S8": 8, "U8": 8, "S4": 4, "U4": 4}
+    if shape is None or len(tys) != 2 or any(t not in bits for t in tys) or bits[tys[0]] != bits[tys[1]] \
+            or shape * bits[tys[0]] not in (128, 256):
+        raise Lift(f"IMMA {'.'.join(mods)}")
+    aw, bw = shape * bits[tys[0]] // 64, shape * bits[tys[0]] // 128
+    o = i["ops"]
+    if len(o) < 4 or any(x["k"] != "reg" or x["r"]["f"] != "r" for x in o[:4]):
+        raise Lift("IMMA operands")
+    reg = lambda x, j: "0u" if x["r"]["i"] == 255 else f"r[{x['r']['i'] + j}]"
+    sat = ".satfinite" if "SAT" in mods else ""
+    ta, tb = (t.lower() for t in tys)
+    n = 4 + aw + bw
+    lst = lambda lo, cnt: "{" + ", ".join(f"%{lo + j}" for j in range(cnt)) + "}"
+    asm = (f"mma.sync.aligned.m16n8k{shape}.row.col{sat}.s32.{ta}.{tb}.s32 {lst(0, 4)}, {lst(4, aw)}, "
+           f"{lst(4 + aw, bw)}, {lst(4 + aw + bw, 4)};")
+    ins = ", ".join([f'"r"({reg(o[1], j)})' for j in range(aw)] + [f'"r"({reg(o[2], j)})' for j in range(bw)] +
+                    [f'"r"({reg(o[3], j)})' for j in range(4)])
+    rd = o[0]["r"]["i"]
+    out = "" if rd == 255 else " ".join(f"r[{rd + j}] = _d[{j}];" for j in range(4))
+    return (f"{{ uint32_t _d[4]; asm volatile(\"{asm}\" : \"=r\"(_d[0]), \"=r\"(_d[1]), \"=r\"(_d[2]), "
+            f"\"=r\"(_d[3]) : {ins}); {out} }}")
+
+
 @form("LDSM", "STSM")
 def f_ldsm(i):
     # `ldmatrix`/`stmatrix` of 16-bit elements, 8 x 8 matrices (`MatMove`), by the whole warp: lane
