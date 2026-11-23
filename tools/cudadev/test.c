@@ -358,6 +358,91 @@ static void peerChecks(void) {
   CK(cuModuleUnload(m));
 }
 
+// A CUDA array read through a texture object and written through a surface object: an 8 × 4
+// array of floats (row y, column x holds 10y + x) copied in with cuMemcpy2D; each thread (x, y)
+// fetches texel (x − 1, y), clamped at the left edge, and writes x + 100y to a second array through
+// a surface, which comes back with cuMemcpy2D.
+static void textureChecks(void) {
+  enum { W = 8, H = 4 };
+  static const char *texPtx =
+    ".version 8.0\n.target sm_80\n.address_size 64\n"
+    ".visible .entry texk(.param .u64 tex_, .param .u64 surf_, .param .u64 out_) {\n"
+    "  .reg .b64 t, s, o, a; .reg .f32 f0, f1, f2, f3; .reg .b32 x, y, xm, xb, v, i;\n"
+    "  ld.param.u64 t, [tex_]; ld.param.u64 s, [surf_]; ld.param.u64 o, [out_];\n"
+    "  mov.u32 x, %tid.x; mov.u32 y, %tid.y; sub.s32 xm, x, 1;\n"
+    "  tex.2d.v4.f32.s32 {f0, f1, f2, f3}, [t, {xm, y}];\n"
+    "  mad.lo.u32 i, y, 8, x; mul.wide.u32 a, i, 4; add.s64 a, o, a; st.global.f32 [a], f0;\n"
+    "  mad.lo.u32 v, y, 100, x; shl.b32 xb, x, 2;\n"
+    "  sust.b.2d.b32.trap [s, {xb, y}], {v};\n"
+    "  ret;\n}\n";
+  float in[H][W], out[H * W];
+  unsigned back[H][W];
+  for (int y = 0; y < H; y++)
+    for (int x = 0; x < W; x++) in[y][x] = (float)(10 * y + x);
+  CUarray tarr, sarr;
+  CUDA_ARRAY3D_DESCRIPTOR ad = {W, H, 0, CU_AD_FORMAT_FLOAT, 1, 0};
+  CK(cuArray3DCreate(&tarr, &ad));
+  ad.Flags = CUDA_ARRAY3D_SURFACE_LDST;
+  ad.Format = CU_AD_FORMAT_UNSIGNED_INT32;
+  CK(cuArray3DCreate(&sarr, &ad));
+  CUDA_MEMCPY2D c;
+  memset(&c, 0, sizeof c);
+  c.srcMemoryType = CU_MEMORYTYPE_HOST;
+  c.srcHost = in;
+  c.srcPitch = sizeof in[0];
+  c.dstMemoryType = CU_MEMORYTYPE_ARRAY;
+  c.dstArray = tarr;
+  c.WidthInBytes = sizeof in[0];
+  c.Height = H;
+  CK(cuMemcpy2D(&c));
+  CUDA_RESOURCE_DESC rd;
+  memset(&rd, 0, sizeof rd);
+  rd.resType = CU_RESOURCE_TYPE_ARRAY;
+  rd.res.array.hArray = tarr;
+  CUDA_TEXTURE_DESC td;
+  memset(&td, 0, sizeof td);
+  td.addressMode[0] = td.addressMode[1] = CU_TR_ADDRESS_MODE_CLAMP;
+  td.filterMode = CU_TR_FILTER_MODE_POINT;
+  CUtexObject tex;
+  CK(cuTexObjectCreate(&tex, &rd, &td, NULL));
+  rd.res.array.hArray = sarr;
+  CUsurfObject surf;
+  CK(cuSurfObjectCreate(&surf, &rd));
+  CUmodule m;
+  CK(cuModuleLoadData(&m, texPtx));
+  CUfunction k;
+  CK(cuModuleGetFunction(&k, m, "texk"));
+  CUdeviceptr dout;
+  CK(cuMemAlloc(&dout, sizeof out));
+  void *args[] = {&tex, &surf, &dout};
+  CK(cuLaunchKernel(k, 1, 1, 1, W, H, 1, 0, NULL, args, NULL));
+  CK(cuCtxSynchronize());
+  CK(cuMemcpyDtoH(out, dout, sizeof out));
+  int ok = 1;
+  for (int y = 0; y < H; y++)
+    for (int x = 0; x < W; x++) ok = ok && out[y * W + x] == in[y][x > 0 ? x - 1 : 0];
+  check("a texture object fetches a CUDA array's texels, clamped", ok);
+  memset(&c, 0, sizeof c);
+  c.srcMemoryType = CU_MEMORYTYPE_ARRAY;
+  c.srcArray = sarr;
+  c.dstMemoryType = CU_MEMORYTYPE_HOST;
+  c.dstHost = back;
+  c.dstPitch = sizeof back[0];
+  c.WidthInBytes = sizeof back[0];
+  c.Height = H;
+  CK(cuMemcpy2D(&c));
+  ok = 1;
+  for (int y = 0; y < H; y++)
+    for (int x = 0; x < W; x++) ok = ok && back[y][x] == (unsigned)(x + 100 * y);
+  check("a surface object writes a CUDA array", ok);
+  CK(cuTexObjectDestroy(tex));
+  CK(cuSurfObjectDestroy(surf));
+  CK(cuArrayDestroy(tarr));
+  CK(cuArrayDestroy(sarr));
+  CK(cuMemFree(dout));
+  CK(cuModuleUnload(m));
+}
+
 int main(int argc, char **argv) {
   // A deadlock in a broken driver must terminate the test process, including on the parent.
   alarm(120);
@@ -416,6 +501,14 @@ int main(int argc, char **argv) {
     else if (!strcmp(argv[1], "graph")) graphSubmissionChecks();
     else if (!strcmp(argv[1], "legacy")) legacySubmissionChecks();
     else if (!strcmp(argv[1], "peer")) peerChecks();
+    else if (!strcmp(argv[1], "texture")) {
+      CUcontext c0;
+      CUdevice d0;
+      CK(cuDeviceGet(&d0, 0));
+      CK(cuDevicePrimaryCtxRetain(&c0, d0));
+      CK(cuCtxSetCurrent(c0));
+      textureChecks();
+    }
     else return 2;
     return failures != 0;
   }

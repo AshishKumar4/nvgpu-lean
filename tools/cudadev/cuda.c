@@ -63,6 +63,7 @@ extern lean_object *nvgpu_launch(lean_obj_arg d, uint32_t k, uint32_t gx, uint32
                                  uint32_t bx, uint32_t by, uint32_t bz, uint32_t cx, uint32_t cy,
                                  uint32_t cz, uint32_t smem, lean_obj_arg params,
                                  uint8_t functional, lean_object *w);
+extern lean_object *nvgpu_set_textures(lean_obj_arg d, lean_obj_arg table);
 extern lean_object *nvgpu_launch_mesh(lean_obj_arg ds, uint32_t g, uint32_t k, uint32_t gx, uint32_t gy,
                                       uint32_t gz, uint32_t bx, uint32_t by, uint32_t bz, uint32_t cx,
                                       uint32_t cy, uint32_t cz, uint32_t smem, lean_obj_arg params,
@@ -1102,6 +1103,7 @@ CUresult CUDAAPI cuMemPoolGetAccess(CUmemAccess_flags *f, CUmemoryPool p, CUmemL
 }
 
 #include "module.h"
+#include "tex.h"
 #include "stream.h"
 #include "graph.h"
 #include "accel.h"

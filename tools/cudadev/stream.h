@@ -817,26 +817,33 @@ CUresult CUDAAPI cuMemcpyPeerAsync(CUdeviceptr dst, CUcontext dc, CUdeviceptr sr
   return cuMemcpyAsync(dst, src, n, s);
 }
 
-// A side of a 2D/3D copy: its address (arrays are not modelled).
-static int sideOf(CUmemorytype t, const void *host, CUdeviceptr d, uintptr_t *out) {
+// A side of a 2D/3D copy: its address, and a CUDA array's own pitch and rows a slice (`tex.h`).
+static int sideOf(CUmemorytype t, const void *host, CUdeviceptr d, CUarray a, uintptr_t *out, size_t *pitch,
+                  size_t *rows) {
   switch (t) {
     case CU_MEMORYTYPE_HOST: *out = (uintptr_t)host; return 1;
     case CU_MEMORYTYPE_DEVICE: *out = d; return 1;
     case CU_MEMORYTYPE_UNIFIED: *out = d; return 1;
+    case CU_MEMORYTYPE_ARRAY:
+      if (!a) return 0;
+      *out = a->base;
+      *pitch = a->pitch;
+      *rows = a->height ? a->height : 1;
+      return 1;
     default: return 0;
   }
 }
 
-// The copy a `CUDA_MEMCPY3D` describes, or NULL when a side is a CUDA array (not modelled).
-// Copies and graph copy nodes both take theirs from here.
+// The copy a `CUDA_MEMCPY3D` describes, or NULL when a side is not one. Copies and graph copy nodes
+// both take theirs from here.
 static Op *copy3DOp(const CUDA_MEMCPY3D *c) {
   uintptr_t dst, src;
-  if (!sideOf(c->dstMemoryType, c->dstHost, c->dstDevice, &dst) ||
-      !sideOf(c->srcMemoryType, c->srcHost, c->srcDevice, &src))
-    return NULL;
-  Op *o = newOp(OP_COPY);
   size_t sp = c->srcPitch ? c->srcPitch : c->WidthInBytes, dp = c->dstPitch ? c->dstPitch : c->WidthInBytes;
   size_t sh = c->srcHeight ? c->srcHeight : c->Height, dh = c->dstHeight ? c->dstHeight : c->Height;
+  if (!sideOf(c->dstMemoryType, c->dstHost, c->dstDevice, c->dstArray, &dst, &dp, &dh) ||
+      !sideOf(c->srcMemoryType, c->srcHost, c->srcDevice, c->srcArray, &src, &sp, &sh))
+    return NULL;
+  Op *o = newOp(OP_COPY);
   o->src = src + c->srcZ * sp * sh + c->srcY * sp + c->srcXInBytes;
   o->dst = dst + c->dstZ * dp * dh + c->dstY * dp + c->dstXInBytes;
   o->width = c->WidthInBytes;
@@ -853,8 +860,7 @@ static CUresult copy3D(const CUDA_MEMCPY3D *c, CUstream s, int async) {
   NEED_INIT();
   Op *o = copy3DOp(c);
   if (!o) {
-    note("copies to and from CUDA arrays are not modelled");
-    return CUDA_ERROR_NOT_SUPPORTED;
+    return CUDA_ERROR_INVALID_VALUE;
   }
   return async ? enqueueCopy(s, o) : submit(NULL, o);
 }

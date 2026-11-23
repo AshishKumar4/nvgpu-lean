@@ -40,10 +40,15 @@ libraries and frameworks built on it load them where they would load NVIDIA's, a
 ## How it works
 
 * `cuda.c` keeps the driver's bookkeeping: each device, its primary context and its device memory
-  (device g's first fit from 16 TiB + g TiB up; module data past the part's memory), the calling
-  thread's device (its current context's, or for an address the device whose window holds it), page-locked host memory, virtual
+  (device g's first fit from 16 TiB up, the devices' ranges end to end; module data past the part's
+  memory), the calling thread's device (its current context's, or for an address the device whose
+  window holds it), page-locked host memory, virtual
   memory reservations and pools, errors, and the entry points by name (`cuGetProcAddress`, with
   the older ABIs a runtime of an earlier CUDA asks for).
+* `tex.h`: CUDA arrays (pitch-linear device memory, which a texture or surface instruction cannot
+  tell from the hardware's block-linear layout) and texture and surface objects over arrays, linear
+  and pitched memory (each the device's table entry its handle names, `Device.setTextures`, as the
+  simulator's texture unit reads them, `NV/Machine/Texture.lean`); 2D and 3D copies reach arrays.
 * `module.h`: modules and libraries. An image is a cubin, a fat binary (or cudart's wrapper of
   one, as `__cudaRegisterFatBinary` hands it over), or PTX. The driver's choice from a fat binary:
   the device's architecture's cubin (`sm_XYa` only on that architecture, `sm_XY` on its major with
@@ -128,7 +133,7 @@ JAX's CUDA 13 plugin (its runtime asks the driver for a table not provided; the 
 `jax[cuda12]`, runs). PyTorch's matmuls: NVIDIA's math libraries, as PyTorch 2.9's CUDA 12
 wheels load them, ask the runtime for a table entry the device does not provide
 (`runtime_tables.h` has only ZLUDA's), and stop; PyTorch's own kernels run (the `device-torch`
-row). Managed memory, IPC, CUDA arrays and texture objects created through the driver,
+row). Managed memory, IPC, mipmapped arrays and texture resource views,
 conditional graph nodes (they need the device runtime's `cudaGraphSetConditional`), batch
 memory-operation nodes, external memory and semaphores, and kernels dereferencing host memory:
 each fails with a CUDA error naming it.

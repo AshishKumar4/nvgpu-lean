@@ -36,7 +36,7 @@ done
 export NVGPU_LEAN_CACHE="$dir/cache"
 rm -rf "$NVGPU_LEAN_CACHE"
 for gpu in h200 a100-80 b200 rtxpro6000; do
-  for mode in "" graph legacy failure; do
+  for mode in "" graph legacy failure texture; do
     NVGPU_LEAN_GPU=$gpu NVGPU_LEAN_CUDA=$cuda "$dir/test" $mode
   done
   if [ -x "$dir/nvmltest" ]; then

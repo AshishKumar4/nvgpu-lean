@@ -43,6 +43,9 @@ structure Device where
   moduleDigests : Array Cache.Digest := #[]
   /-- Cycles the device has run, over every launch. -/
   cycles : Nat := 0
+  /-- The texture and surface objects the driver has created (`cuTexObjectCreate`,
+  `cuSurfObjectCreate`): object `i + 1` is entry `i` (`NV.Tex`), as every launch sees them. -/
+  textures : Array NV.Tex.Texture := #[]
 
 /-- The part `name` (`NV.Arch.parts`), with `bytes` of global memory from address `base`. -/
 @[export nvgpu_device_create]
@@ -215,7 +218,7 @@ def launchOf (d : Device) (k gx gy gz bx by_ bz cx cy cz smem : UInt32) (params 
     (functional : Bool) : Option Launch :=
   (current d k.toNat).map fun kernel =>
     { kernel, grid := (gx.toNat, gy.toNat, gz.toNat), block := (bx.toNat, by_.toNat, bz.toNat),
-      params := params, global := d.global, dynShared := smem.toNat,
+      params := params, global := d.global, dynShared := smem.toNat, textures := d.textures,
       cluster := (cx.toNat, cy.toNat, cz.toNat), functional }
 
 /-- `launch`'s run; `cacheable`: its result may come from, and go to, the launch cache. -/
@@ -251,6 +254,8 @@ def launchWith (cacheable : Bool) (d : Device) (k gx gy gz bx by_ bz cx cy cz sm
       | some md => (key.nat md.a.toNat).nat md.b.toNat
       | none => key
     key := key.str kernel.name
+    -- The texture and surface objects the kernel may name.
+    if !d.textures.isEmpty then key := key.str (reprStr d.textures)
     for (b, ws) in kernel.banks do
       key := ws.foldl (fun key w => key.nat w.toNat) ((key.nat b).nat ws.size)
     let (gx, gy, gz) := l.grid
@@ -338,6 +343,29 @@ def launchExport (d : Device) (k gx gy gz bx by_ bz cx cy cz smem : UInt32) (par
   let some l := launchOf d k gx gy gz bx by_ bz cx cy cz smem params true | return s!"no kernel {k}"
   NV.Launch.exportLaunchFiles d.p dir l (extra.splitOn "\n" |>.filter (· != ""))
   return ""
+
+/-- The texture and surface objects, as the driver records them (`tools/cudadev/tex.h`): per
+object 24 little-endian 64-bit words: texel (0, 0, 0)'s address, the dimensions addressed, width,
+height, depth, the row and slice pitches, the channels and each one's bits (four words), the
+channels' kind (0 unsigned, 1 signed, 2 float), integers read normalized, coordinates normalized,
+the filter (0 point, 1 linear), the three coordinates' addressing modes (0 wrap, 1 clamp,
+2 mirror, 3 border), a surface, the layers, a cubemap; a freed object's words are all zero. -/
+@[export nvgpu_set_textures]
+def setTextures (d : Device) (table : ByteArray) : Device := Id.run do
+  let word (i : Nat) : Nat := (List.range 8).foldl (fun a b => a + (table.get! (8 * i + b)).toNat * 256 ^ b) 0
+  let mut ts := #[]
+  for o in [0:table.size / 192] do
+    let w (k : Nat) := word (24 * o + k)
+    let n := w 7
+    let addr (m : Nat) : NV.Tex.Address := match m with | 0 => .wrap | 2 => .mirror | 3 => .border | _ => .clamp
+    ts := ts.push {
+      base := (w 0).toUInt64, dims := w 1, width := w 2, height := w 3, depth := w 4, pitch := w 5,
+      slice := w 6, chans := (Array.range (min n 4)).map (fun c => w (8 + c)),
+      kind := match w 12 with | 1 => .signed | 2 => .float | _ => .unsigned,
+      readNormalized := w 13 != 0, normalizedCoords := w 14 != 0,
+      filter := if w 15 == 1 then .linear else .point, address := #[addr (w 16), addr (w 17), addr (w 18)],
+      surface := w 19 != 0, layers := w 20, cube := w 21 != 0 }
+  return { d with textures := ts }
 
 @[export nvgpu_error_string]
 def errorString (e : IO.Error) : String := toString e
