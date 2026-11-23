@@ -438,6 +438,67 @@ __device__ inline uint64_t roundOut(const Datapath& d, bool neg, uint64_t M, int
   return sign | (((ef << man) | frac) << d.oPad);
 }
 
+// `blockAt` of N products, its operands read once into registers (both of its passes over them
+// unrolled).
+template <int N>
+__device__ inline uint64_t blockAtN(const Datapath& d, const uint32_t* a, const uint32_t* b, uint64_t c) {
+  uint32_t x[N], y[N];
+#pragma unroll
+  for (int i = 0; i < N; ++i) { x[i] = a[i]; y[i] = b[i]; }
+  uint32_t emax = (uint32_t)(d.minAlignExp + 1024);
+  uint32_t flags = 0;
+#pragma unroll
+  for (int i = 0; i < N; ++i) {
+    if (((x[i] | y[i]) >> 23) == 0) {
+      uint32_t e = expSum(x[i], y[i]);
+      if (e > emax) emax = e;
+      flags |= 8;
+    } else {
+      uint32_t cx = x[i] >> 23, cy = y[i] >> 23;
+      if (cx == 2 || cy == 2 || (cx == 3 && cy == 1) || (cx == 1 && cy == 3)) flags |= 1;
+      else if (cx == 3 || cy == 3) {}
+      else if (((x[i] ^ y[i]) >> 22) & 1) flags |= 4;
+      else flags |= 2;
+    }
+  }
+  uint64_t w = c >> d.cPad;
+  uint64_t frac = w & ((1ull << d.cMan) - 1);
+  uint64_t ef = (w >> d.cMan) & ((1ull << d.cExp) - 1);
+  bool cneg = (w >> (d.cMan + d.cExp)) & 1;
+  bool cspecial = ef == d.cExpMax;
+  bool cnonzero = !cspecial && (ef != 0 || frac != 0);
+  flags |= cspecial ? (frac != 0 ? 1u : (cneg ? 4u : 2u)) : (cnonzero ? 8u : 0u);
+  if ((flags & 1) || (flags & 6) == 6) return d.nan;
+  if (flags & 2) return d.cExpMax << (d.cMan + d.cPad);
+  if (flags & 4) return d.signBit | (d.cExpMax << (d.cMan + d.cPad));
+  if (!(flags & 8)) return 0;
+  uint64_t m = ef == 0 ? frac : (frac | (1ull << d.cMan));
+  int64_t e = ef == 0 ? d.cQMin : (int64_t)ef - d.cBias - (int64_t)d.cMan;
+  int64_t ce0 = e + (m ? log2Word(m) : 0);
+  int64_t ce = !cnonzero ? d.minAlignExp : (ce0 < -126 ? -126 : ce0);
+  int64_t k = e - ce + d.alignFrac;
+  uint64_t cm = !cnonzero ? 0 : (k >= 0 ? m << (uint64_t)k : m >> (uint64_t)(-k));
+  uint32_t cf = (uint32_t)(ce + 1024);
+  if (cf > emax) emax = cf;
+  int64_t s = 0;
+#pragma unroll
+  for (int i = 0; i < N; ++i) {
+    if (((x[i] | y[i]) >> 23) == 0) {
+      // Significands of at most 12 bits: their product fits 32 bits.
+      uint64_t p = (uint64_t)((x[i] & 0xfffu) * (y[i] & 0xfffu));
+      p = d.shl ? p << d.sh : p >> d.sh;
+      uint32_t dd = emax - expSum(x[i], y[i]);
+      int64_t v = dd >= 64 ? 0 : (int64_t)(p >> dd);
+      s = (((x[i] ^ y[i]) >> 22) & 1) ? s - v : s + v;
+    }
+  }
+  uint32_t dc = emax - cf;
+  int64_t cv = dc >= 64 ? 0 : (int64_t)(cm >> dc);
+  s = cneg ? s - cv : s + cv;
+  if (s == 0) return 0;
+  return roundOut(d, s < 0, s < 0 ? (uint64_t)(-s) : (uint64_t)s, (int64_t)emax - 1024 - d.alignFrac);
+}
+
 // `Datapath.blockAt` over all `n` products: `Σ a[i]·b[i] + c`.
 __device__ inline uint64_t blockAt(const Datapath& d, const uint32_t* a, const uint32_t* b, int n, uint64_t c) {
   uint32_t emax = (uint32_t)(d.minAlignExp + 1024);
@@ -1100,10 +1161,10 @@ static __device__ __noinline__ void mmaTask(const Ctx& x, const MmaJob& j, uint3
     if (i >= nr || k >= nc) continue;
     if (own) {
       uint32_t v = 4 * ((col0 + k) / 8) + (o / 32) % 4;
-      own[v] = (uint32_t)blockAt(dp, A + 16 * i, B + 16 * k, 16, j.acc ? own[v] : 0u);
+      own[v] = (uint32_t)blockAtN<16>(dp, A + 16 * i, B + 16 * k, j.acc ? own[v] : 0u);
     } else {
       uint32_t* d = mmaOut(x, j, buf, row0 + i, col0 + k);
-      *d = (uint32_t)blockAt(dp, A + 16 * i, B + 16 * k, 16, j.acc ? __ldcg(d) : 0u);
+      *d = (uint32_t)blockAtN<16>(dp, A + 16 * i, B + 16 * k, j.acc ? __ldcg(d) : 0u);
     }
   }
 }
