@@ -651,7 +651,13 @@ def f_lea(i):
         return " ".join(s) + " }"
     if "X" in mods:
         raise Lift("LEA.X")
-    s = [f"{{ uint32_t _k = {val(ops[3 + n])}; uint64_t _t = (uint64_t)(uint32_t)(_k >= 64u ? 0ull : ({valN(ops[1 + n])} << _k)) + {valN(ops[2 + n])};",
+    # `-a` is negated after the shift (`Exec.srcN`): a shifted 0 carries out.
+    a = ops[1 + n]
+    neg = (a["k"] == "reg" and a["neg"] and not a["not"]) or a["k"] == "neg"
+    shifted = f"(uint64_t)(uint32_t)(_k >= 64u ? 0ull : ({valN(a)} << _k))"
+    if neg:
+        shifted = f"(({shifted}) == 0ull ? 0x100000000ull : ({shifted}))"
+    s = [f"{{ uint32_t _k = {val(ops[3 + n])}; uint64_t _t = {shifted} + {valN(ops[2 + n])};",
          wr(ops[0], "(uint32_t)_t")]
     if n >= 1:
         s.append(wrP(ops[1], "(_t >> 32) != 0"))

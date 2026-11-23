@@ -231,6 +231,25 @@ def checkLop3Pred : IO (List String) := do
         | _ => failures := failures ++ ["LOP3 predicate: expected register effect"]
   return failures
 
+/-- LEA's carry out with a negated source (`LEA R2, P0, -R1, R3, 0x3`): `-a` is negated after the
+shift, so `-0` carries as `IADD3`'s does; Triton's 64-bit bounds take their high words from it. -/
+def checkLeaNeg : IO (List String) := do
+  let env : Env :=
+    { ctx := { ntid := (32, 1, 1), nctaid := (1, 1, 1), ctaid := (0, 0, 0), warp := 0, threads := 32 },
+      const0 := Store.empty 0 0 }
+  let mut failures := []
+  for (a, b, sum, carry) in [(0, 0x3c, 0x3c, true), (1, 0x3c, 0x34, true), (8, 0x3c, 0xfffffffc, false),
+      (0x20000000, 5, 5, true)] do
+    let instr := ins 0 "LEA" #[] #[r 2, .reg ⟨.p, 0⟩, .reg ⟨.r, 1⟩ { neg := true }, r 3, .imm 3] (ctrl 4)
+    let warp := ((Warp.init 4 32).setR 1 0 a.toUInt32).setR 3 0 b.toUInt32
+    match (decodeGeneral { name := "lea-neg", regs := 4, code := #[instr] } 0).run env warp fullMask with
+    | .reg s wb =>
+      let w := wb s
+      if w.getR 2 0 != sum.toUInt32 || w.getP 0 0 != carry then
+        failures := failures ++ [s!"LEA -{a} << 3 + {b}: {w.getR 2 0} carry {w.getP 0 0}, expected {sum} carry {carry}"]
+    | _ => failures := failures ++ ["LEA: expected a register effect"]
+  return failures
+
 /-- `out[t] = 3t + 5 + 1`, where the add consumes the IMAD after `stall` cycles (IMAD's latency
 is 4, and no counter guards it). -/
 def fixedLatency (stall : Nat) : Kernel :=
@@ -517,7 +536,8 @@ def checkCompiled : IO (List String) := do
 def main (args : List String) : IO UInt32 := do
   let mut failures : List String := []
   let fs ← if args.isEmpty || args.contains "lop3-pred" then checkLop3Pred else pure []
-  IO.println s!"LOP3 predicates: {if fs.isEmpty then "ok" else s!"{fs.length} failures"}"
+  let fs := fs ++ (← if args.isEmpty || args.contains "lea-neg" then checkLeaNeg else pure [])
+  IO.println s!"LOP3 predicates, LEA carries: {if fs.isEmpty then "ok" else s!"{fs.length} failures"}"
   failures := failures ++ fs
   let suites := [("ints", checkInts), ("ctrl", checkCtrl), ("warp", checkWarp),
     ("atomics", checkAtomics)]

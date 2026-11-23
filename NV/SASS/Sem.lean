@@ -246,11 +246,15 @@ def decodeInt (d : Dec) : Option Run :=
         let ws ← wr (x.o 0) l (t % 2 ^ 32).toUInt32
         if n ≥ 1 then (wrP (x.o 1) l (t ≥ 2 ^ 32)).map (ws ++ ·) else some ws)
     else
-      -- `LEA Rd, [Pc,] a, b, s`: (a << s) + b, with the carry out.
+      -- `LEA Rd, [Pc,] a, b, s`: (a << s) + b, with the carry out. `-a` is negated after the
+      -- shift, as `IADD3`'s operands are (`Exec.srcN`): when a << s is 0 it carries out (Triton's
+      -- 64-bit row bound `ULEA UR14, UP0, -UR8, 0x3c, 0x3` takes its high word's carry from it).
       let n := nP 1
+      let neg := match d.o (1 + n) with | .reg _ m => m.neg && !m.not | .neg _ => true | _ => false
       some (res fun x l => do
         let a ← x.sN l (1 + n); let b ← x.sN l (2 + n); let sh ← x.s l (3 + n)
-        let t := (a <<< sh.toNat) % 2 ^ 32 + b
+        let s := (a <<< sh.toNat) % 2 ^ 32
+        let t := (if neg && s == 0 then 2 ^ 32 else s) + b
         let ws ← wr (x.o 0) l (t % 2 ^ 32).toUInt32
         if n ≥ 1 then (wrP (x.o 1) l (t ≥ 2 ^ 32)).map (ws ++ ·) else some ws)
   | "SHF" =>
