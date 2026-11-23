@@ -54,5 +54,13 @@ int main(void) {
     return 1;
   }
   printf("unversioned names: %u devices, device 0 by index and by bus id\n", n1);
+  unsigned gen, width;
+  CK(nvmlDeviceGetCurrPcieLinkGeneration(d, &gen));
+  CK(nvmlDeviceGetCurrPcieLinkWidth(d, &width));
+  if ((gen != 4 && gen != 5) || width != 16) {
+    fprintf(stderr, "PCIe link %u x%u\n", gen, width);
+    return 1;
+  }
+  printf("PCIe %u.0 x%u\n", gen, width);
   return 0;
 }

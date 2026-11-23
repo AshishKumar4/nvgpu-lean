@@ -152,6 +152,32 @@ nvmlReturn_t DECLDIR nvmlDeviceGetPciInfo_v3(nvmlDevice_t d, nvmlPciInfo_t *p) {
   snprintf(p->busId, sizeof p->busId, "00000000:%02X:00.0", part->pciBus + idx);
   return NVML_SUCCESS;
 }
+// The host link: PCIe 5.0 x16 on Hopper, Blackwell and the RTX 50 series, 4.0 x16 on Ampere and
+// Ada (each part's board as NVIDIA specifies it), current and maximum alike. XLA's GPU cost model
+// takes the host bandwidth from the current generation and width.
+static unsigned pcieGen(const Part *part) { return part->ccMajor >= 9 ? 5 : 4; }
+nvmlReturn_t DECLDIR nvmlDeviceGetCurrPcieLinkGeneration(nvmlDevice_t d, unsigned int *g) {
+  DEV(d);
+  if (!g) return NVML_ERROR_INVALID_ARGUMENT;
+  *g = pcieGen(part);
+  return NVML_SUCCESS;
+}
+nvmlReturn_t DECLDIR nvmlDeviceGetMaxPcieLinkGeneration(nvmlDevice_t d, unsigned int *g) {
+  return nvmlDeviceGetCurrPcieLinkGeneration(d, g);
+}
+nvmlReturn_t DECLDIR nvmlDeviceGetGpuMaxPcieLinkGeneration(nvmlDevice_t d, unsigned int *g) {
+  return nvmlDeviceGetCurrPcieLinkGeneration(d, g);
+}
+nvmlReturn_t DECLDIR nvmlDeviceGetCurrPcieLinkWidth(nvmlDevice_t d, unsigned int *w) {
+  DEV(d);
+  if (!w) return NVML_ERROR_INVALID_ARGUMENT;
+  *w = 16;
+  return NVML_SUCCESS;
+}
+nvmlReturn_t DECLDIR nvmlDeviceGetMaxPcieLinkWidth(nvmlDevice_t d, unsigned int *w) {
+  return nvmlDeviceGetCurrPcieLinkWidth(d, w);
+}
+
 nvmlReturn_t DECLDIR nvmlDeviceGetCudaComputeCapability(nvmlDevice_t d, int *major, int *minor) {
   DEV(d);
   *major = part->ccMajor;
