@@ -4,7 +4,9 @@
 // of what the device last saw), and after it gives the host the pages it changed
 // (`managedPull`), so host writes to other pages meanwhile survive. Copies, sets and the emulated
 // NCCL reach managed memory through the host's mapping. The host must not touch a page a running
-// kernel writes (the device reports no concurrent managed access). Included by cuda.c.
+// kernel writes (the device reports no concurrent managed access). Mapped page-locked memory
+// (cuMemHostAlloc with CU_MEMHOSTALLOC_DEVICEMAP) is the same, reported as host memory. Included
+// by cuda.c.
 
 #define MANAGED_PAGE 4096ull
 
@@ -13,6 +15,7 @@ typedef struct Managed {
   size_t size;      // mapped bytes, whole pages
   uint8_t *shadow;  // the bytes the device last saw
   int device;
+  int host;         // page-locked host memory the device maps (cuMemHostAlloc), not managed
   struct Managed *next;
 } Managed;
 static Managed *managedList;
@@ -24,9 +27,8 @@ static Managed *managedAt(CUdeviceptr a, size_t n) {
   return NULL;
 }
 
-CUresult CUDAAPI cuMemAllocManaged(CUdeviceptr *p, size_t bytes, unsigned int flags) {
-  NEED_INIT();
-  if (!p || bytes == 0 || (flags != CU_MEM_ATTACH_GLOBAL && flags != CU_MEM_ATTACH_HOST)) return CUDA_ERROR_INVALID_VALUE;
+// Memory both sides map at one address, `bytes` of it at *p (`host`: page-locked host memory).
+static CUresult mapShared(CUdeviceptr *p, size_t bytes, int host) {
   size_t size = (bytes + MANAGED_PAGE - 1) / MANAGED_PAGE * MANAGED_PAGE;
   CUresult r = allocRange(p, size, ALLOC_ALIGN, 0);
   if (r != CUDA_SUCCESS) return r;
@@ -43,10 +45,16 @@ CUresult CUDAAPI cuMemAllocManaged(CUdeviceptr *p, size_t bytes, unsigned int fl
   // Both sides start zero: the device's memory is set, the mapping and shadow are fresh.
   devSet(*p, 0, size);
   pthread_mutex_lock(&lock);
-  *m = (Managed){.base = *p, .size = size, .shadow = shadow, .device = gcur, .next = managedList};
+  *m = (Managed){.base = *p, .size = size, .shadow = shadow, .device = gcur, .host = host, .next = managedList};
   managedList = m;
   pthread_mutex_unlock(&lock);
   return CUDA_SUCCESS;
+}
+
+CUresult CUDAAPI cuMemAllocManaged(CUdeviceptr *p, size_t bytes, unsigned int flags) {
+  NEED_INIT();
+  if (!p || bytes == 0 || (flags != CU_MEM_ATTACH_GLOBAL && flags != CU_MEM_ATTACH_HOST)) return CUDA_ERROR_INVALID_VALUE;
+  return mapShared(p, bytes, 0);
 }
 
 // Freeing managed memory: its mapping gone with it (the lock not held).

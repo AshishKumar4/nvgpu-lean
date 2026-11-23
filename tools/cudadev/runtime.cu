@@ -2,7 +2,7 @@
 // each part checked on the host: the program's fat binary registered by cudart and its kernels
 // launched by name; `__constant__` and `__device__` variables through cudaMemcpyToSymbol and
 // cudaMemcpyFromSymbol; streams and events; a CUDA graph captured from a stream and replayed;
-// cudaLaunchKernelEx with a cluster shape on parts with clusters; occupancy.
+// cudaLaunchKernelEx with a cluster shape on parts with clusters; mapped host memory; occupancy.
 #include <cstdio>
 #include <cuda_runtime.h>
 
@@ -97,6 +97,17 @@ int main() {
     CK(cudaMemcpyFromSymbol(&got, counter, sizeof got));
     check("cudaLaunchKernelEx with 2-block clusters", got == 256);
   }
+
+  // Zero-copy: a kernel writes mapped page-locked memory, which the host reads after synchronizing.
+  float *hm, *dm;
+  CK(cudaHostAlloc(&hm, bytes, cudaHostAllocMapped));
+  CK(cudaHostGetDevicePointer(&dm, hm, 0));
+  scaled<<<(n + 255) / 256, 256>>>(da, dm, n);
+  CK(cudaDeviceSynchronize());
+  bad = 0;
+  for (int i = 0; i < n; i++) if (hm[i] != a[i] * 3.0f) bad++;
+  check("kernel writing mapped host memory", bad == 0);
+  CK(cudaFreeHost(hm));
 
   int blocks = 0;
   CK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&blocks, scaled, 256, 0));

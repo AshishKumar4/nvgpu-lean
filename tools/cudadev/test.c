@@ -476,6 +476,24 @@ static void managedChecks(void) {
   check("a host write between launches reaches the next, and a copy reads the result", ok);
   CK(cuMemFree(x));
   CK(cuMemFree(y));
+  // Mapped page-locked memory: the kernel reads and writes it at its host address.
+  float *px, *py;
+  CK(cuMemHostAlloc((void **)&px, N * sizeof(float), CU_MEMHOSTALLOC_DEVICEMAP));
+  CK(cuMemHostAlloc((void **)&py, N * sizeof(float), CU_MEMHOSTALLOC_DEVICEMAP));
+  for (int i = 0; i < N; i++) { px[i] = (float)i; py[i] = 3.0f; }
+  CUdeviceptr dx, dy;
+  CK(cuMemHostGetDevicePointer(&dx, px, 0));
+  CK(cuMemHostGetDevicePointer(&dy, py, 0));
+  unsigned type = 0;
+  CK(cuPointerGetAttribute(&type, CU_POINTER_ATTRIBUTE_MEMORY_TYPE, dy));
+  void *margs[] = {&dx, &dy, &a, &n};
+  CK(cuLaunchKernel(axpy, (N + 127) / 128, 1, 1, 128, 1, 1, 0, NULL, margs, NULL));
+  CK(cuCtxSynchronize());
+  ok = type == CU_MEMORYTYPE_HOST && dx == (CUdeviceptr)px;
+  for (int i = 0; i < N; i++) ok = ok && py[i] == 2.0f * (float)i + 3.0f;
+  check("a kernel updates mapped page-locked memory, which the host reads", ok);
+  CK(cuMemFreeHost(px));
+  CK(cuMemFreeHost(py));
   CK(cuModuleUnload(m));
 }
 

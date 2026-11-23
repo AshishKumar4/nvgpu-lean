@@ -882,14 +882,30 @@ static int pinned(const void *p) {
 }
 
 CUresult CUDAAPI cuMemHostAlloc(void **p, size_t n, unsigned int flags) {
-  *p = aligned_alloc(4096, (n + 4095) & ~(size_t)4095);
-  if (!*p) return CUDA_ERROR_OUT_OF_MEMORY;
+  // Mapped: memory the device maps at its host address too, which kernels reach (managed.h).
+  if (flags & CU_MEMHOSTALLOC_DEVICEMAP) {
+    NEED_INIT();
+    CUdeviceptr d;
+    CUresult r = mapShared(&d, n, 1);
+    if (r != CUDA_SUCCESS) return r;
+    *p = (void *)d;
+  } else {
+    *p = aligned_alloc(4096, (n + 4095) & ~(size_t)4095);
+    if (!*p) return CUDA_ERROR_OUT_OF_MEMORY;
+  }
   addHost(*p, n, 1, flags);
   return CUDA_SUCCESS;
 }
 CUresult CUDAAPI cuMemAllocHost(void **p, size_t n) { return cuMemHostAlloc(p, n, 0); }
 CUresult CUDAAPI cuMemFreeHost(void *p) {
   if (!dropHost(p, 1)) return CUDA_ERROR_INVALID_VALUE;
+  pthread_mutex_lock(&lock);
+  int mapped = managedAt((CUdeviceptr)p, 1) != NULL;
+  pthread_mutex_unlock(&lock);
+  if (mapped) {
+    managedFree((CUdeviceptr)p);
+    return freeRange((CUdeviceptr)p, 0);
+  }
   free(p);
   return CUDA_SUCCESS;
 }
@@ -908,9 +924,10 @@ CUresult CUDAAPI cuMemHostGetFlags(unsigned int *flags, void *p) {
   pthread_mutex_unlock(&lock);
   return h ? CUDA_SUCCESS : CUDA_ERROR_INVALID_VALUE;
 }
-// Unified addressing: a page-locked host buffer's device address is its host address. Kernels do
-// not reach host memory on the emulated device (its global memory is the device's), so a kernel
-// that dereferences it faults, naming the address.
+// Unified addressing: a page-locked host buffer's device address is its host address. Kernels
+// reach it there when it was allocated mapped (cuMemHostAlloc's CU_MEMHOSTALLOC_DEVICEMAP);
+// other host memory is not the emulated device's, and a kernel that dereferences it faults,
+// naming the address.
 CUresult CUDAAPI cuMemHostGetDevicePointer(CUdeviceptr *d, void *p, unsigned int f) {
   (void)f;
   if (!pinned(p)) return CUDA_ERROR_INVALID_VALUE;
@@ -925,24 +942,25 @@ static CUresult pointerAttribute(void *data, CUpointer_attribute a, CUdeviceptr 
   Alloc *al = isDevice(p) ? findAlloc(p) : NULL;
   int onDevice = isDevice(p);
   Host *h = onDevice ? NULL : findHost((void *)p);
+  // Mapped page-locked memory: in the device's range, reported as the host memory it is.
+  Managed *mm = onDevice ? managedAt(p, 1) : NULL;
+  int mapped = mm && mm->host;
   pthread_mutex_unlock(&lock);
   if (!onDevice && !h) return CUDA_ERROR_INVALID_VALUE;
   switch (a) {
     case CU_POINTER_ATTRIBUTE_MEMORY_TYPE:
-      *(unsigned int *)data = onDevice ? CU_MEMORYTYPE_DEVICE : CU_MEMORYTYPE_HOST;
+      *(unsigned int *)data = onDevice && !mapped ? CU_MEMORYTYPE_DEVICE : CU_MEMORYTYPE_HOST;
       return CUDA_SUCCESS;
     case CU_POINTER_ATTRIBUTE_CONTEXT:
       *(CUcontext *)data = onDevice ? &gpus[gpuAt(p)].primary : &G.primary;
       return CUDA_SUCCESS;
     case CU_POINTER_ATTRIBUTE_DEVICE_POINTER: *(CUdeviceptr *)data = p; return CUDA_SUCCESS;
     case CU_POINTER_ATTRIBUTE_HOST_POINTER:
-      *(void **)data = onDevice ? NULL : (void *)p;
-      return onDevice ? CUDA_ERROR_INVALID_VALUE : CUDA_SUCCESS;
+      *(void **)data = onDevice && !mapped ? NULL : (void *)p;
+      return onDevice && !mapped ? CUDA_ERROR_INVALID_VALUE : CUDA_SUCCESS;
     case CU_POINTER_ATTRIBUTE_DEVICE_ORDINAL: *(int *)data = onDevice ? gpuAt(p) : gcur; return CUDA_SUCCESS;
     case CU_POINTER_ATTRIBUTE_IS_MANAGED:
-      pthread_mutex_lock(&lock);
-      *(unsigned int *)data = managedAt(p, 1) != NULL;
-      pthread_mutex_unlock(&lock);
+      *(unsigned int *)data = mm && !mapped;
       return CUDA_SUCCESS;
     case CU_POINTER_ATTRIBUTE_MAPPED: *(unsigned int *)data = 1; return CUDA_SUCCESS;
     case CU_POINTER_ATTRIBUTE_SYNC_MEMOPS: *(unsigned int *)data = 1; return CUDA_SUCCESS;
