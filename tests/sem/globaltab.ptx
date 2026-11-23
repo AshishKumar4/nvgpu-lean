@@ -1,0 +1,28 @@
+// A module's own data addressed from code (Tests/SassSem.lean): thread t reads tab[t % 8] and writes
+// it to out[t]. Compiled as a relocatable module (`ptxas -c`): the table's address is two
+// 32-bit immediates under relocations (`R_CUDA_ABS32_LO_32`, `_HI_32`) naming the data symbol, which
+// the loader applies (`Read.withCallees`), as sm_80's `sinf` slow path loads `__cudart_i2opi_f`.
+// ptxas-flags: -c
+.version 9.0
+.target sm_90a
+.address_size 64
+
+.global .align 4 .u32 tab[8] = {11, 22, 33, 44, 55, 66, 77, 88};
+
+.visible .entry globaltab(.param .u64 out)
+{
+  .reg .b32 t, i, v;
+  .reg .b64 o, a, rd;
+  ld.param.u64 o, [out];
+  cvta.to.global.u64 o, o;
+  mov.u32 t, %tid.x;
+  and.b32 i, t, 7;
+  mov.u64 a, tab;
+  mul.wide.u32 rd, i, 4;
+  add.s64 a, a, rd;
+  ld.global.u32 v, [a];
+  mul.wide.u32 rd, t, 4;
+  add.s64 o, o, rd;
+  st.global.u32 [o], v;
+  ret;
+}

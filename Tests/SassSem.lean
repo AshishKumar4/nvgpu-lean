@@ -250,6 +250,14 @@ def checkLeaNeg : IO (List String) := do
     | _ => failures := failures ++ ["LEA: expected a register effect"]
   return failures
 
+/-- `out[t] = tab[t % 8]`: a relocatable module's code reading its own `.global` table, whose
+address the loader writes into the code (`tests/sem/globaltab.ptx`). -/
+def checkGlobalTable : IO (List String) := do
+  let tab : List Nat := [11, 22, 33, 44, 55, 66, 77, 88]
+  match ← run (← kernel (← compile "tests/sem/globaltab.ptx") "globaltab") 1 32 [Array.replicate 32 0] with
+  | .error e => return [s!"globaltab: {e}"]
+  | .ok bs => return compare "globaltab" bs[0]! ((List.range 32).map fun t => (t, tab[t % 8]!))
+
 /-- `out[t] = 3t + 5 + 1`, where the add consumes the IMAD after `stall` cycles (IMAD's latency
 is 4, and no counter guards it). -/
 def fixedLatency (stall : Nat) : Kernel :=
@@ -537,7 +545,8 @@ def main (args : List String) : IO UInt32 := do
   let mut failures : List String := []
   let fs ← if args.isEmpty || args.contains "lop3-pred" then checkLop3Pred else pure []
   let fs := fs ++ (← if args.isEmpty || args.contains "lea-neg" then checkLeaNeg else pure [])
-  IO.println s!"LOP3 predicates, LEA carries: {if fs.isEmpty then "ok" else s!"{fs.length} failures"}"
+  let fs := fs ++ (← if args.isEmpty || args.contains "globaltab" then checkGlobalTable else pure [])
+  IO.println s!"LOP3 predicates, LEA carries, module data: {if fs.isEmpty then "ok" else s!"{fs.length} failures"}"
   failures := failures ++ fs
   let suites := [("ints", checkInts), ("ctrl", checkCtrl), ("warp", checkWarp),
     ("atomics", checkAtomics)]

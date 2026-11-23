@@ -424,7 +424,9 @@ division's slow path), their code addresses relocated as the driver's linker doe
 placed after the code before it, its branch targets moved with it, a `CALL.ABS`'s target
 (`R_CUDA_ABS55_16_34`, sm_80's `R_CUDA_ABS47_34`) its place, and the return address a caller loads into a register
 (`R_CUDA_ABS32_LO_32`, `_HI_32`) the code address of its place (`codeOffset` plus it, which
-`RET.ABS` reads back). -/
+`RET.ABS` reads back). A relocation naming one of the module's data symbols (sm_80's `sinf` slow
+path loads the address of `__cudart_i2opi_f`, its table of 2/π, as `UMOV` immediates) is that
+symbol's placed address. -/
 def withCallees (m : Module) (name : String) (code : Array Instr) (codeOffset : Nat) :
     Except String (Array Instr) := do
   let relas := m.data.textRelas
@@ -434,7 +436,8 @@ def withCallees (m : Module) (name : String) (code : Array Instr) (codeOffset : 
   let mut i := 0
   while i < order.size do
     for (f, _, sym, _, _) in relas do
-      if f == order[i]! && !order.contains sym && !m.data.externs.any (·.2 == sym) then
+      if f == order[i]! && !order.contains sym && !m.data.externs.any (·.2 == sym) &&
+          !m.data.symbols.any (·.1 == sym) then
         order := order.push sym
     i := i + 1
   let callees := order.extract 1 order.size
@@ -458,10 +461,11 @@ def withCallees (m : Module) (name : String) (code : Array Instr) (codeOffset : 
   -- The relocations of every placed function, applied to its instructions.
   for (f, off, sym, ty, add) in relas do
     let some (_, fb) := base.find? (·.1 == f) | continue
-    let some (_, sb) := base.find? (·.1 == sym) | continue
+    let data := (m.data.symbols.find? (·.1 == sym)).map (·.2.1)
+    let some sb := ((base.find? (·.1 == sym)).map (·.2)).orElse fun _ => data | continue
     let some k := out.findIdx? (·.pc == fb + off) | throw s!"{f}: a relocation at {off}, no instruction"
     let ins := out[k]!
-    let addr := codeOffset + sb + add
+    let addr := if data.isSome then sb + add else codeOffset + sb + add
     let isImm : Operand → Bool := fun | .imm _ => true | _ => false
     let lastImm : Option Nat := (ins.operands.size - 1 - ·) <$> ins.operands.reverse.findIdx? isImm
     let ops ← match ty with
