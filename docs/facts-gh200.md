@@ -272,11 +272,11 @@ The role column says who reads a fact (`NV/Core/Roles.lean`): only `engine` fact
 | `mem.l2NearHitLatency` | 274 | inferred | engine | `meas-h200`  |  |
 | `mem.l2FarHitLatency` | 430 | inferred (H800 PCIe) | engine | `luo2025` Table 4: L2 cache near hit 258.0, far hit 414.1 |  |
 | `mem.dramLatency` | 654 | inferred | engine | `meas-h200`  |  |
-| `mem.dramBusBits` | 6016 | measured | derivation input | `meas-h200`  |  |
-| `mem.dramClockMHz` | 3201 | measured | derivation input | `meas-h200`  |  |
-| `mem.dramBytesPerSec` | 4800000000000 | documented | engine | `h200-product` Specifications, H200 SXM: GPU memory bandwidth 4.8 TB/s |  |
-| `mem.dramStreamBytesPerSec` | 4610000000000 | measured | observed: bound input, not read by the engine | `meas-h200`  |  |
-| `mem.dramChannels` | 94 | inferred | engine | `meas-h200`  |  |
+| `mem.dramBusBits` | 6144 | measured | derivation input | `meas`  |  |
+| `mem.dramClockMHz` | 2619 | measured | derivation input | `meas`  |  |
+| `mem.dramBytesPerSec` | 4023000000000 | measured | engine | `meas`  |  |
+| `mem.dramStreamBytesPerSec` | 3604900000000 | measured | observed: bound input, not read by the engine | `meas`  |  |
+| `mem.dramChannels` | 96 | measured | engine | `meas`  | the 6144-bit bus in 64-bit channels, as the H200's 6016 in 94 |
 | `mem.mioQueueDepth` | 4 | inferred (Ampere) | engine | `huerta2025` §5.4: the memory queue of a sub-core, estimated at 4 entries |  |
 | `mem.lsuInterval` | 1 | published (H800 PCIe) | engine | `luo2024` Table V: shared memory 127.4–127.9, L1 125.8 bytes/clk/SM with 4-byte accesses |  |
 | `mem.addressInterval` | 4 | inferred (Ampere) | engine | `huerta2025` §5.4: address calculation in each sub-core, one instruction every four cycles |  |
