@@ -435,6 +435,40 @@ static void textureChecks(void) {
   for (int y = 0; y < H; y++)
     for (int x = 0; x < W; x++) ok = ok && back[y][x] == (unsigned)(x + 100 * y);
   check("a surface object writes a CUDA array", ok);
+  // A view of the float array as 32-bit unsigned integers fetches the texels' bits.
+  static const char *viewPtx =
+    ".version 8.0\n.target sm_80\n.address_size 64\n"
+    ".visible .entry viewk(.param .u64 tex_, .param .u64 out_) {\n"
+    "  .reg .b64 t, o, a; .reg .b32 x, y, i, r0, r1, r2, r3;\n"
+    "  ld.param.u64 t, [tex_]; ld.param.u64 o, [out_];\n"
+    "  mov.u32 x, %tid.x; mov.u32 y, %tid.y;\n"
+    "  tex.2d.v4.u32.s32 {r0, r1, r2, r3}, [t, {x, y}];\n"
+    "  mad.lo.u32 i, y, 8, x; mul.wide.u32 a, i, 4; add.s64 a, o, a; st.global.u32 [a], r0;\n"
+    "  ret;\n}\n";
+  CUDA_RESOURCE_VIEW_DESC vd;
+  memset(&vd, 0, sizeof vd);
+  vd.format = CU_RES_VIEW_FORMAT_UINT_1X32;
+  rd.res.array.hArray = tarr;
+  CUtexObject vtex;
+  CK(cuTexObjectCreate(&vtex, &rd, &td, &vd));
+  CUmodule vm;
+  CK(cuModuleLoadData(&vm, viewPtx));
+  CUfunction vk;
+  CK(cuModuleGetFunction(&vk, vm, "viewk"));
+  void *vargs[] = {&vtex, &dout};
+  CK(cuLaunchKernel(vk, 1, 1, 1, W, H, 1, 0, NULL, vargs, NULL));
+  CK(cuCtxSynchronize());
+  unsigned bits[H * W];
+  CK(cuMemcpyDtoH(bits, dout, sizeof bits));
+  ok = 1;
+  for (int y = 0; y < H; y++)
+    for (int x = 0; x < W; x++) ok = ok && !memcmp(&bits[y * W + x], &in[y][x], 4);
+  vd.format = CU_RES_VIEW_FORMAT_UINT_1X16;
+  CUtexObject bad;
+  ok = ok && cuTexObjectCreate(&bad, &rd, &td, &vd) == CUDA_ERROR_INVALID_VALUE;
+  check("a resource view reads a float array's texels as integers, and refuses another size", ok);
+  CK(cuTexObjectDestroy(vtex));
+  CK(cuModuleUnload(vm));
   CK(cuTexObjectDestroy(tex));
   CK(cuSurfObjectDestroy(surf));
   CK(cuArrayDestroy(tarr));

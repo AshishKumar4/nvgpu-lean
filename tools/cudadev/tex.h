@@ -196,18 +196,78 @@ static int texResource(const CUDA_RESOURCE_DESC *rd, uint64_t *w) {
   return 1;
 }
 
+// A resource view's texel format as an array format and its channels; 0 for the
+// block-compressed formats.
+static unsigned viewFormat(CUresourceViewFormat f, unsigned *chans) {
+  static const struct { CUresourceViewFormat view; unsigned format, chans; } formats[] = {
+    {CU_RES_VIEW_FORMAT_UINT_1X8, CU_AD_FORMAT_UNSIGNED_INT8, 1}, {CU_RES_VIEW_FORMAT_UINT_2X8, CU_AD_FORMAT_UNSIGNED_INT8, 2},
+    {CU_RES_VIEW_FORMAT_UINT_4X8, CU_AD_FORMAT_UNSIGNED_INT8, 4}, {CU_RES_VIEW_FORMAT_SINT_1X8, CU_AD_FORMAT_SIGNED_INT8, 1},
+    {CU_RES_VIEW_FORMAT_SINT_2X8, CU_AD_FORMAT_SIGNED_INT8, 2}, {CU_RES_VIEW_FORMAT_SINT_4X8, CU_AD_FORMAT_SIGNED_INT8, 4},
+    {CU_RES_VIEW_FORMAT_UINT_1X16, CU_AD_FORMAT_UNSIGNED_INT16, 1}, {CU_RES_VIEW_FORMAT_UINT_2X16, CU_AD_FORMAT_UNSIGNED_INT16, 2},
+    {CU_RES_VIEW_FORMAT_UINT_4X16, CU_AD_FORMAT_UNSIGNED_INT16, 4}, {CU_RES_VIEW_FORMAT_SINT_1X16, CU_AD_FORMAT_SIGNED_INT16, 1},
+    {CU_RES_VIEW_FORMAT_SINT_2X16, CU_AD_FORMAT_SIGNED_INT16, 2}, {CU_RES_VIEW_FORMAT_SINT_4X16, CU_AD_FORMAT_SIGNED_INT16, 4},
+    {CU_RES_VIEW_FORMAT_UINT_1X32, CU_AD_FORMAT_UNSIGNED_INT32, 1}, {CU_RES_VIEW_FORMAT_UINT_2X32, CU_AD_FORMAT_UNSIGNED_INT32, 2},
+    {CU_RES_VIEW_FORMAT_UINT_4X32, CU_AD_FORMAT_UNSIGNED_INT32, 4}, {CU_RES_VIEW_FORMAT_SINT_1X32, CU_AD_FORMAT_SIGNED_INT32, 1},
+    {CU_RES_VIEW_FORMAT_SINT_2X32, CU_AD_FORMAT_SIGNED_INT32, 2}, {CU_RES_VIEW_FORMAT_SINT_4X32, CU_AD_FORMAT_SIGNED_INT32, 4},
+    {CU_RES_VIEW_FORMAT_FLOAT_1X16, CU_AD_FORMAT_HALF, 1}, {CU_RES_VIEW_FORMAT_FLOAT_2X16, CU_AD_FORMAT_HALF, 2},
+    {CU_RES_VIEW_FORMAT_FLOAT_4X16, CU_AD_FORMAT_HALF, 4}, {CU_RES_VIEW_FORMAT_FLOAT_1X32, CU_AD_FORMAT_FLOAT, 1},
+    {CU_RES_VIEW_FORMAT_FLOAT_2X32, CU_AD_FORMAT_FLOAT, 2}, {CU_RES_VIEW_FORMAT_FLOAT_4X32, CU_AD_FORMAT_FLOAT, 4}};
+  for (size_t i = 0; i < sizeof formats / sizeof formats[0]; i++)
+    if (formats[i].view == f) { *chans = formats[i].chans; return formats[i].format; }
+  return 0;
+}
+
+// An array's resource view (`view`) on the object's words: its texels read in another format of
+// their size, and of a layered array the layers from `firstLayer` to `lastLayer`. The view's
+// extent is the array's (0 taking it); mipmap levels other than 0, some of a cubemap's faces and
+// block-compressed formats are not modelled.
+static CUresult texView(const CUDA_RESOURCE_DESC *rd, const CUDA_RESOURCE_VIEW_DESC *v, uint64_t *w) {
+  if (rd->resType != CU_RESOURCE_TYPE_ARRAY) return CUDA_ERROR_INVALID_VALUE;
+  CUarray a = rd->res.array.hArray;
+  const int layered = w[20] != 0;
+  if (v->firstMipmapLevel || v->lastMipmapLevel) {
+    note("texture views of mipmap levels are not modelled");
+    return CUDA_ERROR_NOT_SUPPORTED;
+  }
+  if ((v->width && v->width != a->width) || (v->height && v->height != (a->height ? a->height : 1)) ||
+      (!layered && v->depth && v->depth != (a->depth ? a->depth : 1)))
+    return CUDA_ERROR_INVALID_VALUE;
+  if (v->format != CU_RES_VIEW_FORMAT_NONE) {
+    unsigned chans, kind, format = viewFormat(v->format, &chans);
+    if (!format) {
+      note("block-compressed texture views are not modelled");
+      return CUDA_ERROR_NOT_SUPPORTED;
+    }
+    unsigned bits = formatBits(format, &kind);
+    if (bits * chans != w[8] * w[7]) return CUDA_ERROR_INVALID_VALUE;
+    w[7] = chans;
+    for (unsigned c = 0; c < 4; c++) w[8 + c] = c < chans ? bits : 0;
+    w[12] = kind;
+  }
+  if (!layered) return v->firstLayer || v->lastLayer ? CUDA_ERROR_INVALID_VALUE : CUDA_SUCCESS;
+  if (w[21] && (v->firstLayer || v->lastLayer + 1 != w[20])) {
+    note("texture views of some of a cubemap's faces are not modelled");
+    return CUDA_ERROR_NOT_SUPPORTED;
+  }
+  if (v->firstLayer > v->lastLayer || v->lastLayer >= w[20]) return CUDA_ERROR_INVALID_VALUE;
+  // A 1D layered array's layers are a row apart, a 2D one's a slice.
+  w[0] += v->firstLayer * (a->height ? a->slice : a->pitch);
+  w[20] = v->lastLayer - v->firstLayer + 1;
+  return CUDA_SUCCESS;
+}
+
 CUresult CUDAAPI cuTexObjectCreate(CUtexObject *out, const CUDA_RESOURCE_DESC *rd, const CUDA_TEXTURE_DESC *td,
                                    const CUDA_RESOURCE_VIEW_DESC *view) {
   NEED_INIT();
   if (!out || !rd || !td) return CUDA_ERROR_INVALID_VALUE;
-  if (view) {
-    note("texture resource views are not modelled");
-    return CUDA_ERROR_NOT_SUPPORTED;
-  }
   uint64_t w[TEX_WORDS];
   if (!texResource(rd, w)) {
     note("a texture over resource type %d is not modelled", (int)rd->resType);
     return CUDA_ERROR_NOT_SUPPORTED;
+  }
+  if (view) {
+    CUresult r = texView(rd, view, w);
+    if (r != CUDA_SUCCESS) return r;
   }
   if (td->mipmapFilterMode || td->maxAnisotropy > 1 || td->maxMipmapLevelClamp != 0.0f) {
     note("mipmapped and anisotropic texture sampling are not modelled");
