@@ -245,6 +245,21 @@ __device__ __forceinline__ uint32_t ffma32(bool ftz, uint32_t a, uint32_t b, uin
 
 #include "mufu_tables.cuh"
 
+// Whether this GPU's own MUFU gives the model's results: on the A100 (sm_80) and the GH200 (sm_90)
+// EX2, RCP, RSQ, SQRT and LG2 agree with the functions below on all 2^32 inputs (NaNs by class;
+// the model's NaN is 0x7fffffff, to which a native result is canonicalised). `LIFT_SOFT_MUFU`
+// keeps them in software.
+#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ == 800 || __CUDA_ARCH__ == 900) && !defined(LIFT_SOFT_MUFU)
+#define LIFT_NATIVE_MUFU(op, x)                                                         \
+  {                                                                                     \
+    uint32_t r_;                                                                        \
+    asm(op ".approx.ftz.f32 %0, %1;" : "=r"(r_) : "r"(x));                              \
+    return isNaN32(r_) ? 0x7fffffffu : r_;                                              \
+  }
+#else
+#define LIFT_NATIVE_MUFU(op, x)
+#endif
+
 __device__ __forceinline__ uint64_t mufuSquare(uint64_t w) {
   uint64_t diag = 0;
   for (int i = 0; i < 16; ++i) if ((w >> i) & 1) diag += 1ull << (2 * i);
@@ -292,6 +307,7 @@ __device__ __forceinline__ bool isNaN32(uint32_t x) { return (x & 0x7fffffffu) >
 
 // `MUFU.EX2` (MufuWord.ex2).
 __device__ inline uint32_t mufuEx2(uint32_t x) {
+  LIFT_NATIVE_MUFU("ex2", x)
   bool neg = x >> 31;
   uint32_t ef = (x >> 23) & 0xff;
   if (isNaN32(x)) return 0x7fffffffu;
@@ -315,6 +331,7 @@ __device__ inline uint32_t mufuEx2(uint32_t x) {
 
 // `MUFU.RCP` (MufuWord.rcp).
 __device__ inline uint32_t mufuRcp(uint32_t x) {
+  LIFT_NATIVE_MUFU("rcp", x)
   x = flush32(x);
   bool neg = x >> 31;
   uint32_t ef = (x >> 23) & 0xff;
@@ -331,6 +348,7 @@ __device__ inline uint32_t mufuRcp(uint32_t x) {
 
 // `MUFU.RSQ` (MufuWord.rsqrt).
 __device__ inline uint32_t mufuRsq(uint32_t x) {
+  LIFT_NATIVE_MUFU("rsqrt", x)
   x = flush32(x);
   bool neg = x >> 31;
   uint32_t ef = (x >> 23) & 0xff;
@@ -351,6 +369,7 @@ __device__ inline uint32_t mufuRsq(uint32_t x) {
 
 // `MUFU.SQRT` (Mufu.sqrt on a flushed input).
 __device__ inline uint32_t mufuSqrt(uint32_t x) {
+  LIFT_NATIVE_MUFU("sqrt", x)
   x = flush32(x);
   bool neg = x >> 31;
   uint32_t ef = (x >> 23) & 0xff;
@@ -370,6 +389,7 @@ __device__ inline uint32_t mufuSqrt(uint32_t x) {
 
 // `MUFU.LG2` (Mufu.lg2 on a flushed input).
 __device__ inline uint32_t mufuLg2(uint32_t x) {
+  LIFT_NATIVE_MUFU("lg2", x)
   x = flush32(x);
   bool neg = x >> 31;
   uint32_t ef = (x >> 23) & 0xff;
@@ -515,15 +535,32 @@ __device__ inline uint64_t blockAtN(const Datapath& d, const uint32_t* a, const 
   uint32_t cf = (uint32_t)(ce + 1024);
   if (cf > emax) emax = cf;
   int64_t s = 0;
+  // A product shifted to the alignment has alignFrac + 2 bits: with alignFrac + 2 + log2 N at most
+  // 31, it and the block's sum fit 32 bits (Hopper's 25 and 16 products, Ampere's 24 and 8).
+  if (d.alignFrac + 2 + (N > 16 ? 5 : N > 8 ? 4 : N > 4 ? 3 : 2) <= 31) {
+    int32_t s32 = 0;
 #pragma unroll
-  for (int i = 0; i < N; ++i) {
-    if (((x[i] | y[i]) >> 23) == 0) {
-      // Significands of at most 12 bits: their product fits 32 bits.
-      uint64_t p = (uint64_t)((x[i] & 0xfffu) * (y[i] & 0xfffu));
-      p = d.shl ? p << d.sh : p >> d.sh;
-      uint32_t dd = emax - expSum(x[i], y[i]);
-      int64_t v = dd >= 64 ? 0 : (int64_t)(p >> dd);
-      s = (((x[i] ^ y[i]) >> 22) & 1) ? s - v : s + v;
+    for (int i = 0; i < N; ++i) {
+      if (((x[i] | y[i]) >> 23) == 0) {
+        uint32_t p = (x[i] & 0xfffu) * (y[i] & 0xfffu);
+        p = d.shl ? p << d.sh : p >> d.sh;
+        const uint32_t dd = emax - expSum(x[i], y[i]);
+        const int32_t v = dd >= 32 ? 0 : (int32_t)(p >> dd);
+        s32 += (((x[i] ^ y[i]) >> 22) & 1) ? -v : v;
+      }
+    }
+    s = s32;
+  } else {
+#pragma unroll
+    for (int i = 0; i < N; ++i) {
+      if (((x[i] | y[i]) >> 23) == 0) {
+        // Significands of at most 12 bits: their product fits 32 bits.
+        uint64_t p = (uint64_t)((x[i] & 0xfffu) * (y[i] & 0xfffu));
+        p = d.shl ? p << d.sh : p >> d.sh;
+        uint32_t dd = emax - expSum(x[i], y[i]);
+        int64_t v = dd >= 64 ? 0 : (int64_t)(p >> dd);
+        s = (((x[i] ^ y[i]) >> 22) & 1) ? s - v : s + v;
+      }
     }
   }
   uint32_t dc = emax - cf;
@@ -1132,6 +1169,28 @@ __device__ inline uint32_t mmaRaw(const Ctx& x, const MmaJob& j, bool isA, uint3
   if ((isA ? j.negA : j.negB) && t < S8) v ^= 1u << (8 * esz - 1);
   return v;
 }
+// Elements (mn, k0) to (mn, k0 + 7) of a K-major 16-bit operand in shared memory, encoded into
+// `out`: one 16-byte load (`shLoad`'s) when they are one aligned core-matrix row (each swizzle
+// keeps those whole), else one at a time.
+__device__ inline void mmaRow8(const Ctx& x, const MmaJob& j, bool isA, uint32_t mn, int k0, const Codec& c, uint32_t* out) {
+  uint32_t split = isA ? j.aSplit : j.bSplit, rank = x.clusterRank, m = mn;
+  if (m >= split) { m -= split; rank += 1; }
+  const uint8_t* p = sharedAt(x, (rank << 24) | descAddr(isA ? j.da : j.db, true, (int)m, k0, x.fault));
+  const uint8_t* q = sharedAt(x, (rank << 24) | descAddr(isA ? j.da : j.db, true, (int)m, k0 + 7, x.fault));
+  if (((uintptr_t)p & 15) == 0 && q == p + 14) {
+    uint4 v;
+    if (x.helpers == 0 && x.clusterSize == 1)
+      asm volatile("ld.relaxed.cta.global.v4.u32 {%0, %1, %2, %3}, [%4];" : "=r"(v.x), "=r"(v.y), "=r"(v.z), "=r"(v.w) : "l"(p) : "memory");
+    else
+      v = __ldcg((const uint4*)p);
+    const uint32_t w[4] = {v.x, v.y, v.z, v.w}, flip = (isA ? j.negA : j.negB) ? 0x80008000u : 0u;
+#pragma unroll
+    for (int i = 0; i < 8; ++i) out[i] = encode(c, ((w[i / 2] ^ flip) >> (16 * (i % 2))) & 0xffffu);
+    return;
+  }
+  for (int i = 0; i < 8; ++i) out[i] = encode(c, mmaRaw(x, j, isA, mn, k0 + i));
+}
+
 __device__ inline uint32_t mmaElem(const Ctx& x, const MmaJob& j, bool isA, uint32_t mn, int k, const Codec& c) {
   return encode(c, mmaRaw(x, j, isA, mn, k));
 }
@@ -1325,9 +1384,18 @@ static __device__ __noinline__ void mmaTask(const Ctx& x, const MmaJob& j, uint3
   uint32_t* A = st;
   uint32_t* B = st + 256;
   sync();
-  for (uint32_t e = aKept ? 16 * nr + r : r; e < 16 * (nr + nc); e += n) {
-    if (e < 16 * nr) A[e] = mmaElem(x, j, true, j.aRow0 + row0 + e / 16, (int)(e % 16), c);
-    else B[e - 16 * nr] = mmaElem(x, j, false, col0 + (e - 16 * nr) / 16, (int)((e - 16 * nr) % 16), c);
+  if (j.aK && j.bK && j.aTmem == NONE) {
+    // K-major: a lane eight elements of a row at a time.
+    for (uint32_t u = aKept ? 2 * nr + r : r; u < 2 * (nr + nc); u += n) {
+      const uint32_t row = u / 2, k0 = 8 * (u % 2);
+      if (row < nr) mmaRow8(x, j, true, j.aRow0 + row0 + row, (int)k0, c, A + 16 * row + k0);
+      else mmaRow8(x, j, false, col0 + row - nr, (int)k0, c, B + 16 * (row - nr) + k0);
+    }
+  } else {
+    for (uint32_t e = aKept ? 16 * nr + r : r; e < 16 * (nr + nc); e += n) {
+      if (e < 16 * nr) A[e] = mmaElem(x, j, true, j.aRow0 + row0 + e / 16, (int)(e % 16), c);
+      else B[e - 16 * nr] = mmaElem(x, j, false, col0 + (e - 16 * nr) / 16, (int)((e - 16 * nr) % 16), c);
+    }
   }
   sync();
   for (uint32_t o = r; o < 16 * j.tileCols; o += n) {
