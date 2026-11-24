@@ -850,6 +850,64 @@ int main(int argc, char **argv) {
     CK(cuMemFree(flag));
   }
 
+  // A batch memory-operation node: a write, a wait it satisfies and a 64-bit write, in order;
+  // its parameters read back and replaced in the executable; a captured value write becomes one.
+  {
+    CUdeviceptr words;
+    CK(cuMemAlloc(&words, 16));
+    CK(cuMemsetD32(words, 0, 4));
+    CUstreamBatchMemOpParams ops[3];
+    memset(ops, 0, sizeof ops);
+    ops[0].writeValue.operation = CU_STREAM_MEM_OP_WRITE_VALUE_32;
+    ops[0].writeValue.address = words;
+    ops[0].writeValue.value = 7;
+    ops[1].waitValue.operation = CU_STREAM_MEM_OP_WAIT_VALUE_32;
+    ops[1].waitValue.address = words;
+    ops[1].waitValue.value = 7;
+    ops[1].waitValue.flags = CU_STREAM_WAIT_VALUE_EQ;
+    ops[2].writeValue.operation = CU_STREAM_MEM_OP_WRITE_VALUE_64;
+    ops[2].writeValue.address = words + 8;
+    ops[2].writeValue.value64 = 0x123456789ull;
+    CUDA_BATCH_MEM_OP_NODE_PARAMS bp = {NULL, 3, ops, 0};
+    CUgraph bg;
+    CUgraphNode bn;
+    CK(cuGraphCreate(&bg, 0));
+    CK(cuGraphAddBatchMemOpNode(&bn, bg, NULL, 0, &bp));
+    CUgraphNodeType type;
+    CK(cuGraphNodeGetType(bn, &type));
+    CUDA_BATCH_MEM_OP_NODE_PARAMS got;
+    CK(cuGraphBatchMemOpNodeGetParams(bn, &got));
+    CUgraphExec be;
+    CK(cuGraphInstantiateWithFlags(&be, bg, 0));
+    CK(cuGraphLaunch(be, NULL));
+    CK(cuCtxSynchronize());
+    uint32_t w[4];
+    CK(cuMemcpyDtoH(w, words, sizeof w));
+    check("a batch node writes, waits and writes in order",
+          type == CU_GRAPH_NODE_TYPE_BATCH_MEM_OP && got.count == 3 && w[0] == 7 && w[2] == 0x23456789u && w[3] == 1);
+    ops[0].writeValue.value = 5;
+    ops[1].waitValue.value = 5;
+    CK(cuGraphExecBatchMemOpNodeSetParams(be, bn, &bp));
+    CK(cuGraphLaunch(be, NULL));
+    CK(cuCtxSynchronize());
+    CK(cuMemcpyDtoH(w, words, sizeof w));
+    check("an executable's batch node takes new operations", w[0] == 5);
+    CK(cuGraphExecDestroy(be));
+    CK(cuGraphDestroy(bg));
+    CUstream cs;
+    CK(cuStreamCreate(&cs, CU_STREAM_NON_BLOCKING));
+    CK(cuStreamBeginCapture(cs, CU_STREAM_CAPTURE_MODE_RELAXED));
+    CK(cuStreamWriteValue32(cs, words, 3, 0));
+    CK(cuStreamEndCapture(cs, &bg));
+    size_t nn = 1;
+    CK(cuGraphGetNodes(bg, &bn, &nn));
+    CK(cuGraphNodeGetType(bn, &type));
+    check("a captured value write is a batch node", nn == 1 && type == CU_GRAPH_NODE_TYPE_BATCH_MEM_OP);
+    CK(cuGraphDestroy(bg));
+    CK(cuStreamDestroy(cs));
+    CK(cuMemFree(words));
+  }
+
   // Memory allocated during capture belongs to the graph. Free nodes release its contents,
   // while graph/executable/scheduled-launch ownership keeps its address until replay ends.
   {

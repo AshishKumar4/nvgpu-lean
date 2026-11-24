@@ -311,11 +311,29 @@ CUresult CUDAAPI cuGraphAddMemFreeNode(CUgraphNode *out, CUgraph g, const CUgrap
   return CUDA_SUCCESS;
 }
 
+// A batch memory-operation node: stream memory operations run in order (`memOpsOp`), as a
+// capture of cuStreamWriteValue32 and its kin makes too.
 CUresult CUDAAPI cuGraphAddBatchMemOpNode(CUgraphNode *out, CUgraph g, const CUgraphNode *deps,
                                           size_t nd, const CUDA_BATCH_MEM_OP_NODE_PARAMS *p) {
-  (void)out; (void)g; (void)deps; (void)nd; (void)p;
-  note("batch memory operation nodes are not modelled");
-  return CUDA_ERROR_NOT_SUPPORTED;
+  if (!p || (p->count && !p->paramArray)) return CUDA_ERROR_INVALID_VALUE;
+  *out = newNode(g, CU_GRAPH_NODE_TYPE_BATCH_MEM_OP, memOpsOp(p->paramArray, p->count), deps, nd);
+  return CUDA_SUCCESS;
+}
+// Its operations, which the node keeps.
+CUresult CUDAAPI cuGraphBatchMemOpNodeGetParams(CUgraphNode n, CUDA_BATCH_MEM_OP_NODE_PARAMS *p) {
+  if (n->type != CU_GRAPH_NODE_TYPE_BATCH_MEM_OP) return CUDA_ERROR_INVALID_VALUE;
+  cuCtxGetCurrent(&p->ctx);
+  p->count = n->op->nmemops;
+  p->paramArray = n->op->memops;
+  p->flags = 0;
+  return CUDA_SUCCESS;
+}
+CUresult CUDAAPI cuGraphBatchMemOpNodeSetParams(CUgraphNode n, const CUDA_BATCH_MEM_OP_NODE_PARAMS *p) {
+  if (n->type != CU_GRAPH_NODE_TYPE_BATCH_MEM_OP || !p || (p->count && !p->paramArray)) return CUDA_ERROR_INVALID_VALUE;
+  Op *o = memOpsOp(p->paramArray, p->count);
+  opFree(n->op);
+  n->op = o;
+  return CUDA_SUCCESS;
 }
 
 #if CUDA_VERSION >= 12030
@@ -390,6 +408,11 @@ static CUresult legacyGraphAddNode(CUgraphNode *out, CUgraph g, const CUgraphNod
       return r;
     }
     case CU_GRAPH_NODE_TYPE_MEM_FREE: return cuGraphAddMemFreeNode(out, g, deps, nd, p->free.dptr);
+    case CU_GRAPH_NODE_TYPE_BATCH_MEM_OP: {
+      CUDA_BATCH_MEM_OP_NODE_PARAMS b = {.ctx = p->memOp.ctx, .count = p->memOp.count,
+                                         .paramArray = p->memOp.paramArray, .flags = p->memOp.flags};
+      return cuGraphAddBatchMemOpNode(out, g, deps, nd, &b);
+    }
 #if CUDA_VERSION >= 12030
     case CU_GRAPH_NODE_TYPE_CONDITIONAL: return addConditional(out, g, deps, nd, &p->conditional);
 #endif
@@ -854,6 +877,11 @@ CUresult CUDAAPI cuGraphExecMemsetNodeSetParams(CUgraphExec e, CUgraphNode n, co
   replaceOp(m, memsetNodeOp(p->dst, p->pitch, p->value, p->elementSize, p->width, p->height));
   return CUDA_SUCCESS;
 }
+CUresult CUDAAPI cuGraphExecBatchMemOpNodeSetParams(CUgraphExec e, CUgraphNode n,
+                                                    const CUDA_BATCH_MEM_OP_NODE_PARAMS *p) {
+  CUgraphNode m = execNode(e, n);
+  return m ? cuGraphBatchMemOpNodeSetParams(m, p) : CUDA_ERROR_INVALID_VALUE;
+}
 CUresult CUDAAPI cuGraphExecHostNodeSetParams(CUgraphExec e, CUgraphNode n, const CUDA_HOST_NODE_PARAMS *p) {
   CUgraphNode m = execNode(e, n);
   return m ? cuGraphHostNodeSetParams(m, p) : CUDA_ERROR_INVALID_VALUE;
@@ -928,6 +956,11 @@ static CUresult setNodeParams(CUgraphNode m, CUgraphNodeParams *p) {
     case CU_GRAPH_NODE_TYPE_EVENT_RECORD: replaceOp(m, eventOp(OP_RECORD, p->eventRecord.event)); return CUDA_SUCCESS;
     case CU_GRAPH_NODE_TYPE_WAIT_EVENT: replaceOp(m, eventOp(OP_WAIT, p->eventWait.event)); return CUDA_SUCCESS;
     case CU_GRAPH_NODE_TYPE_EMPTY: return CUDA_SUCCESS;
+    case CU_GRAPH_NODE_TYPE_BATCH_MEM_OP: {
+      CUDA_BATCH_MEM_OP_NODE_PARAMS b = {.ctx = p->memOp.ctx, .count = p->memOp.count,
+                                         .paramArray = p->memOp.paramArray, .flags = p->memOp.flags};
+      return cuGraphBatchMemOpNodeSetParams(m, &b);
+    }
     default:
       note("setting parameters of graph node type %d is not modelled", (int)p->type);
       return CUDA_ERROR_NOT_SUPPORTED;
@@ -1041,6 +1074,7 @@ static CUresult captureOp(CUstream s, Op *o) {
                     : o->kind == OP_FREE ? CU_GRAPH_NODE_TYPE_MEM_FREE
                     : o->kind == OP_WAIT ? CU_GRAPH_NODE_TYPE_WAIT_EVENT
                     : o->kind == OP_GRAPH ? CU_GRAPH_NODE_TYPE_GRAPH
+                    : o->kind == OP_MEMOPS ? CU_GRAPH_NODE_TYPE_BATCH_MEM_OP
                     : CU_GRAPH_NODE_TYPE_EMPTY;
   CUgraphNode n;
   if (o->kind == OP_GRAPH) {

@@ -28,7 +28,7 @@ static void completionReplace(Completion **slot, Completion *c) {
 
 typedef enum {
   OP_KERNEL, OP_COPY, OP_SET, OP_HOST, OP_CALLBACK, OP_RECORD, OP_WAIT, OP_FREE, OP_GRAPH,
-  OP_WRITE_VALUE, OP_WAIT_VALUE, OP_NOP
+  OP_MEMOPS, OP_NOP
 } OpKind;
 
 typedef struct Op {
@@ -58,10 +58,10 @@ typedef struct Op {
   // A graph launch.
   CUgraphExec exec;
   CUgraph graph;  // immutable snapshot owned by this launch
-  // A stream memory operation: 32- or 64-bit value at `dst`, and the wait's condition.
-  uint64_t value64;
+  // Stream memory operations (cuStreamBatchMemOp's), run in order; an event's flags.
+  CUstreamBatchMemOpParams *memops;
+  unsigned nmemops;
   unsigned flags;
-  int is64;
   int gpu;  // the device it runs on: its stream's (the submitting thread's on the legacy stream)
 } Op;
 
@@ -175,6 +175,7 @@ static void opFree(Op *o) {
   for (size_t i = 0; i < o->nbefore; i++) completionRelease(o->before[i]);
   free(o->before);
   free(o->params);
+  free(o->memops);
   free(o);
 }
 
@@ -189,6 +190,10 @@ static Op *opCopy(const Op *o) {
   if (o->params) {
     c->params = malloc(o->paramBytes ? o->paramBytes : 1);
     memcpy(c->params, o->params, o->paramBytes);
+  }
+  if (o->memops) {
+    c->memops = malloc(sizeof *c->memops * o->nmemops);
+    memcpy(c->memops, o->memops, sizeof *c->memops * o->nmemops);
   }
   if (o->ev) eventRetain(o->ev);
   if (o->kind == OP_GRAPH && o->exec) execRetain(o->exec);
@@ -347,14 +352,47 @@ static CUresult runSet(Op *o) {
   return r;
 }
 
-static int valueMet(uint64_t v, Op *o) {
-  uint64_t want = o->value64;
-  switch (o->flags & 0x3) {
+static int valueMet(uint64_t v, uint64_t want, unsigned flags, int is64) {
+  switch (flags & 0x3) {
     case CU_STREAM_WAIT_VALUE_GEQ:
-      return o->is64 ? (int64_t)(v - want) >= 0 : (int32_t)((uint32_t)v - (uint32_t)want) >= 0;
+      return is64 ? (int64_t)(v - want) >= 0 : (int32_t)((uint32_t)v - (uint32_t)want) >= 0;
     case CU_STREAM_WAIT_VALUE_EQ: return v == want;
     case CU_STREAM_WAIT_VALUE_AND: return (v & want) != 0;
-    default: return (~(v | want) & (o->is64 ? ~0ull : 0xffffffffull)) != 0;  // NOR, at the word's width
+    default: return (~(v | want) & (is64 ? ~0ull : 0xffffffffull)) != 0;  // NOR, at the word's width
+  }
+}
+
+// One stream memory operation: a write, or a wait until the word meets the condition (re-read
+// whenever work finishes); flushes and barriers have nothing to do, every write being visible at
+// once.
+static CUresult runMemOp(const CUstreamBatchMemOpParams *p) {
+  switch (p->operation) {
+    case CU_STREAM_MEM_OP_WRITE_VALUE_32:
+    case CU_STREAM_MEM_OP_WRITE_VALUE_64: {
+      const int is64 = p->operation == CU_STREAM_MEM_OP_WRITE_VALUE_64;
+      uint64_t v = is64 ? p->writeValue.value64 : p->writeValue.value;
+      return anyWrite(p->writeValue.address, &v, is64 ? 8 : 4);
+    }
+    case CU_STREAM_MEM_OP_WAIT_VALUE_32:
+    case CU_STREAM_MEM_OP_WAIT_VALUE_64: {
+      const int is64 = p->operation == CU_STREAM_MEM_OP_WAIT_VALUE_64;
+      const uint64_t want = is64 ? p->waitValue.value64 : p->waitValue.value;
+      for (;;) {
+        pthread_mutex_lock(&workLock);
+        uint64_t seen = epoch;
+        pthread_mutex_unlock(&workLock);
+        uint64_t v = 0;
+        CUresult r = anyRead(&v, p->waitValue.address, is64 ? 8 : 4);
+        if (r != CUDA_SUCCESS) return r;
+        if (valueMet(v, want, p->waitValue.flags, is64)) return CUDA_SUCCESS;
+        pthread_mutex_lock(&workLock);
+        while (epoch == seen && !sticky) pthread_cond_wait(&workCv, &workLock);
+        CUresult failed = sticky;
+        pthread_mutex_unlock(&workLock);
+        if (failed) return failed;
+      }
+    }
+    default: return CUDA_SUCCESS;
   }
 }
 
@@ -383,25 +421,12 @@ static CUresult runOp(Op *o) {
     }
     case OP_FREE: return freeRange(o->dst, 0);
     case OP_GRAPH: return runExec(o);
-    case OP_WRITE_VALUE: {
-      uint64_t v = o->value64;
-      return anyWrite(o->dst, &v, o->is64 ? 8 : 4);
-    }
-    case OP_WAIT_VALUE:
-      for (;;) {
-        pthread_mutex_lock(&workLock);
-        uint64_t seen = epoch;
-        pthread_mutex_unlock(&workLock);
-        uint64_t v = 0;
-        CUresult r = anyRead(&v, o->dst, o->is64 ? 8 : 4);
+    case OP_MEMOPS:
+      for (unsigned i = 0; i < o->nmemops; i++) {
+        CUresult r = runMemOp(&o->memops[i]);
         if (r != CUDA_SUCCESS) return r;
-        if (valueMet(v, o)) return CUDA_SUCCESS;
-        pthread_mutex_lock(&workLock);
-        while (epoch == seen && !sticky) pthread_cond_wait(&workCv, &workLock);
-        CUresult failed = sticky;
-        pthread_mutex_unlock(&workLock);
-        if (failed) return failed;
       }
+      return CUDA_SUCCESS;
     case OP_NOP: return CUDA_SUCCESS;
   }
   return CUDA_ERROR_INVALID_VALUE;
@@ -963,42 +988,40 @@ CUresult CUDAAPI cuMemFreeAsync(CUdeviceptr p, CUstream s) {
 
 // ---- Stream memory operations ----
 
-static CUresult valueOp(CUstream s, OpKind k, CUdeviceptr addr, uint64_t v, unsigned flags, int is64) {
-  NEED_INIT();
-  Op *o = newOp(k);
-  o->dst = addr;
-  o->value64 = v;
-  o->flags = flags;
-  o->is64 = is64;
-  return submit(s, o);
+// Stream memory operations as one piece of work (a graph's batch node).
+static Op *memOpsOp(const CUstreamBatchMemOpParams *ps, unsigned n) {
+  Op *o = newOp(OP_MEMOPS);
+  o->memops = malloc(sizeof *o->memops * (n ? n : 1));
+  memcpy(o->memops, ps, sizeof *o->memops * n);
+  o->nmemops = n;
+  return o;
 }
-CUresult CUDAAPI cuStreamWriteValue32(CUstream s, CUdeviceptr a, cuuint32_t v, unsigned int f) { return valueOp(s, OP_WRITE_VALUE, a, v, f, 0); }
-CUresult CUDAAPI cuStreamWriteValue64(CUstream s, CUdeviceptr a, cuuint64_t v, unsigned int f) { return valueOp(s, OP_WRITE_VALUE, a, v, f, 1); }
-CUresult CUDAAPI cuStreamWaitValue32(CUstream s, CUdeviceptr a, cuuint32_t v, unsigned int f) { return valueOp(s, OP_WAIT_VALUE, a, v, f, 0); }
-CUresult CUDAAPI cuStreamWaitValue64(CUstream s, CUdeviceptr a, cuuint64_t v, unsigned int f) { return valueOp(s, OP_WAIT_VALUE, a, v, f, 1); }
+static CUresult memOps(CUstream s, const CUstreamBatchMemOpParams *ps, unsigned n) {
+  NEED_INIT();
+  return submit(s, memOpsOp(ps, n));
+}
+static CUresult valueOp(CUstream s, CUstreamBatchMemOpType k, CUdeviceptr addr, uint64_t v, unsigned flags) {
+  CUstreamBatchMemOpParams p;
+  memset(&p, 0, sizeof p);
+  p.operation = k;
+  if (k == CU_STREAM_MEM_OP_WRITE_VALUE_32 || k == CU_STREAM_MEM_OP_WRITE_VALUE_64) {
+    p.writeValue.address = addr;
+    p.writeValue.value64 = v;
+    p.writeValue.flags = flags;
+  } else {
+    p.waitValue.address = addr;
+    p.waitValue.value64 = v;
+    p.waitValue.flags = flags;
+  }
+  return memOps(s, &p, 1);
+}
+CUresult CUDAAPI cuStreamWriteValue32(CUstream s, CUdeviceptr a, cuuint32_t v, unsigned int f) { return valueOp(s, CU_STREAM_MEM_OP_WRITE_VALUE_32, a, v, f); }
+CUresult CUDAAPI cuStreamWriteValue64(CUstream s, CUdeviceptr a, cuuint64_t v, unsigned int f) { return valueOp(s, CU_STREAM_MEM_OP_WRITE_VALUE_64, a, v, f); }
+CUresult CUDAAPI cuStreamWaitValue32(CUstream s, CUdeviceptr a, cuuint32_t v, unsigned int f) { return valueOp(s, CU_STREAM_MEM_OP_WAIT_VALUE_32, a, v, f); }
+CUresult CUDAAPI cuStreamWaitValue64(CUstream s, CUdeviceptr a, cuuint64_t v, unsigned int f) { return valueOp(s, CU_STREAM_MEM_OP_WAIT_VALUE_64, a, v, f); }
 CUresult CUDAAPI cuStreamBatchMemOp(CUstream s, unsigned int n, CUstreamBatchMemOpParams *ps, unsigned int f) {
   (void)f;
-  for (unsigned i = 0; i < n; i++) {
-    CUstreamBatchMemOpParams *p = &ps[i];
-    CUresult r = CUDA_SUCCESS;
-    switch (p->operation) {
-      case CU_STREAM_MEM_OP_WAIT_VALUE_32:
-        r = valueOp(s, OP_WAIT_VALUE, p->waitValue.address, p->waitValue.value, p->waitValue.flags, 0);
-        break;
-      case CU_STREAM_MEM_OP_WAIT_VALUE_64:
-        r = valueOp(s, OP_WAIT_VALUE, p->waitValue.address, p->waitValue.value64, p->waitValue.flags, 1);
-        break;
-      case CU_STREAM_MEM_OP_WRITE_VALUE_32:
-        r = valueOp(s, OP_WRITE_VALUE, p->writeValue.address, p->writeValue.value, p->writeValue.flags, 0);
-        break;
-      case CU_STREAM_MEM_OP_WRITE_VALUE_64:
-        r = valueOp(s, OP_WRITE_VALUE, p->writeValue.address, p->writeValue.value64, p->writeValue.flags, 1);
-        break;
-      default: break;  // flushes: every write is visible at once here
-    }
-    if (r != CUDA_SUCCESS) return r;
-  }
-  return CUDA_SUCCESS;
+  return n ? memOps(s, ps, n) : CUDA_SUCCESS;
 }
 
 // ---- Launches ----

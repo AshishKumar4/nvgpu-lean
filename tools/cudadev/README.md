@@ -142,8 +142,8 @@ JAX's CUDA 13 plugin (its runtime asks the driver for a table not provided; the 
 wheels load them, ask the runtime for a table entry the device does not provide
 (`runtime_tables.h` has only ZLUDA's), and stop; PyTorch's own kernels run (the `device-torch`
 row). IPC, mipmapped arrays and texture resource views,
-conditional graph nodes (they need the device runtime's `cudaGraphSetConditional`), batch
-memory-operation nodes, external memory and semaphores, and kernels dereferencing host memory
-other than mapped page-locked memory (`cuMemHostAlloc` with `CU_MEMHOSTALLOC_DEVICEMAP`,
-`cudaHostAllocMapped`, which kernels reach at its host address as they do managed memory, and
-which takes device memory): each fails with a CUDA error naming it.
+conditional graph nodes (they need the device runtime's `cudaGraphSetConditional`), external
+memory and semaphores, and kernels dereferencing host memory other than mapped page-locked memory
+(`cuMemHostAlloc` with `CU_MEMHOSTALLOC_DEVICEMAP`, `cudaHostAllocMapped`, which kernels reach at
+its host address as they do managed memory, and which takes device memory): each fails with a
+CUDA error naming it.
