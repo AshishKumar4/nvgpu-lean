@@ -20,7 +20,8 @@ each cycle every sub-partition's scheduler issues at most one instruction from a
 A warp is eligible when its stall count has elapsed, the dependence counters in the instruction's
 wait mask are zero (and a `DEPBAR.LE`'s counter is low enough), and the instruction's pipe accepts
 work (Huerta et al. 2025 §4–5). The scheduler keeps issuing from the warp it issued last while that
-warp is eligible, and otherwise takes the oldest or youngest eligible warp (`IssuePolicy`).
+warp is eligible, unless it waited for room in a full MIO queue, and otherwise takes the oldest,
+youngest or least recently issued eligible warp (`IssuePolicy`).
 
 Data are computed only by `NV.SASS.exec`; the engine decides when. Register results are written
 back after their class's latency. A memory instruction takes a slot of its sub-partition's MIO
@@ -1157,9 +1158,12 @@ private def pass (kit : Kit) (focus : Nat) (stop : Nat) (st : St) :
             sm := { sm with slots := sm.slots.modify i fun (w : Slot) =>
               if why == .dispatch then { w with readyAt := at_, lost := w.lost + 1 } else { w with readyAt := at_, why } }
       if cands.isEmpty then continue
+      -- A warp that waited for room in a full MIO queue is not the greedy choice when room frees:
+      -- the slot goes by age, so a warp streaming stores does not take every slot from another
+      -- warp of its sub-partition (wglds16 on the GH200: a wgmma loop beside an STS.128 stream).
       let pick := match sm.last[q]!, p.issuePolicy.value with
         | _, .leastRecent => byAge p cands sm
-        | some i, _ => if cands.contains i then i else byAge p cands sm
+        | some i, _ => if cands.contains i && sm.slots[i]!.why != .mio then i else byAge p cands sm
         | none, _ => byAge p cands sm
       for i in cands do
         if i != pick then
