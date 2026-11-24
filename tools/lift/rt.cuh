@@ -77,6 +77,20 @@ __device__ __forceinline__ uint8_t* sharedAt(const Ctx& x, uint32_t a) {
   return x.sharedAll + peerCta(x, rank) * x.sharedBytes + off;
 }
 
+// A load of `bytes` (1, 2 or 4) from the CTA's shared windows: through the SM's L1 when only the
+// CTA's own warps write them (no helper CTAs, no cluster peers), else from the L2 (`__ldcg`),
+// where another SM's writes are.
+__device__ __forceinline__ uint32_t shLoad(const Ctx& x, const uint8_t* p, uint32_t bytes) {
+  if (x.helpers == 0 && x.clusterSize == 1) {
+    uint32_t v;
+    if (bytes == 4) asm volatile("ld.relaxed.cta.global.u32 %0, [%1];" : "=r"(v) : "l"(p) : "memory");
+    else if (bytes == 2) { unsigned short h; asm volatile("ld.relaxed.cta.global.u16 %0, [%1];" : "=h"(h) : "l"(p) : "memory"); v = h; }
+    else { unsigned short h; asm volatile("ld.relaxed.cta.global.u8 %0, [%1];" : "=h"(h) : "l"(p) : "memory"); v = h & 0xffu; }
+    return v;
+  }
+  return bytes == 4 ? __ldcg((const unsigned*)p) : bytes == 2 ? (uint32_t)__ldcg((const unsigned short*)p) : (uint32_t)__ldcg(p);
+}
+
 // Tensor memory (`NV.Async.Tcgen05`): 128 lanes of 512 four-byte columns, then the column
 // allocator's word. The simulator's is per SM, shared by its CTAs (its allocator keeps them
 // apart); here each CTA has its own, so columns a CTA allocates may differ from the simulator's
@@ -1114,7 +1128,7 @@ __device__ inline uint32_t mmaRaw(const Ctx& x, const MmaJob& j, bool isA, uint3
     if (mn >= split) { mn -= split; rank += 1; }
     p = sharedAt(x, (rank << 24) | descAddr(isA ? j.da : j.db, isA ? j.aK : j.bK, (int)mn, k, x.fault, esz));
   }
-  uint32_t v = esz == 4 ? __ldcg((const unsigned*)p) : esz == 2 ? (uint32_t)__ldcg((const unsigned short*)p) : (uint32_t)__ldcg(p);
+  uint32_t v = shLoad(x, p, esz);
   if ((isA ? j.negA : j.negB) && t < S8) v ^= 1u << (8 * esz - 1);
   return v;
 }
@@ -1342,8 +1356,7 @@ __device__ __forceinline__ void copy16(uint8_t* d, const uint8_t* s, uint32_t n)
 __device__ __forceinline__ uint32_t rowsPerTask(const BoxShape& b) { return max(1u, COPY_TASK_BYTES / max(b.rowBytes, 1u)); }
 
 // Copy task `t` by `n` lanes (`r` this lane's rank): 4 KB of bytes, or the box's rows in as many
-// bytes, a lane a 16-byte unit of a row at a time (`TensorMap.tile`: elements outside the tensor
-// read as zeros and are not stored; the swizzle permutes whole 16-byte units).
+// bytes, a lane a 16-byte unit of a row at a time, or one lane a row at a time.
 static __device__ __noinline__ void copyTask(const Ctx& x, const CopyJob& j, uint32_t t, uint32_t r, uint32_t n) {
   if (j.kind == 2) {
     const uint32_t lo = t * COPY_TASK_BYTES, hi = min(j.size, lo + COPY_TASK_BYTES);
@@ -1361,18 +1374,18 @@ static __device__ __noinline__ void copyTask(const Ctx& x, const CopyJob& j, uin
     for (uint32_t k = 0; k < 16; ++k)
       if ((j.ranks >> k) & 1u) f(sharedAt(x, (k << 24) | off0) - off0);
   };
-  for (uint32_t u = r; u < rows * units; u += n) {
-    const uint32_t row = row0 + u / units, b0 = 16 * (u % units), nb = min(16u, bs.rowBytes - b0);
-    int64_t base;
-    const bool inb = boxRow(m, bs, j.c, row, &base);
-    const uint32_t lin = off0 + row * bs.rowBytes + b0;
+  // Unit `b0` (its byte in the row) of row `row` (`inb`: inside the tensor, at `base`): a 16-byte
+  // move when whole, else element by element (`TensorMap.tile`: elements outside the tensor read
+  // as zeros and are not stored; the swizzle permutes whole 16-byte units).
+  auto unit = [&](uint32_t row, uint32_t b0, bool inb, int64_t base) {
+    const uint32_t nb = min(16u, bs.rowBytes - b0), lin = off0 + row * bs.rowBytes + b0;
     const int64_t x0 = (int64_t)j.c[0] + b0 / m.esz, x1 = x0 + nb / m.esz;
     if (inb && x0 >= 0 && x1 <= (int64_t)m.dims[0] && (lin & 15) == 0) {
       uint8_t* g = gptr(x, (uint64_t)(base + x0 * m.esz));
       const uint32_t off = tmaSwizzle(m.swizzle, lin);
       if (j.kind == 0) each([&](uint8_t* w) { copy16(w + off, g, nb); });
       else copy16(g, own + off, nb);
-      continue;
+      return;
     }
     for (uint32_t e = b0 / m.esz; e < (b0 + nb) / m.esz; ++e) {
       const int64_t xe = (int64_t)j.c[0] + e;
@@ -1388,6 +1401,39 @@ static __device__ __noinline__ void copyTask(const Ctx& x, const CopyJob& j, uin
         }
       }
     }
+  };
+  // One lane (an issuer running a task itself): row by row, a whole row of up to 16 units loaded
+  // before it is stored, so its loads are in flight together.
+  if (n == 1) {
+    for (uint32_t row = row0; row < row0 + rows; ++row) {
+      int64_t base;
+      const bool inb = boxRow(m, bs, j.c, row, &base);
+      const uint32_t lin = off0 + row * bs.rowBytes;
+      const int64_t x0 = j.c[0], x1 = x0 + bs.rowBytes / m.esz;
+      uint8_t* g = inb ? gptr(x, (uint64_t)(base + x0 * m.esz)) : nullptr;
+      if (inb && x0 >= 0 && x1 <= (int64_t)m.dims[0] && (lin & 15) == 0 && bs.rowBytes % 16 == 0 && units <= 16 &&
+          ((uintptr_t)g & 15) == 0) {
+        uint4 v[16];
+#pragma unroll
+        for (uint32_t k = 0; k < 16; ++k)
+          if (k < units) v[k] = __ldcg((const uint4*)(j.kind == 0 ? g + 16 * k : own + tmaSwizzle(m.swizzle, lin + 16 * k)));
+#pragma unroll
+        for (uint32_t k = 0; k < 16; ++k)
+          if (k < units) {
+            if (j.kind == 0) each([&](uint8_t* w) { *(uint4*)(w + tmaSwizzle(m.swizzle, lin + 16 * k)) = v[k]; });
+            else *(uint4*)(g + 16 * k) = v[k];
+          }
+        continue;
+      }
+      for (uint32_t b0 = 0; b0 < bs.rowBytes; b0 += 16) unit(row, b0, inb, base);
+    }
+    return;
+  }
+  for (uint32_t u = r; u < rows * units; u += n) {
+    const uint32_t row = row0 + u / units;
+    int64_t base;
+    const bool inb = boxRow(m, bs, j.c, row, &base);
+    unit(row, 16 * (u % units), inb, base);
   }
 }
 
@@ -1575,6 +1621,15 @@ static __device__ __noinline__ void serve(const Ctx& x, uint32_t* smem) {
   }
 }
 
+// Elements (mn, k) and (mn, k + 1) of a 16-bit operand of this CTA's shared memory (`Desc.addr`),
+// low first, negated if asked: one 4-byte load when K-major (the two adjacent, k even), else two.
+__device__ inline uint32_t pairAt(const Ctx& x, uint64_t desc, bool kMajor, bool neg, uint32_t mn, int k) {
+  const uint32_t own = x.clusterRank << 24, flip = neg ? 0x80008000u : 0u;
+  if (kMajor) return shLoad(x, sharedAt(x, own | descAddr(desc, true, (int)mn, k, x.fault)), 4) ^ flip;
+  return (shLoad(x, sharedAt(x, own | descAddr(desc, false, (int)mn, k, x.fault)), 2) |
+          shLoad(x, sharedAt(x, own | descAddr(desc, false, (int)mn, k + 1, x.fault)), 2) << 16) ^ flip;
+}
+
 // `HGMMA.64xNx16.F32[.BF16]`, `HGMMA.64xNx8.F32.TF32`, `QGMMA.64xNx32.F32` and `IGMMA.64xNx32`
 // from shared memory, by the whole warp (`wgmma.mma_async.sync.aligned`), each of the warpgroup's
 // warps its 16 rows: one job of N/8 tiles of 16 x 8, whose outputs are the lanes' own values
@@ -1594,22 +1649,11 @@ static __device__ __noinline__ void hgmma(const Ctx& x, InType ty, uint64_t da, 
   // operands read from the descriptors' elements.
   if (ty <= BF16 && nativeMma(mmaModel(90, false), false)) {
     const uint32_t g = lane / 4, q = lane % 4, row0 = 16 * (warp % 4);
-    auto el = [&](uint64_t desc, bool kMajor, bool neg, uint32_t mn, int k) {
-      const uint32_t at = descAddr(desc, kMajor, (int)mn, k, x.fault);
-      return (uint32_t)(__ldcg((const unsigned short*)sharedAt(x, (x.clusterRank << 24) | at)) ^ (neg ? 0x8000u : 0u));
-    };
     uint32_t a[4];
-    for (int r = 0; r < 4; ++r) {
-      const uint32_t row = row0 + g + 8 * (r % 2);
-      const int col = 2 * q + 8 * (r / 2);
-      a[r] = el(da, aK, negA, row, col) | el(da, aK, negA, row, col + 1) << 16;
-    }
+    for (int r = 0; r < 4; ++r) a[r] = pairAt(x, da, aK, negA, row0 + g + 8 * (r % 2), 2 * q + 8 * (r / 2));
     for (uint32_t nb = 0; nb < N / 8; ++nb) {
       uint32_t b[2], d[4];
-      for (int r = 0; r < 2; ++r) {
-        const int k = 2 * q + 8 * r;
-        b[r] = el(db, bK, negB, 8 * nb + g, k) | el(db, bK, negB, 8 * nb + g, k + 1) << 16;
-      }
+      for (int r = 0; r < 2; ++r) b[r] = pairAt(x, db, bK, negB, 8 * nb + g, 2 * q + 8 * r);
       for (int v = 0; v < 4; ++v) d[v] = scaleD ? acc[4 * nb + v] : 0u;
       mma16816(ty == BF16, a, b, d);
       for (int v = 0; v < 4; ++v) acc[4 * nb + v] = d[v];
@@ -1655,14 +1699,7 @@ static __device__ __noinline__ void hgmmaRS(const Ctx& x, InType ty, const uint3
   if (nativeMma(mmaModel(90, false), false)) {
     for (uint32_t nb = 0; nb < N / 8; ++nb) {
       uint32_t b[2], d[4];
-      for (int r = 0; r < 2; ++r) {
-        const int k = 2 * q + 8 * r;
-        auto el = [&](int kk) {
-          return (uint32_t)(__ldcg((const unsigned short*)sharedAt(x, (x.clusterRank << 24) |
-                    descAddr(db, bK, (int)(8 * nb + g), kk, x.fault))) ^ (negB ? 0x8000u : 0u));
-        };
-        b[r] = el(k) | el(k + 1) << 16;
-      }
+      for (int r = 0; r < 2; ++r) b[r] = pairAt(x, db, bK, negB, 8 * nb + g, 2 * q + 8 * r);
       for (int v = 0; v < 4; ++v) d[v] = scaleD ? acc[4 * nb + v] : 0u;
       mma16816(ty == BF16, a, b, d);
       for (int v = 0; v < 4; ++v) acc[4 * nb + v] = d[v];

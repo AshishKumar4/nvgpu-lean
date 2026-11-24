@@ -1434,8 +1434,12 @@ def f_syncs(i):
         # Polled plainly; once the phase has completed, read again with acquire (the copies that
         # completed it may have been written from other SMs: the work pool's helpers).
         # A warp whose wait is not over helps with its CTA's copies meanwhile (`helpCta`).
+        # The warp's lanes see one answer, as the simulator's warp reads the word once: lanes that
+        # independent thread scheduling runs apart may read it at different times, and the phase
+        # completed for all if it did for any.
         return (f"{{ unsigned long long* _w = MB(ctx, (uint32_t){addr(ops[1])}); "
-                f"bool _done = (uint32_t)(*(volatile unsigned long long*)_w >> 63) != ({val(ops[2])} >> 31); "
+                f"const bool _d0 = (uint32_t)(*(volatile unsigned long long*)_w >> 63) != ({val(ops[2])} >> 31); "
+                f"const bool _done = __any_sync(__EXEC__, _d0); "
                 f"if (_done) (void)ldAcq(_w); "
                 f"if (__all_sync(__EXEC__, !_done)) helpCta(ctx, warp, lane, __EXEC__); "
                 + wrP(ops[0], "_done") + " }")
