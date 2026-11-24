@@ -124,6 +124,7 @@ The role column says who reads a fact (`NV/Core/Roles.lean`): only `engine` fact
 | `UMOV` | uniform, every 2, latency 2 | encoded | engine | `fixtures`  |  |
 | `UISETP` | uniform, every 2, latency 4 | encoded | engine | `fixtures`  |  |
 | `UPRMT` | uniform, every 2, latency 4 | inferred (H200) | engine | `meas-h200`  |  |
+| `ULDC (indexed)` | uniform, every 1, latency 65, holds the warp until then | measured | engine | `meas` gh200/out/constcold.txt:2 |  |
 | `ULDC` | uniform, every 1, latency 2 | encoded | engine | `fixtures`  |  |
 | `LDG` | lsu, every 1, latency 654, reads released at 11 | inferred (H200) | engine | `meas-h200`  |  |
 | `STG.128` | lsu, every 1, reads released at 20 | inferred (Ampere) | engine | `huerta2025` Table 2: 128-bit global store, WAR 20 |  |

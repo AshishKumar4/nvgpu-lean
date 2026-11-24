@@ -33,7 +33,8 @@ def Core.OpTiming.render (t : Core.OpTiming) : String :=
     (if t.latency == 0 then "" else s!", latency {t.latency}") ++
     (if t.readRelease == 0 then "" else s!", reads released at {t.readRelease}") ++
     (if t.lateRead == 0 then "" else s!", reads its sources at {t.lateRead}") ++
-    (if t.guardLatency == 0 then "" else s!", guards from {t.guardLatency}")
+    (if t.guardLatency == 0 then "" else s!", guards from {t.guardLatency}") ++
+    (if t.holds then ", holds the warp until then" else "")
 
 namespace Arch
 
@@ -156,7 +157,8 @@ def sections (p : Params) : List (String × List Row) :=
      rowN "frontEnd.constMissSwitchCycles" constMissSwitchCycles]),
    ("Opcode classes (pipe, issue interval per sub-partition, latency, read release)",
     ops.toList.map fun r =>
-      row (".".intercalate (r.opcode :: r.mods.toList)) r.timing OpTiming.render),
+      row (".".intercalate (r.opcode :: r.mods.toList) ++ (if r.indexed then " (indexed)" else ""))
+        r.timing OpTiming.render),
    ("Memory (cycles)",
     [rowN "mem.sectorBytes" sectorBytes, rowN "mem.lineBytes" lineBytes,
      rowN "mem.l1SmemBytes" l1SmemBytes, rowN "mem.smemBanks" smemBanks,

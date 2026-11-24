@@ -111,6 +111,10 @@ structure Instr where
 
 def Instr.hasMod (i : Instr) (m : String) : Bool := i.mods.contains m
 
+/-- Whether `i` reads a constant bank at an address a register indexes (`c[0x0][UR4+0x210]`). -/
+def Instr.constIndexed (i : Instr) : Bool :=
+  i.operands.any fun | .cbank _ (some _) _ => true | _ => false
+
 /-- `USETMAXREG.TRY_ALLOC.CTAPOOL`: opcode and modifiers. -/
 def Instr.full (i : Instr) : String := ".".intercalate (i.opcode :: i.mods.toList)
 

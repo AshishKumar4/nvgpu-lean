@@ -69,7 +69,7 @@ private def encoded : List (String × Nat) := [
 
 /-- A rule's latency held to `encoded`. -/
 private def retime (r : OpRule) : OpRule :=
-  match encoded.lookup r.opcode with
+  match (if r.indexed then none else encoded.lookup r.opcode) with
   | some d =>
     if d ≥ r.timing.value.latency then r else
     { r with timing := { r.timing with

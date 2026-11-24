@@ -62,6 +62,9 @@ structure OpTiming where
   /-- Cycles from issue until a predicate the instruction writes can guard another instruction,
   where the part reads guards later than data operands (0: its latency). -/
   guardLatency : Nat := 0
+  /-- The warp issues nothing until the result lands, whatever its stall count says: the hardware
+  holds it (an indexed constant load, which no dependence counter covers). -/
+  holds : Bool := false
   deriving Repr, Inhabited
 
 /-- One row of an opcode table: instructions with this opcode and all of `mods` have `timing`.
@@ -69,11 +72,13 @@ Rows are matched in order, so specific rows come first. -/
 structure OpRule where
   opcode : String
   mods : Array String := #[]
+  /-- Only instructions whose constant operand is indexed by a register (`c[0x0][UR4+0x210]`). -/
+  indexed : Bool := false
   timing : Fact OpTiming
   deriving Repr, Inhabited
 
 def OpRule.matches (r : OpRule) (i : Instr) : Bool :=
-  r.opcode == i.opcode && r.mods.all i.hasMod
+  r.opcode == i.opcode && r.mods.all i.hasMod && (!r.indexed || i.constIndexed)
 
 /-- Warp scheduler policies. `greedyThenYoungest` is Huerta et al.'s CGGTY. `leastRecent`: the
 ready warp that issued longest ago, ties to the youngest; `greedyThenLeastRecent`: the warp that

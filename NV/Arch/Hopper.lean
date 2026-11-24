@@ -242,6 +242,11 @@ def ops : Array OpRule := #[
   op "UISETP" #[] (encoded (tm .uniform 2 4) ""
     ""),
   op "UPRMT" #[] (inferred (tm .uniform 2 4) "meas-h200" "" ""),
+  -- An indexed ULDC goes to the constant cache for its address, and the warp waits for it with
+  -- no dependence counter set (its stall count is 5): a dependent chain of them runs 87 cycles a
+  -- step on the GH200 (constcold.cu, warm), of which the loop around the load takes 22.
+  { op "ULDC" #[] (measOn { tm .uniform 1 65 with holds := true } "gh200/out/constcold.txt:2")
+      with indexed := true },
   op "ULDC" #[] (encoded (tm .uniform 1 2) ""
     ""),
   op "LDG" #[] (inferred (tmMem 654 11) "meas-h200" ""

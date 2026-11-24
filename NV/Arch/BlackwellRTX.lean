@@ -87,7 +87,7 @@ private def hopperOnly (opcode : String) : Bool :=
 
 private def retime (r : OpRule) : OpRule :=
   let h := r.timing
-  let lat := match encoded.lookup r.opcode with
+  let lat := match (if r.indexed then none else encoded.lookup r.opcode) with
     | some d => min h.value.latency d
     | none => h.value.latency
   let base := { h with
@@ -95,7 +95,7 @@ private def retime (r : OpRule) : OpRule :=
     kind := if h.kind == .documented then .inferred else h.kind
     measuredOn := if h.source.ref == "meas-h200" then some "H200" else h.measuredOn
     note := "" }
-  let base := match stallfix.find? (·.1 == r.opcode) with
+  let base := match (if r.indexed then none else stallfix.find? (·.1 == r.opcode)) with
     | some (_, lat, guard) =>
       { base with
         value := { base.value with latency := lat.getD base.value.latency, guardLatency := guard }

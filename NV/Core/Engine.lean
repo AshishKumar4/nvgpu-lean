@@ -757,6 +757,10 @@ private structure Kit where
   sources : Array (Array Nat)
   /-- Per instruction, the constant-cache lines its immediate-offset constant operands read. -/
   constRefs : Array (Array (Nat × Nat))
+  /-- Per instruction, a constant operand a uniform register indexes: its bank, the register and
+  the offset (`ULDC c[0x0][UR4+0x210]`); its line is known from the register at issue. -/
+  constIndexed : Array (Option (Nat × Nat × Int))
+  constLine : Nat
   constCapacity : Nat
   lineBytes : Nat
   prefetch : Nat
@@ -811,7 +815,7 @@ private structure St where
 warp's age (the scheduler's oldest/youngest order) is its CTA's id and warp index. -/
 private def placeCta (kit : Kit) (sm : Sm) (mem : MemSys) (si id start : Nat)
     (traces : Std.HashMap Nat WarpTrace) : Sm × MemSys × Std.HashMap Nat WarpTrace := Id.run do
-  let ⟨_, k, l, _, _, _, _, _, _, _, _, _, smsps, _, const0, threads, nWarps, (cx, cy, cz), _, _⟩ := kit
+  let ⟨_, k, l, _, _, _, _, _, _, _, _, _, _, _, smsps, _, const0, threads, nWarps, (cx, cy, cz), _, _⟩ := kit
   let (gx, gy, _) := l.grid
   let ctaid := (id % gx, (id / gx) % gy, id / (gx * gy))
   let (x, y, z) := ctaid
@@ -859,7 +863,7 @@ side of the memory system, its async unit), and nothing at or after `stop` happe
 stepped. Without, every SM steps and the memory system runs its quanta itself. -/
 private def pass (kit : Kit) (focus : Nat) (stop : Nat) (st : St) :
     Except String (St × Bool) := Id.run do
-  let ⟨p, k, l, ops, fps, timings, sources, constRefs, constCapacity, lineBytes, prefetch,
+  let ⟨p, k, l, ops, fps, timings, sources, constRefs, constIndexed, constLine, constCapacity, lineBytes, prefetch,
     codeLines, smsps, _, _, _, nWarps, _, _, epoch⟩ := kit
   let banks := max 1 p.regFile.banks.value
   let slots := max 1 (p.regFile.reuseEntriesPerBank.value * p.regFile.reuseSlotsPerEntry.value)
@@ -1120,7 +1124,10 @@ private def pass (kit : Kit) (focus : Nat) (stop : Nat) (st : St) :
         -- waits for it (`constMissCycles`; the cache holds `constCacheBytes`, LRU).
         if let some (pc, _) := s.w.current then
           let mut late := t
-          for (bank, line) in constRefs[pc]! do
+          let refs := constRefs[pc]! ++ (match constIndexed[pc]! with
+            | some (b, r, off) => #[(b, ((s.w.getUR r).toNat + off).toNat / constLine)]
+            | none => #[])
+          for (bank, line) in refs do
             match sm.constReady[(bank, line)]? with
             | some r => late := max late r
             | none =>
@@ -1137,7 +1144,7 @@ private def pass (kit : Kit) (focus : Nat) (stop : Nat) (st : St) :
               { w with readyAt := late, why := .fetch } }
             continue
           -- Lines that arrived join the cache, evicting the least recently used beyond capacity.
-          for (bank, line) in constRefs[pc]! do
+          for (bank, line) in refs do
             if sm.constReady.contains (bank, line) then
               let mut lines := sm.constLines
               if lines.size ≥ constCapacity then
@@ -1527,7 +1534,7 @@ private def pass (kit : Kit) (focus : Nat) (stop : Nat) (st : St) :
       -- Functionally a warp waits for every other warp's turn (none is ever stalled, so the
       -- greedy choice would keep a spinning warp).
       let hold := if l.functional then sm.slots.size else
-        (if ins.ctrl.yield then max ins.ctrl.stall 2 else max ins.ctrl.stall 1) +
+        max (if ins.ctrl.yield then max ins.ctrl.stall 2 else max ins.ctrl.stall 1) (if tm.holds then tm.latency else 0) +
         redirect
       -- While the sub-partition's tensor core runs a warpgroup MMA, its pipes lose a share of
       -- their time: the instruction's occupancy stretches (`TensorParams.wgmmaPipeSharePermille`).
@@ -1956,11 +1963,14 @@ private def runOnWith {m : Type → Type} {σ : Type} [Monad m] (pool : Pool m �
   let constRefs := k.code.map fun i => (i.operands.filterMap fun
     | .cbank b none off => some (b, off.toNat / constLine)
     | _ => none).toList.eraseDups.toArray
+  let constIndexed := k.code.map fun i => i.operands.findSome? fun
+    | .cbank b (some ⟨.ur, r⟩) off => some (b, r, off)
+    | _ => none
   let constCapacity := p.frontEnd.constCacheBytes.value / constLine
   -- The parameter block in device memory (`paramAddrOf`), where the async unit fetches a
   -- parameter's tensor map.
   let paramAddr := paramAddrOf l
-  let kit : Kit := { p, k, l, ops, fps, timings, sources, constRefs, constCapacity, lineBytes,
+  let kit : Kit := { p, k, l, ops, fps, timings, sources, constRefs, constIndexed, constLine, constCapacity, lineBytes,
                      prefetch, codeLines, smsps, nSms, const0, threads, nWarps,
                      cluster := l.clusterShape, paramAddr, codeEpoch := machine.clock }
   -- Each cluster's barrier, kept by the master (`ClusterBar`).

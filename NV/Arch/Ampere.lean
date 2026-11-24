@@ -125,9 +125,10 @@ private def hopperOnly (opcode : String) : Bool :=
 the Hopper latency, capped by `encoded`. -/
 private def retime (r : OpRule) : OpRule :=
   let h := r.timing
-  let lat := match encoded.lookup r.opcode with
-    | some d => min h.value.latency d
-    | none => h.value.latency
+  -- An indexed constant load waits on a scoreboard, not the encoded stall count.
+  let lat := match encoded.lookup r.opcode, r.indexed with
+    | some d, false => min h.value.latency d
+    | _, _ => h.value.latency
   let base := { h with
     value := { h.value with latency := lat }
     kind := if h.kind == .documented then .inferred else h.kind
@@ -144,8 +145,15 @@ private def retime (r : OpRule) : OpRule :=
 private def renamed : Array OpRule :=
   (Hopper.ops.filter (·.opcode == "REDG")).map fun r => { r with opcode := "RED" }
 
+/-- The A100's own indexed ULDC: a dependent chain runs 94 and 90 cycles a step warm (one CTA,
+one on every SM; constcold.cu), five more than the GH200's. -/
+private def indexedUldc (r : OpRule) : OpRule :=
+  if r.indexed && r.opcode == "ULDC" then
+    { r with timing := measOn { r.timing.value with latency := 67 } "a100-sxm4-40gb/out/constcold.txt:2" }
+  else r
+
 def ops : Array OpRule :=
-  ((Hopper.ops.filter fun r => !hopperOnly r.opcode) ++ renamed).map retime
+  ((Hopper.ops.filter fun r => !hopperOnly r.opcode) ++ renamed).map (indexedUldc ∘ retime)
 
 /-! ## Memory -/
 
