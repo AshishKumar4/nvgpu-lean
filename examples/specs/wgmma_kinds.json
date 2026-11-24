@@ -1,0 +1,4 @@
+{ "code": "wgmma_kinds.cu", "function": "wgmma_kinds", "grid": [1], "block": [128],
+  "buffers": [ { "name": "out", "bytes": 65536 } ],
+  "params": [ { "ordinal": 0, "ptr": "out" } ],
+  "expect": [ { "buffer": "out", "file": "wgmma_kinds.expected.bin" } ] }

@@ -190,6 +190,26 @@ __device__ __forceinline__ __nv_bfloat162 u2bf(uint32_t x) { return *reinterpret
 __device__ __forceinline__ uint32_t h2u(__half2 x) { return *reinterpret_cast<uint32_t*>(&x); }
 __device__ __forceinline__ uint32_t bf2u(__nv_bfloat162 x) { return *reinterpret_cast<uint32_t*>(&x); }
 
+// An integer to bfloat16 (`I2F.BF16`, `Num.ofInt`), rounded once: `mode` 0 nearest even, 1 toward
+// zero, 2 down, 3 up.
+__device__ inline uint32_t i2bf16(uint64_t mag, bool neg, int mode) {
+  if (mag == 0) return 0;
+  const int msb = 63 - __clzll((long long)mag);
+  uint64_t kept = mag;
+  int e = msb;
+  if (msb > 7) {
+    const int sh = msb - 7;
+    kept = mag >> sh;
+    const uint64_t rem = mag & ((1ull << sh) - 1), half = 1ull << (sh - 1);
+    const bool up = mode == 0 ? (rem > half || (rem == half && (kept & 1))) : mode == 1 ? false
+                  : (mode == 3) != neg ? rem != 0 : false;
+    if (up && ++kept == 256) { kept = 128; e += 1; }
+  } else {
+    kept = mag << (7 - msb);
+  }
+  return (neg ? 0x8000u : 0u) | (uint32_t)(e + 127) << 7 | (uint32_t)(kept & 0x7f);
+}
+
 __device__ __forceinline__ uint32_t flush32(uint32_t x) { return (x & 0x7f800000u) == 0 ? (x & 0x80000000u) : x; }
 __device__ __forceinline__ float fl(uint32_t x) { return __uint_as_float(x); }
 __device__ __forceinline__ uint32_t fadd32(bool ftz, uint32_t a, uint32_t b) {
@@ -557,7 +577,22 @@ __device__ inline uint64_t blockAt(const Datapath& d, const uint32_t* a, const u
 // ---------------------------------------------------------------------------------------------
 // Warpgroup MMA (NV.Async.Wgmma), 16-bit inputs from shared memory, f32 accumulator.
 
-enum InType { F16 = 0, BF16 = 1 };
+enum InType { F16 = 0, BF16 = 1, TF32 = 2, E4M3 = 3, E5M2 = 4, S8 = 5, U8 = 6 };
+
+// An operand element's bytes, and its codec and fraction bits (`Codec.of`, `NV.Num.Format`).
+__device__ __forceinline__ uint32_t elemBytes(uint32_t t) { return t == TF32 ? 4 : t >= E4M3 ? 1 : 2; }
+__device__ __forceinline__ Codec codecOf(uint32_t t) {
+  switch (t) {
+    case BF16: return codecIeee(8, 7);
+    case TF32: return codecPad(8, 10, 13);
+    case E4M3: { Codec c = codecIeee(4, 3); c.ieee = false; c.nanOnly = true; return c; }
+    case E5M2: return codecIeee(5, 2);
+    default: return codecIeee(5, 10);
+  }
+}
+__device__ __forceinline__ int manOf(uint32_t t) {
+  return t == BF16 ? 7 : t == E4M3 ? 3 : t == E5M2 ? 2 : 10;
+}
 
 // `Swizzle.apply` for wgmma's descriptor modes (`Desc.decode`: 1 b128, 2 b64, 3 b32).
 __device__ __forceinline__ uint32_t descSwizzle(int mode, uint32_t a) {
@@ -570,15 +605,16 @@ __device__ __forceinline__ uint32_t descSwizzle(int mode, uint32_t a) {
   }
 }
 
-// `Desc.addr`: the shared address of element (mn, k) of a 2-byte operand.
-__device__ __forceinline__ uint32_t descAddr(uint64_t desc, bool kMajor, int mn, int k, uint32_t* fault) {
+// `Desc.addr`: the shared address of element (mn, k) of an operand of `esz`-byte elements.
+__device__ __forceinline__ uint32_t descAddr(uint64_t desc, bool kMajor, int mn, int k, uint32_t* fault,
+                                             uint32_t esz = 2) {
   uint32_t start = (uint32_t)(desc & 0x3fff) << 4;
   uint32_t lbo = (uint32_t)((desc >> 16) & 0x3fff) << 4;
   uint32_t sbo = (uint32_t)((desc >> 32) & 0x3fff) << 4;
   if ((desc >> 49) & 7) atomicOr(fault, 2u);  // a non-zero matrix base offset is not modelled
   int mode = (int)((desc >> 62) & 3);
   uint32_t W = mode == 0 ? 0 : mode == 1 ? 128 : mode == 2 ? 64 : 32;
-  const uint32_t esz = 2, T = 8;
+  const uint32_t T = 16 / esz;
   uint32_t off;
   if (kMajor) {
     if (W == 0) off = (mn % 8) * 16 + (mn / 8) * sbo + (k % T) * esz + (k / T) * lbo;
@@ -997,6 +1033,11 @@ struct MmaJob {
   uint32_t rows, cols, tileCols;
   uint32_t dl, dc, M;       // into tensor memory (`toTmem`): its lane and column, the MMA's M
   uint8_t ty, aK, bK, negA, negB, acc, toTmem, pair, ws;  // ws: `.ws`'s Layouts E and G for M 64, 32
+  uint8_t tyB, sat;         // B's type (`ty`, A's); an integer sum clamped (`.satfinite`)
+  uint8_t alignFrac, outFrac, posZero;  // a float kind's datapath besides f16's (`kindDot`)
+  uint32_t meta;            // sparse A (`tcgen05.mma.sp`): the metadata's lane and column; NONE, dense
+  uint32_t sel;             // its sparsity selector
+  uint32_t aTmem;           // A in tensor memory (`UTCHMMA tmem[...]`): its lane and column; NONE
 };
 
 // A copy: a TMA box (`kind` 0 load, 1 store) or bytes (`kind` 2).
@@ -1056,14 +1097,25 @@ __device__ inline void warpExit(const Ctx& x) {
   if (x.helpers) atomicSub(&x.pool->live, 1u);
 }
 
-// Element (mn, k) of an MMA's A or B (`Desc.addr`), encoded for the datapath (`Codec.encode`):
-// from the issuer's CTA's shared memory or, past the split, the next cluster rank's.
+// Element (mn, k) of an MMA's A or B (`Desc.addr`), as stored, 1, 2 or 4 bytes (`MmaJob.ty`,
+// `tyB`), a float's sign flipped when negated: from the issuer's CTA's shared memory or, past the
+// split, the next cluster rank's; or A from tensor memory.
 __device__ inline uint32_t mmaRaw(const Ctx& x, const MmaJob& j, bool isA, uint32_t mn, int k) {
-  uint32_t split = isA ? j.aSplit : j.bSplit, rank = x.clusterRank;
-  if (mn >= split) { mn -= split; rank += 1; }
-  uint32_t a = descAddr(isA ? j.da : j.db, isA ? j.aK : j.bK, (int)mn, k, x.fault);
-  uint16_t v = __ldcg((const unsigned short*)sharedAt(x, (rank << 24) | a));
-  if (isA ? j.negA : j.negB) v ^= 0x8000;
+  const uint32_t t = isA ? j.ty : j.tyB, esz = elemBytes(t);
+  const uint8_t* p;
+  if (isA && j.aTmem != NONE) {
+    // A in tensor memory (`Tcgen05.ASrc.tmem`): row `mn` in D's lane for it (a pair's rows from
+    // 128 on in the peer's), `4 / esz` elements a column from A's, low first.
+    const uint32_t lane = j.aTmem >> 16, col = (j.aTmem & 0xffffu) + (uint32_t)k * esz / 4;
+    p = tmemAt(x, j.pair && mn >= 128 ? ((x.clusterRank + 2) << 24) + tmemByte(lane + mn - 128, col)
+                                      : tmemByte(j.pair ? lane + mn : rowLane(j.M, lane, mn), col)) + (uint32_t)k * esz % 4;
+  } else {
+    uint32_t split = isA ? j.aSplit : j.bSplit, rank = x.clusterRank;
+    if (mn >= split) { mn -= split; rank += 1; }
+    p = sharedAt(x, (rank << 24) | descAddr(isA ? j.da : j.db, isA ? j.aK : j.bK, (int)mn, k, x.fault, esz));
+  }
+  uint32_t v = esz == 4 ? __ldcg((const unsigned*)p) : esz == 2 ? (uint32_t)__ldcg((const unsigned short*)p) : (uint32_t)__ldcg(p);
+  if ((isA ? j.negA : j.negB) && t < S8) v ^= 1u << (8 * esz - 1);
   return v;
 }
 __device__ inline uint32_t mmaElem(const Ctx& x, const MmaJob& j, bool isA, uint32_t mn, int k, const Codec& c) {
@@ -1099,6 +1151,107 @@ __device__ inline uint32_t* mmaOut(const Ctx& x, const MmaJob& j, uint32_t* buf,
   return (uint32_t*)tmemAt(x, b);
 }
 
+// A sparse MMA's tile (`Tcgen05.metaCell`, `sparsePos`, 16-bit kinds): A's 16 stored elements a
+// row in the stage, encoded; B's 32 rows a column as stored, two to a word; each output gathers
+// the 16 of B its row's metadata names and takes their dot with the row (the dense datapath).
+template <class Sync>
+static __device__ __noinline__ void sparseTask(const Ctx& x, const MmaJob& j, uint32_t* buf, uint32_t row0, uint32_t col0,
+                                  uint32_t nr, uint32_t nc, uint32_t r, uint32_t n, uint32_t* st, Sync sync,
+                                  const Codec& c, const Datapath& dp) {
+  uint32_t* A = st;
+  uint32_t* B = st + 256;
+  sync();
+  for (uint32_t e = r; e < 16 * nr; e += n) A[e] = encode(c, mmaRaw(x, j, true, row0 + e / 16, (int)(e % 16)));
+  for (uint32_t e = r; e < 16 * nc; e += n)
+    B[e] = mmaRaw(x, j, false, col0 + e / 16, (int)(2 * (e % 16))) |
+           mmaRaw(x, j, false, col0 + e / 16, (int)(2 * (e % 16) + 1)) << 16;
+  sync();
+  const uint32_t ml = j.meta >> 16, mc = (j.meta & 0xffffu) + j.sel;
+  for (uint32_t o = r; o < 16 * j.tileCols; o += n) {
+    const uint32_t i = o / 16, k = o % 16;
+    if (i >= nr || k >= nc) continue;
+    // Row `row0 + i`'s fields: chunks 0-3 in the lane of its 16-row group's row 8·0 + i % 8, 4-7
+    // in that of row 8 + i % 8, at bit 16 ((i % 16) / 8).
+    const uint32_t g = row0 + i - (row0 + i) % 16, h = 16 * ((row0 + i) % 16 / 8);
+    uint32_t w[2];
+    for (int q = 0; q < 2; ++q)
+      w[q] = __ldcg((const uint32_t*)tmemAt(x, tmemByte(rowLane(j.M, ml, g + 8 * q + (row0 + i) % 8), mc)));
+    uint32_t y[16];
+#pragma unroll
+    for (int s = 0; s < 16; ++s) {
+      const uint32_t f = (w[s / 8] >> (h + 4 * ((s / 2) % 4))) & 15u;
+      const uint32_t pos = 4 * (s / 2) + (s % 2 == 0 ? f & 3u : (f >> 2) & 3u);
+      y[s] = encode(c, (B[16 * k + pos / 2] >> (16 * (pos % 2))) & 0xffffu);
+    }
+    uint32_t* d = mmaOut(x, j, buf, row0 + i, col0 + k);
+    *d = (uint32_t)blockAtN<16>(dp, A + 16 * i, y, j.acc ? __ldcg(d) : 0u);
+  }
+}
+
+// Element `s` of a row of `esz`-byte elements packed into words.
+__device__ __forceinline__ uint32_t packedAt(const uint32_t* w, uint32_t s, uint32_t esz) {
+  const uint32_t bit = 8 * esz * s;
+  return esz == 4 ? w[s] : (w[bit / 32] >> (bit % 32)) & ((1u << (8 * esz)) - 1u);
+}
+
+// One output of a kind other than f16's: K products of A's row and B's column (packed, as stored)
+// onto `acc`: a float kind's on `dp` (one block of the instruction's K: `tf32f32`'s 8, `f8f32`'s
+// 32; a zero sum +0 where `posZero`), an integer kind's exactly, wrapped or clamped (`dotInt`).
+template <int K>
+__device__ inline uint32_t kindDot(const MmaJob& j, const uint32_t* a, const uint32_t* b, const Datapath& dp,
+                                   const Codec& ca, const Codec& cb, uint32_t acc) {
+  const uint32_t ea = elemBytes(j.ty), eb = elemBytes(j.tyB);
+  if (j.ty >= S8) {
+    int64_t sum = (int32_t)acc;
+#pragma unroll
+    for (int s = 0; s < K; ++s) {
+      const uint32_t x = packedAt(a, s, ea), y = packedAt(b, s, eb);
+      sum += (int64_t)(j.ty == S8 ? (int32_t)(int8_t)x : (int32_t)x) * (j.tyB == S8 ? (int32_t)(int8_t)y : (int32_t)y);
+    }
+    if (j.sat) return (uint32_t)(int32_t)max((int64_t)INT32_MIN, min((int64_t)INT32_MAX, sum));
+    return (uint32_t)sum;
+  }
+  uint32_t x[K], y[K];
+#pragma unroll
+  for (int s = 0; s < K; ++s) { x[s] = encode(ca, packedAt(a, s, ea)); y[s] = encode(cb, packedAt(b, s, eb)); }
+  const uint32_t r = (uint32_t)blockAtN<K>(dp, x, y, acc);
+  return j.posZero && r == 0x80000000u ? 0u : r;
+}
+
+// An MMA tile of a kind other than f16's (TF32, FP8 or 8-bit integer inputs: `tcgen05.mma` of
+// `.kind::tf32`, `::f8f6f4`, `::i8`, warpgroup MMAs of them): A's rows and B's columns, 32 bytes
+// each, staged as stored, each lane's outputs decoded from them (`own`: the lanes' accumulators,
+// as `mmaTask`'s).
+template <class Sync>
+static __device__ __noinline__ void kindTask(const Ctx& x, const MmaJob& j, uint32_t* buf, uint32_t row0, uint32_t col0,
+                                uint32_t nr, uint32_t nc, uint32_t r, uint32_t n, uint32_t* st, Sync sync,
+                                uint32_t* own) {
+  const uint32_t ea = elemBytes(j.ty), eb = elemBytes(j.tyB), K = 32 / ea;
+  uint32_t* A = st;
+  uint32_t* B = st + 128;
+  sync();
+  for (uint32_t w = r; w < 8 * (nr + nc); w += n) {
+    const bool isA = w < 8 * nr;
+    const uint32_t e = isA ? ea : eb, per = 4 / min(e, 4u), q = isA ? w : w - 8 * nr, mn = q / 8;
+    uint32_t v = 0;
+    for (uint32_t i = 0; i < per; ++i)
+      v |= mmaRaw(x, j, isA, isA ? j.aRow0 + row0 + mn : col0 + mn, (int)((q % 8) * per + i)) << (8 * e * i);
+    (isA ? A : B)[q] = v;
+  }
+  sync();
+  const Codec ca = codecOf(j.ty), cb = codecOf(j.tyB);
+  const Datapath dp = prepareF32(j.alignFrac, -133, j.outFrac, false, manOf(j.ty), manOf(j.tyB));
+  for (uint32_t o = r; o < 16 * j.tileCols; o += n) {
+    uint32_t i, k;
+    tilePos(o, &i, &k);
+    if (i >= nr || k >= nc) continue;
+    const uint32_t v = 4 * ((col0 + k) / 8) + (o / 32) % 4;
+    uint32_t* d = own ? own + v : mmaOut(x, j, buf, row0 + i, col0 + k);
+    const uint32_t c = !j.acc ? 0u : own ? *d : __ldcg(d);
+    *d = K == 8 ? kindDot<8>(j, A + 8 * i, B + 8 * k, dp, ca, cb, c) : kindDot<32>(j, A + 8 * i, B + 8 * k, dp, ca, cb, c);
+  }
+}
+
 // MMA task `t`, a tile, run by `n` lanes of one warp (`r` this lane's rank, `sync` the warp's
 // barrier) with its operands decoded once into the warp's stage `st`; `aKept`: the stage holds the
 // tile's A already (the warp's previous task was the same rows'). `own`: the lanes'
@@ -1116,6 +1269,14 @@ static __device__ __noinline__ void mmaTask(const Ctx& x, const MmaJob& j, uint3
   // A whole warp on a GPU whose `mma.sync` computes as this datapath does: each 16 x 8 block of
   // the tile one `mma.sync.m16n8k16`, its fragments the lanes' (`tilePos`: block-major, as
   // `accPos`), rows and columns past the tile's edge zero and not stored.
+  if (j.meta != NONE) {
+    sparseTask(x, j, buf, row0, col0, nr, nc, r, n, st, sync, c, dp);
+    return;
+  }
+  if (j.ty > BF16) {
+    kindTask(x, j, buf, row0, col0, nr, nc, r, n, st, sync, own);
+    return;
+  }
   if (n == 32 && nativeMma(MmaModel{16, 25, -133}, false)) {
     const uint32_t g = r / 4, q = r % 4;
     uint32_t a[4];
@@ -1414,21 +1575,24 @@ static __device__ __noinline__ void serve(const Ctx& x, uint32_t* smem) {
   }
 }
 
-// `HGMMA.64xNx16.F32[.BF16]` from shared memory, by the whole warp (`wgmma.mma_async.sync
-// .aligned`), each of the warpgroup's warps its 16 rows: one job of N/8 tiles of 16 x 8, whose
-// outputs are the lanes' own values (`tilePos`). Thread `t` of the warpgroup holds row
-// `16·(t/32) + (t%32)/4 + 8·((v/2) mod 2)`, column `2·(t%4) + v mod 2 + 8·(v/4)` of its value v
-// (`accPos`), in `acc`, updated in place (`scaleD` false: from zero). Hopper's datapath for
-// f16/bf16 inputs and an f32 accumulator: blocks of 16, 25 fraction bits aligned, exponent floor
-// -133, the sum truncated to binary32 (`Hopper.f16f32`).
+// `HGMMA.64xNx16.F32[.BF16]`, `HGMMA.64xNx8.F32.TF32`, `QGMMA.64xNx32.F32` and `IGMMA.64xNx32`
+// from shared memory, by the whole warp (`wgmma.mma_async.sync.aligned`), each of the warpgroup's
+// warps its 16 rows: one job of N/8 tiles of 16 x 8, whose outputs are the lanes' own values
+// (`tilePos`). Thread `t` of the warpgroup holds row `16·(t/32) + (t%32)/4 + 8·((v/2) mod 2)`,
+// column `2·(t%4) + v mod 2 + 8·(v/4)` of its value v (`accPos`), in `acc`, updated in place
+// (`scaleD` false: from zero). Hopper's datapaths into f32 (`NV.Num.Hopper`): f16/bf16 in blocks of
+// 16, TF32 of 8, 25 fraction bits aligned, the sum truncated to binary32; FP8 in blocks of 32, 13
+// fraction bits aligned and kept; 8-bit integers exactly into s32.
 template <int N>
 static __device__ __noinline__ void hgmma(const Ctx& x, InType ty, uint64_t da, uint64_t db, bool aK, bool bK, bool negA,
-                             bool negB, bool scaleD, uint32_t* acc, uint32_t lane, uint32_t warp, uint32_t mask) {
+                             bool negB, bool scaleD, uint32_t* acc, uint32_t lane, uint32_t warp, uint32_t mask,
+                             InType tyB = F16) {
+  if (ty <= BF16) tyB = ty;
   if (mask != 0xffffffffu) { if (lane == __ffs(mask) - 1) atomicOr(x.fault, 32u); return; }
   // On a GPU whose `mma.sync` computes as Hopper's warpgroup MMA does: this warp's 16 rows as N/8
   // `mma.sync.m16n8k16`, whose accumulator fragments are the lanes' values here (`accPos`), the
   // operands read from the descriptors' elements.
-  if (nativeMma(mmaModel(90, false), false)) {
+  if (ty <= BF16 && nativeMma(mmaModel(90, false), false)) {
     const uint32_t g = lane / 4, q = lane % 4, row0 = 16 * (warp % 4);
     auto el = [&](uint64_t desc, bool kMajor, bool neg, uint32_t mn, int k) {
       const uint32_t at = descAddr(desc, kMajor, (int)mn, k, x.fault);
@@ -1459,6 +1623,8 @@ static __device__ __noinline__ void hgmma(const Ctx& x, InType ty, uint64_t da, 
   m.da = da; m.db = db; m.aRow0 = 16 * (warp % 4); m.aSplit = NONE; m.bSplit = NONE;
   m.rows = 16; m.cols = N; m.tileCols = 8; m.dl = 0; m.dc = 0; m.M = 64;
   m.ty = (uint8_t)ty; m.aK = aK; m.bK = bK; m.negA = negA; m.negB = negB; m.acc = scaleD; m.toTmem = 0; m.pair = 0;
+  m.meta = NONE; m.aTmem = NONE; m.tyB = (uint8_t)tyB; m.sat = 0;
+  m.alignFrac = ty >= E4M3 ? 13 : 25; m.outFrac = ty >= E4M3 ? 13 : 23; m.posZero = 0;
   // Value v of this lane is output `lane + 32·(v mod 4)` of block `v/4`.
   auto at = [&](uint32_t v) {
     uint32_t i, k;
@@ -1475,13 +1641,60 @@ static __device__ __noinline__ void hgmma(const Ctx& x, InType ty, uint64_t da, 
   });
 }
 
-// `UTCHMMA[.2CTA]`: one `tcgen05.mma` of `.kind::f16` (f16 or bf16 inputs into f32), A and B from
-// shared memory, issued by one thread (`Tcgen05.Inst.op`): D = A·B (+ D), the B200's datapath
-// (`NV.Num.Blackwell.f16f32`: Hopper's), in tiles of 16 x 16. `pair`: `.cta_group::2`, M 256 (rows
+// `HGMMA.64xNx16.F32[.BF16] Rd, Ra, gdesc[...]`: as `hgmma`, A from registers (`wgmma`'s RS
+// form): this lane's four, each two halves of A's fragment (`Wgmma.aPos`, `mma.sync`'s), negated
+// by the operand's sign. The warp runs every tile itself, A decoded once into its stage.
+template <int N>
+static __device__ __noinline__ void hgmmaRS(const Ctx& x, InType ty, const uint32_t* areg, uint64_t db, bool bK,
+                               bool negA, bool negB, bool scaleD, uint32_t* acc, uint32_t lane, uint32_t warp,
+                               uint32_t mask) {
+  if (mask != 0xffffffffu) { if (lane == __ffs(mask) - 1) atomicOr(x.fault, 32u); return; }
+  uint32_t a[4];
+  for (int r = 0; r < 4; ++r) a[r] = areg[r] ^ (negA ? 0x80008000u : 0u);
+  const uint32_t g = lane / 4, q = lane % 4;
+  if (nativeMma(mmaModel(90, false), false)) {
+    for (uint32_t nb = 0; nb < N / 8; ++nb) {
+      uint32_t b[2], d[4];
+      for (int r = 0; r < 2; ++r) {
+        const int k = 2 * q + 8 * r;
+        auto el = [&](int kk) {
+          return (uint32_t)(__ldcg((const unsigned short*)sharedAt(x, (x.clusterRank << 24) |
+                    descAddr(db, bK, (int)(8 * nb + g), kk, x.fault))) ^ (negB ? 0x8000u : 0u));
+        };
+        b[r] = el(k) | el(k + 1) << 16;
+      }
+      for (int v = 0; v < 4; ++v) d[v] = scaleD ? acc[4 * nb + v] : 0u;
+      mma16816(ty == BF16, a, b, d);
+      for (int v = 0; v < 4; ++v) acc[4 * nb + v] = d[v];
+    }
+    return;
+  }
+  const Codec c = ty == BF16 ? codecIeee(8, 7) : codecIeee(5, 10);
+  uint32_t* st = x.stage;
+  for (int v = 0; v < 8; ++v)
+    st[16 * (g + 8 * ((v / 2) % 2)) + 2 * q + v % 2 + 8 * (v / 4)] = encode(c, (a[v / 2] >> (16 * (v % 2))) & 0xffffu);
+  __syncwarp();
+  MmaJob m;
+  m.da = 0; m.db = db; m.aRow0 = 0; m.aSplit = NONE; m.bSplit = NONE;
+  m.rows = 16; m.cols = N; m.tileCols = 8; m.dl = 0; m.dc = 0; m.M = 64;
+  m.ty = (uint8_t)ty; m.tyB = (uint8_t)ty; m.aK = 1; m.bK = bK; m.negA = 0; m.negB = negB; m.acc = scaleD;
+  m.toTmem = 0; m.pair = 0; m.ws = 0; m.sat = 0; m.meta = NONE; m.aTmem = NONE;
+  m.alignFrac = 25; m.outFrac = 23; m.posZero = 0;
+  for (uint32_t t = 0; t < N / 8; ++t)
+    mmaTask(x, m, (uint32_t*)nullptr, t, lane, 32, st, [] { __syncwarp(); }, acc, true);
+}
+
+// `UTCHMMA[.2CTA]`, `UTCQMMA`, `UTCIMMA`: one `tcgen05.mma` (`kind` 0: `.kind::f16`, f16, bf16
+// or tf32 inputs into f32; 1: `::f8f6f4` of FP8 inputs, E4M3 and E5M2, into f32; 2: `::i8`, u8 and
+// s8 into s32), A and B from shared memory, issued by one thread (`Tcgen05.Inst.op`): D = A·B
+// (+ D), the B200's datapaths (`NV.Num.Blackwell`; `f16f32` Hopper's), in tiles of 16 x 16. `pair`: `.cta_group::2`, M 256 (rows
 // and columns from 128 and N/2 on the peer, the next rank) or 128 (rows from 64, `mmaOut`'s Layout
-// B). Others set the fault flag.
+// B). `meta`: sparse A's metadata (`tcgen05.mma.sp`, `sparseTask`), of `.cta_group::1`; 0, none.
+// `aTmem`: A's `tcgen05` address when it is in tensor memory (`mmaRaw`); NONE, from `da`.
+// Others set the fault flag.
 static __device__ __noinline__ void utcmma(const Ctx& x, uint64_t da, uint64_t db, uint32_t d, uint32_t idesc, bool accumulate,
-                              bool pair, uint32_t lane, uint32_t warp, bool ws = false, uint64_t zeroMask = 0) {
+                              bool pair, uint32_t lane, uint32_t warp, bool ws = false, uint64_t zeroMask = 0,
+                              uint32_t meta = 0, uint32_t kind = 0, uint32_t aTmem = NONE) {
   auto f = [&](int lo, int w) { return (idesc >> lo) & ((1u << w) - 1); };
   uint32_t dtype = f(4, 2), atype = f(7, 3), btype = f(10, 3);
   bool negA = f(13, 1), negB = f(14, 1), transA = f(15, 1), transB = f(16, 1);
@@ -1489,10 +1702,19 @@ static __device__ __noinline__ void utcmma(const Ctx& x, uint64_t da, uint64_t d
   // `.ws`: M 32, 64 or 128, N 64, 128 or 256, a zero-column mask that zeroes or shifts nothing.
   const bool wsBad = ws && (pair || (M != 32 && M != 64 && M != 128) || (N != 64 && N != 128 && N != 256) ||
                             ((zeroMask >> 39) & 1) || ((zeroMask >> 56) & 63));
-  bool bad = wsBad || f(2, 1) || f(30, 2) || dtype != 1 || atype > 1 || btype != atype ||
+  const bool sparse = f(2, 1);
+  const bool spBad = sparse ? ws || pair || f(0, 2) > 1 || (meta >> 16) != (d >> 16) : meta != 0;
+  // The kind's types (Table 51): f16 0, bf16 1, tf32 2, alike; E4M3 0, E5M2 1, in any mix; u8 0,
+  // s8 1, in any mix. FP6 and FP4 inputs, an f16 D and `.satfinite` on a float kind fault.
+  const bool typeBad = kind == 0 ? atype > 2 || btype != atype || dtype != 1 || f(3, 1)
+                     : kind == 1 ? atype > 1 || btype > 1 || dtype != 1 || f(3, 1)
+                                 : atype > 1 || btype > 1 || dtype != 2 || negA || negB;
+  // A in tensor memory: in D's lanes; not with `.ws` or a pair of M = 128.
+  const bool aBad = aTmem != NONE && (ws || (pair && M == 128) || (aTmem >> 16) != (d >> 16));
+  bool bad = wsBad || spBad || typeBad || aBad || (sparse && (kind != 0 || atype == 2)) || f(30, 2) ||
              (ws ? false : pair ? (M != 256 && M != 128) : (M != 64 && M != 128)) || N < 8 || N > 256 ||
-             ((da >> 61) & 1) || ((db >> 61) & 1) ||
-             ((da >> 46) & 7) != 1 || ((db >> 46) & 7) != 1;
+             (aTmem == NONE && (((da >> 61) & 1) || ((da >> 46) & 7) != 1)) || ((db >> 61) & 1) ||
+             ((db >> 46) & 7) != 1;
   uint32_t dl = d >> 16, dc = d & 0xffffu;
   const uint32_t parts = (pair && M == 128) || (ws && M == 64) ? 2 : ws && M == 32 ? 4 : 1;
   if (bad || dc + N / parts > 512 || (M == 64 && !ws ? (dl != 0 && dl != 16) : dl != 0)) {
@@ -1504,8 +1726,15 @@ static __device__ __noinline__ void utcmma(const Ctx& x, uint64_t da, uint64_t d
   MmaJob& m = j.mma;
   m.da = da; m.db = db; m.aRow0 = 0; m.aSplit = pair ? M / 2 : NONE; m.bSplit = pair ? N / 2 : NONE;
   m.rows = M; m.cols = N; m.tileCols = 16; m.dl = dl; m.dc = dc; m.M = M;
-  m.ty = (uint8_t)(atype == 1 ? BF16 : F16); m.aK = !transA; m.bK = !transB; m.negA = negA; m.negB = negB;
+  auto ty = [&](uint32_t t) {
+    return (uint8_t)(kind == 0 ? (t == 2 ? TF32 : t == 1 ? BF16 : F16) : kind == 1 ? (t == 1 ? E5M2 : E4M3) : (t == 1 ? S8 : U8));
+  };
+  m.ty = ty(atype); m.tyB = ty(btype); m.sat = f(3, 1);
+  // The B200's datapaths: binary32 alignment; a zero FP8 sum +0 (`Blackwell.f8f32`).
+  m.alignFrac = 25; m.outFrac = 23; m.posZero = kind == 1;
+  m.aK = !transA; m.bK = !transB; m.negA = negA; m.negB = negB;
   m.acc = accumulate; m.toTmem = 1; m.pair = pair; m.ws = ws;
+  m.meta = sparse ? meta : NONE; m.sel = f(0, 2); m.aTmem = aTmem;
   runJob(x, j, warp, 0, 1, 1u << lane, [] {}, (uint32_t*)nullptr, false, [](unsigned long long) {});
   __threadfence();
 }

@@ -69,10 +69,12 @@ GPU, runs it, and compares global memory with the simulator's result byte for by
 warpgroup or tensor-memory MMA, or a TMA or bulk copy, is split into independent tasks
 (16-row output tiles, 4 KB of rows). The issuing warp runs them, along with helper CTAs on the
 SMs the launch leaves idle. So the B200's tcgen05 GEMM runs on an A100 in 0.12 ms (32 ms in one
-issuing thread), bit for bit equal to the simulator. All 22 example launches, exported for the
+issuing thread), bit for bit equal to the simulator. All 33 example launches, exported for the
 H100, A100 and B200 (clusters, distributed shared memory, TMA multicast, `mma.sync` with
-`ldmatrix`/`stmatrix`, and divergent loops with `BREAK` among them), are bit-exact on an
-A100-SXM4-40GB and on a GH200, with helper CTAs and without.
+`ldmatrix`/`stmatrix`, divergent loops with `BREAK`, warpgroup MMAs of TF32, FP8 and 8-bit
+integers and with A from registers, and tcgen05 MMAs of every kind without scale factors, with A
+in tensor memory and with sparse A among them), are bit-exact on an A100-SXM4-40GB and on a
+GH200, with helper CTAs and without.
 
 ## Proving things
 

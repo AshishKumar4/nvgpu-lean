@@ -7,6 +7,8 @@ for gpu in h200 h100 h100-pcie h100-nvl a100-40 a100-80 rtxpro6000 b200 b300; do
   for f in examples/specs/axpy.json examples/specs/reduce.json examples/specs/reduce_grid.json; do lake exe sim "$f" --gpu "$gpu"; done
 done
 for gpu in h100 h100-pcie h100-nvl; do lake exe sim examples/specs/gemm_tma_wgmma.json --gpu "$gpu"; done
+lake exe sim examples/specs/wgmma_kinds.json --gpu h100
+lake exe sim examples/specs/wgmma_kinds.json --gpu h100 --functional
 for gpu in h200 h100 h100-pcie h100-nvl rtxpro6000; do
   lake exe sim examples/specs/cluster_dsmem.json --gpu "$gpu"
 done
@@ -26,6 +28,10 @@ lake exe sim examples/specs/tcgen05_ws.json --gpu b200
 lake exe sim examples/specs/tcgen05_ws.json --gpu b200 --functional
 lake exe sim examples/specs/tcgen05_sp.json --gpu b200
 lake exe sim examples/specs/tcgen05_sp.json --gpu b200 --functional
+lake exe sim examples/specs/tcgen05_spx.json --gpu b200
+lake exe sim examples/specs/tcgen05_spx.json --gpu b200 --functional
+lake exe sim examples/specs/tcgen05_kinds.json --gpu b200
+lake exe sim examples/specs/tcgen05_kinds.json --gpu b200 --functional
 lake exe sim examples/specs/tcgen05_gemm.json --gpu b300
 # --until stops a launch early: the GEMM (4,000 cycles and more whole) stopped at 2000 reports the
 # cycles it ran, the stop rounded up to the engine's quantum (within 200).
@@ -35,3 +41,10 @@ echo "gemm_tma_wgmma --until 2000: $c active cycles"; [ "$c" -ge 2000 ] && [ "$c
 lake exe sim examples/specs/gemm_tma_wgmma.json --gpu h100 --spans 2> spans.txt > /dev/null
 n=$(grep -c "^cta " spans.txt); g=$(python3 -c "import json; d=json.load(open('examples/specs/gemm_tma_wgmma.json')); import math; print(math.prod(d['grid']))")
 echo "gemm_tma_wgmma --spans: $n CTAs of $g"; [ "$n" -eq "$g" ] && awk '/^cta /{ if ($8 <= $6) exit 1 }' spans.txt
+# Sparse tcgen05.mma through the PTX interpreter: the same outputs.
+lake build spec-ptx
+for f in tcgen05_sp tcgen05_spx; do
+  nvcc -ptx -arch=sm_100a examples/specs/$f.cu -o examples/specs/$f.ptx
+  lake exe spec-ptx examples/specs/$f.json --gpu b200 --schedules 1 --save $f-ptx
+  cmp $f-ptx/0-out.bin examples/specs/$f.expected.bin
+done

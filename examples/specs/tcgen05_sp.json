@@ -1,4 +1,4 @@
 { "code": "tcgen05_sp.cu", "function": "tcgen05_sp", "grid": [1], "block": [128],
-  "buffers": [ { "name": "out", "bytes": 131072 } ],
+  "buffers": [ { "name": "out", "bytes": 65536 } ],
   "params": [ { "ordinal": 0, "ptr": "out" } ],
   "expect": [ { "buffer": "out", "file": "tcgen05_sp.expected.bin" } ] }

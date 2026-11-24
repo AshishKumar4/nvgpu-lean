@@ -1214,9 +1214,22 @@ def f_i2f(i):
     # `I2F[.F16|.F64][.type][.RZ|.RM|.RP] Rd, Ra`: to binary32 (binary16 in the low half, binary64
     # in the pair); a 64-bit integer from the pair Ra:Ra+1.
     mods = i["mods"]
-    if any(m not in RND_F and m not in INTS and m not in ("F16", "F64") for m in mods):
+    if any(m not in RND_F and m not in INTS and m not in ("F16", "F64", "BF16") for m in mods):
         raise Lift(f"I2F {mods}")
     ty, w = next((INTS[m] for m in mods if m in INTS), ("s32", 32))
+    if "BF16" in mods:
+        # In software (`i2bf16`): PTX's cvt to bf16 from an integer needs sm_90.
+        if w == 8:
+            raise Lift(f"I2F {mods}")
+        o = i["ops"]
+        mode = {"RZ": 1, "RM": 2, "RP": 3}.get(next((m for m in mods if m in RND_F), ""), 0)
+        v = f"U64({val(o[1])}, {hi(o[1])})" if w == 64 else f"(uint64_t)(uint32_t){val(o[1])}"
+        if w == 16:
+            v = f"(uint64_t)(uint16_t){val(o[1])}"
+        if ty.startswith("s"):
+            sv = f"(int64_t){v}" if w == 64 else f"(int64_t)(int{w}_t){v}"
+            return wr(o[0], f"([&]{{ const int64_t _s = {sv}; return i2bf16(_s < 0 ? 0ull - (uint64_t)_s : (uint64_t)_s, _s < 0, {mode}); }}())")
+        return wr(o[0], f"i2bf16({v}, false, {mode})")
     if w == 8 or ("F16" in mods and w == 64):
         raise Lift(f"I2F {mods}")
     rnd = next((RND_F[m] for m in mods if m in RND_F), "rn")
@@ -1229,6 +1242,18 @@ def f_i2f(i):
     if "F16" in mods:
         return wr(o[0], f"([&]{{ unsigned short _v; asm(\"cvt.{rnd}.f16.{ty} %0, %1;\" : \"=h\"(_v) : \"{rc}\"({src})); return (uint32_t)_v; }}())")
     return wr(o[0], f"([&]{{ uint32_t _v; asm(\"cvt.{rnd}.f32.{ty} %0, %1;\" : \"=r\"(_v) : \"{rc}\"({src})); return _v; }}())")
+
+
+@form("VIADDMNMX")
+def f_viaddmnmx(i):
+    # `VIADDMNMX[.U32] Rd, a, b, c, P`: the minimum when P holds, else the maximum, of a + b
+    # (wrapping) and c.
+    ops, mods = i["ops"], i["mods"]
+    if [m for m in mods if m not in ("U32", "S32")] or len(ops) != 5:
+        raise Lift(f"VIADDMNMX {mods}")
+    t = "uint32_t" if "U32" in mods else "int32_t"
+    s, c = f"({t})({val(ops[1])} + {val(ops[2])})", f"({t}){val(ops[3])}"
+    return wr(ops[0], f"(uint32_t)({pred(ops[4])} ? min({s}, {c}) : max({s}, {c}))")
 
 
 @form("VIMNMX", "IMNMX")
@@ -1545,21 +1570,30 @@ def f_ldsm(i):
             f"const uint32_t _a = (uint32_t){addr(ao)}; {decl}{' '.join(body)} }} }}")
 
 
-@form("UTCHMMA")
+@form("UTCHMMA", "UTCQMMA", "UTCIMMA")
 def f_utchmma(i):
     ops, mods = i["ops"], i["mods"]
+    # The kind: `.kind::f16` (and tf32), `::f8f6f4`, `::i8` (`utcmma`).
+    kind = {"UTCHMMA": 0, "UTCQMMA": 1, "UTCIMMA": 2}[i["op"]]
     if [m for m in mods if m not in ("2CTA", "WS")]:
-        raise Lift(f"UTCHMMA {mods}")
+        raise Lift(f"{i['op']} {mods}")
     ws = "WS" in mods
     # `.WS`'s collector-buffer hints on B (`.B_KEEP`, ...) change no result.
-    if ops[0]["k"] != "gdesc" or ops[1]["k"] != "gdesc" or ops[0]["mods"] or (ops[1]["mods"] and not ws):
-        raise Lift("UTCHMMA with A from tensor memory")
-    a, b = ops[0]["r"]["i"], ops[1]["r"]["i"]
+    # A from shared memory (a descriptor) or tensor memory (`aTmem`).
+    a_tmem = ops[0]["k"] == "udesc" and ops[0].get("kind") == "tmem"
+    if (ops[0]["k"] != "gdesc" and not a_tmem) or ops[1]["k"] != "gdesc" or (ops[0].get("mods") and not a_tmem) or \
+            (ops[1].get("mods") and not ws):
+        raise Lift(f"{i['op']} operands A and B")
+    b = ops[1]["r"]["i"]
+    da = "0ull" if a_tmem else f"U64(UR({ops[0]['r']['i']}), UR({ops[0]['r']['i'] + 1}))"
+    a_at = tmem_op(ops[0]) if a_tmem else "NONE"
     d = tmem_op(ops[2])
     if ops[3]["k"] != "udesc" or ops[4]["k"] != "udesc" or ops[4]["kind"] != "idesc":
-        raise Lift("UTCHMMA operands")
-    x, idx = ops[3]["r"]["i"], ops[4]["r"]["i"]
+        raise Lift(f"{i['op']} operands")
+    idx = ops[4]["r"]["i"]
     rest = ops[5:]
+    if rest and rest[0]["k"] == "udesc":
+        raise Lift(f"{i['op']} with scale factors")
     # `.WS`'s zero-column mask: a pair of uniform registers before enable-input-d.
     mask = "0ull"
     if ws and rest and rest[0]["k"] == "reg" and rest[0]["r"]["f"] == "ur":
@@ -1568,9 +1602,11 @@ def f_utchmma(i):
         rest = rest[1:]
     acc = pred(rest[0]) if rest else "true"
     pair = "true" if "2CTA" in mods else "false"
-    return (f"if (lane == __ffs(__EXEC__) - 1) {{ if (UR({x}) != 0u) atomicOr(&FAULT, 32u); "
-            f"else utcmma(ctx, U64(UR({a}), UR({a + 1})), U64(UR({b}), UR({b + 1})), {d}, UR({idx}), {acc}, {pair}, "
-            f"lane, warp, {str(ws).lower()}, {mask}); }}")
+    # The fourth operand: sparse A's metadata (`tcgen05.mma.sp`), or 0.
+    meta = "0u" if ops[3]["r"]["i"] == 255 else tmem_op(ops[3])
+    return (f"if (lane == __ffs(__EXEC__) - 1) "
+            f"utcmma(ctx, {da}, U64(UR({b}), UR({b + 1})), {d}, UR({idx}), {acc}, {pair}, "
+            f"lane, warp, {str(ws).lower()}, {mask}, {meta}, {kind}u, {a_at});")
 
 
 @form("UTCBAR")
@@ -1683,33 +1719,58 @@ def f_utma(i):
             f"TensorMapView _m = mapAt(ctx, U64(UR({b}), UR({b + 1}))); {call}; }}")
 
 
-@form("HGMMA")
+@form("HGMMA", "QGMMA", "IGMMA")
 def f_hgmma(i):
     ops, mods = i["ops"], i["mods"]
     shape = mods[0].split("x")
-    if shape[0] != "64" or shape[2] != "16" or mods[1:] not in (["F32", "BF16"], ["F32"]):
-        raise Lift(f"HGMMA {mods}")
+    # The input types and K: f16, bf16 (16), tf32 (8) into f32; E4M3, E5M2 (32) into f32; s8, u8
+    # (32) into s32.
+    tys = {("HGMMA", "F32"): ("F16", "F16", "16"), ("HGMMA", "F32", "BF16"): ("BF16", "BF16", "16"),
+           ("HGMMA", "F32", "TF32"): ("TF32", "TF32", "8")}
+    for a in ("E4M3", "E5M2"):
+        for b in ("E4M3", "E5M2"):
+            tys[("QGMMA", "F32", a, b)] = (a, b, "32")
+    for a in ("S8", "U8"):
+        for b in ("S8", "U8"):
+            tys[("IGMMA", a, b)] = (a, b, "32")
+    key = (i["op"], *mods[1:])
+    if shape[0] != "64" or key not in tys or shape[2] != tys[key][2]:
+        raise Lift(f"{i['op']} {mods}")
     n = int(shape[1])
     d = ops[0]["r"]["i"]
-    if ops[1]["k"] != "gdesc":
-        raise Lift("HGMMA with A from registers")
-    g = ops[1]
+    # A from registers (the RS form): the descriptor operand after it.
+    rs = ops[1]["k"] == "reg"
+    if rs and (i["op"] != "HGMMA" or tys[key][0] not in ("F16", "BF16")):
+        raise Lift(f"{i['op']} with A from registers")
+    g = ops[2 if rs else 1]
+    if g["k"] != "gdesc":
+        raise Lift(f"{i['op']} operands")
     u = g["r"]["i"]
     dm = g["mods"]
-    c = ops[2]
+    c = ops[3 if rs else 2]
     creg = c["k"] == "reg" and c["r"]["i"] != 255
-    pr = pred(ops[3]) if len(ops) > 3 and is_pred(ops[3]) else "true"
+    pi = 4 if rs else 3
+    pr = pred(ops[pi]) if len(ops) > pi and is_pred(ops[pi]) else "true"
     scale = f"({'true' if creg else 'false'} && {pr})"
     if creg and c["r"]["i"] != d:
-        raise Lift("HGMMA accumulating from another register range")
-    ty = "BF16" if "BF16" in mods else "F16"
+        raise Lift(f"{i['op']} accumulating from another register range")
+    ty, tyb, _ = tys[key]
+    if rs:
+        ar = ops[1]["r"]["i"]
+        areg = ", ".join(f"r[{ar + k}]" for k in range(4))
+        load = " ".join(f"_acc[{k}] = r[{d + k}];" for k in range(n // 2))
+        store = " ".join(f"r[{d + k}] = _acc[{k}];" for k in range(n // 2))
+        return (f"{{ uint32_t _acc[{n // 2}]; const uint32_t _a[4] = {{{areg}}}; {load} hgmmaRS<{n}>(ctx, {ty}, _a, "
+                f"U64(UR({u + 2}), UR({u + 3})), {'false' if 'tnspB' in dm else 'true'}, "
+                f"{'true' if ops[1].get('neg') else 'false'}, {'true' if 'negB' in dm else 'false'}, {scale}, _acc, "
+                f"lane, warp, __EXEC__); {store} }}")
     words = n // 2
     load = " ".join(f"_acc[{k}] = r[{d + k}];" for k in range(words))
     store = " ".join(f"r[{d + k}] = _acc[{k}];" for k in range(words))
     return (f"{{ uint32_t _acc[{words}]; {load} hgmma<{n}>(ctx, {ty}, U64(UR({u}), UR({u + 1})), "
             f"U64(UR({u + 2}), UR({u + 3})), {'false' if 'tnspA' in dm else 'true'}, "
             f"{'false' if 'tnspB' in dm else 'true'}, {'true' if 'negA' in dm else 'false'}, "
-            f"{'true' if 'negB' in dm else 'false'}, {scale}, _acc, lane, warp, __EXEC__); {store} }}")
+            f"{'true' if 'negB' in dm else 'false'}, {scale}, _acc, lane, warp, __EXEC__, {tyb}); {store} }}")
 
 
 # ---------------------------------------------------------------------------------------------
