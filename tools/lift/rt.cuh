@@ -1255,16 +1255,30 @@ __device__ inline int claimTask(Slot* s, unsigned long long gen, uint32_t tasks)
 template <class Sync, class Back>
 static __device__ __noinline__ void runJob(const Ctx& x, const Job& j, uint32_t warp, uint32_t r, uint32_t n, uint32_t mask,
                               Sync sync, uint32_t* own, bool work, Back back) {
-  // No helpers: a copy job of more than one task published in the warp's slot, its tasks claimed
-  // beside the CTA's warps that wait on an mbarrier meanwhile (`helpCta`), and waited for.
-  if (x.helpers == 0 && x.selfHelp && j.kind == 1 && j.tasks > 1 && n == 1) {
+  // No helpers: a copy job, or an MMA into tensor memory, of more than one task published in the
+  // warp's slot, its tasks claimed beside the CTA's warps that wait on an mbarrier meanwhile
+  // (`helpCta`), and waited for.
+  if (x.helpers == 0 && x.selfHelp && (j.kind == 1 || (j.kind == 0 && j.mma.toTmem && !own)) && j.tasks > 1 && n == 1) {
     Slot* s = x.slots + x.cta * LIFT_WARPS + warp;
     s->job = j;
     s->done = 0;
     const unsigned long long gen = (ldAcq(&s->claim) >> 32) + 1;
     stRel(&s->claim, gen << 32);
-    uint32_t self = 0;
-    for (int t; (t = claimTask(s, gen, j.tasks)) >= 0; ++self) runTask(j, (uint32_t)t, 0, 1, x.stage, sync, own);
+    // The issuer is one lane, a waiting warp 32: it runs a task itself only once no warp has
+    // claimed one for four naps.
+    uint32_t self = 0, idle = 0;
+    for (unsigned long long c; (uint32_t)(c = ldAcq(&s->claim)) < j.tasks;) {
+      if (idle >= 4) {
+        const int t = claimTask(s, gen, j.tasks);
+        if (t < 0) break;
+        runTask(j, (uint32_t)t, 0, 1, x.stage, sync, own);
+        ++self;
+        idle = 0;
+        continue;
+      }
+      __nanosleep(256);
+      idle = ldAcq(&s->claim) == c ? idle + 1 : 0;
+    }
     for (unsigned ns = 32; ldAcq(&s->done) + self < j.tasks; ns = min(2 * ns, 256u)) __nanosleep(ns);
     // Closed: a waiting warp that reads the claim now finds no task.
     stRel(&s->claim, (gen << 32) | 0xffffffffull);
@@ -1308,8 +1322,9 @@ static __device__ __noinline__ void runJob(const Ctx& x, const Job& j, uint32_t 
 }
 
 // A warp waiting on an mbarrier (`SYNCS.PHASECHK`, before it polls again) with lanes `act`, when the
-// launch has no helpers: a task of a copy job another warp of its CTA has published (`runJob`),
-// if one is left, run by its lanes.
+// launch has no helpers: a task of a copy job or an MMA into tensor memory another warp of its
+// CTA has published (`runJob`), if one is left, run by its lanes (an MMA's operands decoded into
+// this warp's stage).
 static __device__ __noinline__ void helpCta(const Ctx& x, uint32_t warp, uint32_t lane, uint32_t act) {
   if (x.helpers != 0 || !x.selfHelp) return;
   const uint32_t leader = __ffs(act) - 1, n = __popc(act), r = __popc(act & ((1u << lane) - 1));
@@ -1321,18 +1336,25 @@ static __device__ __noinline__ void helpCta(const Ctx& x, uint32_t warp, uint32_
     c = __shfl_sync(act, c, leader);
     if ((uint32_t)c == 0xffffffffu || (c >> 32) == 0) continue;
     const Job* j = &s->job;
-    if (__ldcg(&j->kind) != 1) continue;
+    const uint32_t kind = __ldcg(&j->kind);
+    if (kind != 1 && !(kind == 0 && __ldcg(&j->mma.toTmem))) continue;
     const uint32_t tasks = __ldcg(&j->tasks);
     while (true) {
       int t = 0;
       if (lane == leader) t = claimTask(s, c >> 32, tasks);
       t = __shfl_sync(act, t, leader);
       if (t < 0) break;
-      CopyJob cj;
-      for (uint32_t k = 0; k < sizeof(CopyJob) / 4; ++k) ((uint32_t*)&cj)[k] = __ldcg((const uint32_t*)&j->copy + k);
       Ctx jx;
       for (uint32_t k = 0; k < sizeof(Ctx) / 4; ++k) ((uint32_t*)&jx)[k] = __ldcg((const uint32_t*)&j->x + k);
-      copyTask(jx, cj, (uint32_t)t, r, n);
+      if (kind == 1) {
+        CopyJob cj;
+        for (uint32_t k = 0; k < sizeof(CopyJob) / 4; ++k) ((uint32_t*)&cj)[k] = __ldcg((const uint32_t*)&j->copy + k);
+        copyTask(jx, cj, (uint32_t)t, r, n);
+      } else {
+        MmaJob mj;
+        for (uint32_t k = 0; k < sizeof(MmaJob) / 4; ++k) ((uint32_t*)&mj)[k] = __ldcg((const uint32_t*)&j->mma + k);
+        mmaTask(jx, mj, (uint32_t*)nullptr, (uint32_t)t, r, n, x.stage, [act] { __syncwarp(act); }, (uint32_t*)nullptr, false);
+      }
       __threadfence();
       __syncwarp(act);
       if (lane == leader) atomicAdd(&s->done, 1u);
