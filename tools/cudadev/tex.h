@@ -295,21 +295,35 @@ static unsigned viewFormat(CUresourceViewFormat f, unsigned *chans) {
   return 0;
 }
 
-// An array's resource view (`view`) on the object's words: its texels read in another format of
-// their size, and of a layered array the layers from `firstLayer` to `lastLayer`. The view's
-// extent is the array's (0 taking it); mipmap levels other than 0, some of a cubemap's faces and
-// block-compressed formats are not modelled.
+// An array's or a mipmapped array's resource view (`view`) on the object's words: its texels read
+// in another format of their size; of a layered array the layers from `firstLayer` to `lastLayer`;
+// of a mipmapped array the levels from `firstMipmapLevel` to `lastMipmapLevel`, the first of them
+// the view's level 0 (a GH200 and an A100: LOD 0 reads it, and LODs past the last read the last).
+// The view's extent is the array's, its level 0's for a mipmapped array (an array's view may give
+// 0 to take it; a GH200 and an A100 refuse a mipmapped array's view of another extent, 0 included);
+// some of a cubemap's faces and block-compressed formats are not modelled.
 static CUresult texView(const CUDA_RESOURCE_DESC *rd, const CUDA_RESOURCE_VIEW_DESC *v, uint64_t *w) {
-  if (rd->resType != CU_RESOURCE_TYPE_ARRAY) return CUDA_ERROR_INVALID_VALUE;
-  CUarray a = rd->res.array.hArray;
+  CUmipmappedArray mip = rd->resType == CU_RESOURCE_TYPE_MIPMAPPED_ARRAY ? rd->res.mipmap.hMipmappedArray : NULL;
+  if (rd->resType != CU_RESOURCE_TYPE_ARRAY && !mip) return CUDA_ERROR_INVALID_VALUE;
+  CUarray a = mip ? &mip->levels[0] : rd->res.array.hArray;
   const int layered = w[20] != 0;
-  if (v->firstMipmapLevel || v->lastMipmapLevel) {
-    note("texture views of mipmap levels are not modelled");
-    return CUDA_ERROR_NOT_SUPPORTED;
-  }
-  if ((v->width && v->width != a->width) || (v->height && v->height != (a->height ? a->height : 1)) ||
-      (!layered && v->depth && v->depth != (a->depth ? a->depth : 1)))
+  if (mip ? v->width != a->width || v->height != (a->height ? a->height : 0) ||
+              v->depth != (a->depth ? a->depth : 0)
+          : (v->width && v->width != a->width) || (v->height && v->height != (a->height ? a->height : 1)) ||
+              (!layered && v->depth && v->depth != (a->depth ? a->depth : 1)))
     return CUDA_ERROR_INVALID_VALUE;
+  if (!mip && (v->firstMipmapLevel || v->lastMipmapLevel)) return CUDA_ERROR_INVALID_VALUE;
+  if (mip) {
+    if (v->firstMipmapLevel > v->lastMipmapLevel || v->lastMipmapLevel >= mip->count) return CUDA_ERROR_INVALID_VALUE;
+    CUarray f = &mip->levels[v->firstMipmapLevel];
+    w[0] = f->base;
+    w[2] = f->width;
+    w[3] = f->height ? f->height : 1;
+    w[4] = f->depth ? f->depth : 1;
+    w[5] = f->pitch;
+    w[6] = f->slice;
+    w[22] = v->lastMipmapLevel - v->firstMipmapLevel + 1;
+  }
   if (v->format != CU_RES_VIEW_FORMAT_NONE) {
     unsigned chans, kind, format = viewFormat(v->format, &chans);
     if (!format) {

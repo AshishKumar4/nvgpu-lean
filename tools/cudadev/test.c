@@ -759,7 +759,35 @@ static void textureChecks(void) {
     ok = ok && tie[0] == 0x3f412427u;
     CK(cuTexObjectDestroy(ttex));
     CK(cuMipmappedArrayDestroy(mip2));
-    check("a mipmapped array's explicit-LOD fetch reads the nearest level or blends two, with bias and clamps", ok);
+    // A view of levels 2 to 4 of the first array: its level 0 is the array's level 2, and LODs past
+    // its last read that (a GH200's results at these LODs).
+    CUDA_RESOURCE_VIEW_DESC mv;
+    memset(&mv, 0, sizeof mv);
+    mv.format = CU_RES_VIEW_FORMAT_FLOAT_1X32;
+    mv.width = mv.height = 64;
+    mv.firstMipmapLevel = 2;
+    mv.lastMipmapLevel = 4;
+    mr.res.mipmap.hMipmappedArray = mip;
+    mt.maxMipmapLevelClamp = 6.0f;
+    const float viewLods[8] = {-1, 0, 0.25f, 0.5f, 1, 1.5f, 2, 2.5f};
+    const float viewWant[2][8] = {{4, 4, 4, 8, 8, 16, 16, 16}, {4, 4, 5, 6, 8, 12, 16, 16}};
+    CK(cuMemcpyHtoD(dl, viewLods, sizeof viewLods));
+    for (int c = 0; c < 2; c++) {
+      mt.mipmapFilterMode = c ? CU_TR_FILTER_MODE_LINEAR : CU_TR_FILTER_MODE_POINT;
+      CUtexObject vtex;
+      CK(cuTexObjectCreate(&vtex, &mr, &mt, &mv));
+      void *vargs[] = {&vtex, &dv, &dl};
+      CK(cuLaunchKernel(mk, 1, 1, 1, 8, 1, 1, 0, NULL, vargs, NULL));
+      CK(cuCtxSynchronize());
+      float got[8];
+      CK(cuMemcpyDtoH(got, dv, sizeof got));
+      for (int k = 0; k < 8; k++) ok = ok && got[k] == viewWant[c][k];
+      CK(cuTexObjectDestroy(vtex));
+    }
+    mv.width = 16;
+    CUtexObject badView;
+    ok = ok && cuTexObjectCreate(&badView, &mr, &mt, &mv) == CUDA_ERROR_INVALID_VALUE;
+    check("a mipmapped array's explicit-LOD fetch reads the nearest level or blends two, with bias and clamps, and through a view of some levels", ok);
     CK(cuModuleUnload(mm));
     CK(cuMemFree(dl));
     CK(cuMemFree(dv));
