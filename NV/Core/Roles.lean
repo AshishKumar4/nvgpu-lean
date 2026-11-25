@@ -44,6 +44,7 @@ def roles : List (String × Role) := [
   ("frontEnd.instBytes", .notModelled), ("frontEnd.fetchPerCycle", .notModelled),
   ("frontEnd.instBufferEntries", .notModelled), ("frontEnd.codeCaches", .engine),
   ("frontEnd.codePrefetchLines", .engine), ("frontEnd.codeLaunchBytes", .engine),
+  ("frontEnd.codeSharedLinesPerKCycle", .engine), ("frontEnd.constSharedLinesPerKCycle", .engine),
   ("frontEnd.takenBranchCycles", .engine), ("frontEnd.forwardBranchCycles", .engine),
   ("frontEnd.indirectMissCycles", .engine), ("frontEnd.stallZeroInterlocks", .engine),
   ("frontEnd.rotateCtaWarps", .engine),

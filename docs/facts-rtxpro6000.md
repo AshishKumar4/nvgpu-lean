@@ -57,6 +57,7 @@ The role column says who reads a fact (`NV/Core/Roles.lean`): only `engine` fact
 | `frontEnd.codeCaches` | 24576: 10, 49152: 16, 147456: 16 | inferred (H200) | engine | `meas-h200`  |  |
 | `frontEnd.codePrefetchLines` | 6 | inferred (H200) | engine | `meas-h200`  |  |
 | `frontEnd.codeLaunchBytes` | 65536 | inferred (GH200) | engine | `meas-gh200`  |  |
+| `frontEnd.codeSharedLinesPerKCycle` | 890 | inferred (GH200) | engine | `meas-gh200`  |  |
 | `frontEnd.takenBranchCycles` | 4 | inferred | engine | `meas-gh200`  |  |
 | `frontEnd.forwardBranchCycles` | 19 | measured | engine | `meas`  |  |
 | `frontEnd.indirectMissCycles` | 40 | inferred (GH200) | engine | `meas-gh200`  |  |
@@ -64,8 +65,9 @@ The role column says who reads a fact (`NV/Core/Roles.lean`): only `engine` fact
 | `frontEnd.rotateCtaWarps` | true | measured | engine | `meas`  |  |
 | `frontEnd.constCacheBytes` | 8192 | documented | engine | `cuda-guide` §5.1.3 Table 34: 8 KB constant cache working set |  |
 | `frontEnd.constLineBytes` | 64 | inferred (V100) | engine | `jia2018` Table 3.1: constant L1 cache line, 64 B |  |
-| `frontEnd.constMissCycles` | 79 | inferred (Ampere) | engine | `huerta2025` §5.4: the issue was delayed 79 cycles, a miss |  |
+| `frontEnd.constMissCycles` | 46 | inferred | engine | `meas-a100`  |  |
 | `frontEnd.constMissSwitchCycles` | 4 | inferred (Ampere) | engine | `huerta2025` §5.1.1: after four cycles of an unserved constant miss the scheduler switches warps |  |
+| `frontEnd.constSharedLinesPerKCycle` | 1000000 | inferred | engine | `meas-a100`  |  |
 
 ## Opcode classes (pipe, issue interval per sub-partition, latency, read release)
 

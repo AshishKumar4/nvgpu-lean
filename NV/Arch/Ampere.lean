@@ -80,6 +80,10 @@ def frontEnd : FrontEndParams :=
     codePrefetchLines := onH200 Hopper.frontEnd.codePrefetchLines
     takenBranchCycles := onH200 Hopper.frontEnd.takenBranchCycles
     forwardBranchCycles := measOn 19 ""
+    constMissCycles := inferred 46 "meas-a100" ""
+      ""
+    constSharedLinesPerKCycle := inferred 1000000 "meas-a100" ""
+      ""
     constCacheBytes := doc 8192 "cuda-guide"
       "§5.1.3 Table 34: cache working set per SM for constant memory, 8 KB (compute capability 8.0)" }
 

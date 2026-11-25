@@ -34,6 +34,12 @@ delivers it, after every earlier request of the warp.
 Time advances by events: every warp's next possible issue cycle is known when it is set (stall
 counts, dependence-counter releases, pipe occupancy, barrier releases), so the engine visits only
 the cycles at which some SM can issue, and an SM only when it can.
+
+An SM's last code cache and its constant level are its GPC's to share: each quantum the master
+counts the refills from that code cache and the constant misses of the GPC's SMs, and in the next
+a refill or a miss costs its own time scaled by how far that demand exceeds what the shared level
+serves in a quantum (`codeSharedLinesPerKCycle`, `constSharedLinesPerKCycle`; never less). The
+scale depends only on the quantum before, so a run does not depend on how SMs are grouped.
 -/
 
 namespace NV.Core
@@ -374,15 +380,17 @@ def CodeLevel.touch (lv : CodeLevel) (line t : Nat) : CodeLevel := Id.run do
 
 /-- Bring `line`, at level `j` from `t` (`levels.size`: arrived from the L2), into the nearest
 level: it is refilled level by level down to the nearest through each level's port, its use
-recorded at `epoch + t` (`Kit.codeEpoch`). The cycle it is in the nearest level, and the levels
-after. -/
-private def refill (levels : Array CodeLevel) (line j t epoch : Nat) :
+recorded at `epoch + t` (`Kit.codeEpoch`). A refill from the last level, which the GPC's SMs
+share, costs `shared` thousandths of its own time (`Sm.codeShared`). The cycle it is in the
+nearest level, and the levels after. -/
+private def refill (levels : Array CodeLevel) (line j t epoch : Nat) (shared : Nat := 1000) :
     Array CodeLevel × Nat := Id.run do
   let mut lv := levels
   let mut at_ := t
   for k in [0:j] do
     let i := j - 1 - k
-    let cost := lv[i]!.lineCycles
+    let own := lv[i]!.lineCycles
+    let cost := if i + 2 == lv.size then (own * shared + 999) / 1000 else own
     let (start, port) := lv[i]!.fill.reserve at_ cost
     at_ := start + cost
     lv := lv.modify i fun l => { l with fill := port }
@@ -413,6 +421,16 @@ private structure Sm where
   placed : Nat := 0
   /-- The instruction caches, nearest first, and the cycle each line being filled arrives. -/
   code : Array CodeLevel
+  /-- Refills from the last code cache this quantum, and what one costs, in thousandths of its
+  own time: the GPC's SMs' refills of the quantum before against what the cache serves them
+  (`FrontEndParams.codeSharedLinesPerKCycle`). -/
+  codeRefills : Nat := 0
+  codeShared : Nat := 1000
+  /-- Constant cache misses this quantum, and what one costs, in thousandths of
+  `constMissCycles`: the GPC's SMs' misses of the quantum before against what the constant level
+  they share serves them (`FrontEndParams.constSharedLinesPerKCycle`). -/
+  constMisses : Nat := 0
+  constShared : Nat := 1000
   codeReady : Std.HashMap Nat Nat := {}
   /-- Code lines on their way from the L2, by the memory system's request id. -/
   codeReqs : Std.HashMap Nat Nat := {}
@@ -976,10 +994,11 @@ private def pass (kit : Kit) (focus : Nat) (stop : Nat) (st : St) :
       if let some line := sms[o.sm]!.codeReqs.get? d.id then
         let sm := sms[o.sm]!
         sms := sms.set! o.sm default
-        let (code, r) := refill sm.code line sm.code.size d.at_ epoch
+        let (code, r) := refill sm.code line sm.code.size d.at_ epoch sm.codeShared
         let slots := sm.slots.map fun w =>
           if w.why == .fetch && w.readyAt ≥ pendingAt then { w with readyAt := r } else w
         sms := sms.set! o.sm { sm with code, slots, codeReady := sm.codeReady.insert line r,
+                                       codeRefills := sm.codeRefills + (if sm.code.size ≥ 2 then 1 else 0),
                                        codeReqs := sm.codeReqs.erase d.id, next := min sm.next r }
         continue
       let mut sm := sms[o.sm]!
@@ -1105,8 +1124,9 @@ private def pass (kit : Kit) (focus : Nat) (stop : Nat) (st : St) :
                 continue
               match sm.code.findIdx? (·.lines.contains l) with
               | some j =>
-                let (code, r) := refill sm.code l j t epoch
-                sm := { sm with code, codeReady := sm.codeReady.insert l r }
+                let (code, r) := refill sm.code l j t epoch sm.codeShared
+                sm := { sm with code, codeReady := sm.codeReady.insert l r,
+                                codeRefills := sm.codeRefills + (if j + 1 == sm.code.size && j ≥ 1 then 1 else 0) }
               | none =>
                 let (m', id) := mem.issueCode t { sm := si, smsp := q, cta := s.cta, slot := i } (l * lineBytes)
                 mem := m'
@@ -1134,8 +1154,9 @@ private def pass (kit : Kit) (focus : Nat) (stop : Nat) (st : St) :
               if sm.constLines.contains (bank, line) then
                 sm := { sm with constLines := sm.constLines.insert (bank, line) t }
               else
-                let r := t + p.frontEnd.constMissCycles.value
+                let r := t + (p.frontEnd.constMissCycles.value * sm.constShared + 999) / 1000
                 sm := { sm with constReady := sm.constReady.insert (bank, line) r,
+                                constMisses := sm.constMisses + 1,
                                 smspHold := sm.smspHold.set! q (t + p.frontEnd.constMissSwitchCycles.value) }
                 late := max late r
           if late > t then
@@ -1701,6 +1722,11 @@ private structure Cmd where
   /-- The functional mode over several workers: the answers to its warps' global atomics (SM,
   warp slot, response). -/
   atomAnswers : Array (Nat × Nat × Resp) := #[]
+  /-- Per SM of the worker's: what a refill from the last code cache costs this quantum
+  (`Sm.codeShared`). -/
+  codeShared : Array (Nat × Nat) := #[]
+  /-- Per SM of the worker's: what a constant cache miss costs this quantum (`Sm.constShared`). -/
+  constShared : Array (Nat × Nat) := #[]
   /-- Hand back the SMs' state instead: the launch is over. -/
   finish : Bool := false
 
@@ -1725,6 +1751,10 @@ private structure SmReport where
   clusterLog : Array (Nat × Nat × Bool)
   /-- Its warps' global atomics, for the master (`St.atoms`). -/
   atoms : Array (Nat × Nat × Req) := #[]
+  /-- Its refills from the last code cache this quantum (`Sm.codeRefills`), and its constant
+  cache misses (`Sm.constMisses`). -/
+  codeRefills : Nat := 0
+  constMisses : Nat := 0
   deriving Inhabited
 
 private structure Rep where
@@ -1796,6 +1826,10 @@ private def Worker.step (kit : Kit) (w : Worker) (cmd : Cmd) : Except String (Wo
   let states := (Array.range w.ids.size).map fun j =>
     { runs[j]! with t := max runs[j]!.t cmd.t, doneCtas := 0, phases, clusterLog := #[],
                     reserved := ((cmd.reserved.find? (·.1 == w.ids[j]!)).map (·.2)).getD #[] }
+  for (si, shared) in cmd.codeShared do
+    sms := sms.modify si ({ · with codeShared := shared })
+  for (si, shared) in cmd.constShared do
+    sms := sms.modify si ({ · with constShared := shared })
   let (sms', mem', states) ← runGroup kit w.ids cmd.stop sms mem states
   -- The snapshot is dropped, so the master's global memory stays unshared; functionally it is the
   -- store itself, handed back.
@@ -1803,19 +1837,22 @@ private def Worker.step (kit : Kit) (w : Worker) (cmd : Cmd) : Except String (Wo
   let globalLog := mem'.globalLog
   mem := { mem'.atQuantum (Store.empty 0 0) mem'.dir mem'.start with globalLog := #[] }
   let mut reports : Array SmReport := #[]
+  let mut sms' := sms'
   for j in [0:w.ids.size] do
     let si := w.ids[j]!
     let st := states[j]!
     let (m2, o, lg) := mem.takeOutSm si
     mem := m2
     let sm := sms'[si]!
+    sms' := sms'.modify si ({ · with codeRefills := 0, constMisses := 0 })
     let cands := [st.wbs.minKey?, mem.nextSm si, if sm.resident > 0 then some sm.next else none,
                   if st.outs.isEmpty && st.atoms.isEmpty then none else some cmd.stop]
     let earliest := cands.foldl (fun acc x => match acc, x with
       | some a, some b => some (min a b) | none, x => x | a, none => a) none
     reports := reports.push { sm := si, resident := sm.resident, earliest, doneCtas := st.doneCtas,
                               returned := st.reserved, placed := st.placed,
-                              msgs := o, logs := lg, clusterLog := st.clusterLog, atoms := st.atoms }
+                              msgs := o, logs := lg, clusterLog := st.clusterLog, atoms := st.atoms,
+                              codeRefills := sm.codeRefills, constMisses := sm.constMisses }
   let runs' := states.map fun st => { st with reserved := #[], placed := #[], doneCtas := 0, atoms := #[] }
   return ({ w with sms := sms', mem, runs := runs', phases }, { sms := reports, global, globalLog })
 
@@ -2056,6 +2093,13 @@ private def runOnWith {m : Type → Type} {σ : Type} [Monad m] (pool : Pool m �
   let mut returned : Array Nat := #[]
   let mut t := 0
   let mut resident : Array Nat := Array.replicate nSms 0
+  -- Per SM: what a refill from the last code cache costs, in thousandths of its own time: its
+  -- GPC's SMs' refills of the quantum before against what the cache serves them in a quantum
+  -- (`codeSharedLinesPerKCycle`), so one SM refilling alone pays its own time.
+  let mut codeShared : Array Nat := Array.replicate nSms 1000
+  -- The same for a constant cache miss, against the constant level the GPC's SMs share
+  -- (`constSharedLinesPerKCycle`).
+  let mut constShared : Array Nat := Array.replicate nSms 1000
   let mut earliest : Array (Option Nat) := Array.replicate nSms none
   let mut answersFor : Array (Array (Memory.Stamped Memory.Msg)) := Array.replicate nW #[]
   let mut placeFor : Array (Array (Nat × Nat × Nat)) := Array.replicate nW #[]
@@ -2154,7 +2198,9 @@ private def runOnWith {m : Type → Type} {σ : Type} [Monad m] (pool : Pool m �
       ({ t, stop, global := mem.global, dir := mem.dir, start := mem.start,
          answers := answersFor[w]!, placements := placeFor[w]!, releases, atomAnswers := atomsFor[w]!,
          reserved := ((Array.range nSms).filter (wOf · == w)).filterMap fun i =>
-           if res[i]!.isEmpty then none else some (i, res[i]!) } : Cmd)
+           if res[i]!.isEmpty then none else some (i, res[i]!),
+         codeShared := ((Array.range nSms).filter (wOf · == w)).map fun i => (i, codeShared[i]!),
+         constShared := ((Array.range nSms).filter (wOf · == w)).map fun i => (i, constShared[i]!) } : Cmd)
     answersFor := Array.replicate nW #[]
     placeFor := Array.replicate nW #[]
     atomsFor := Array.replicate nW #[]
@@ -2187,6 +2233,21 @@ private def runOnWith {m : Type → Type} {σ : Type} [Monad m] (pool : Pool m �
     let mut msgs := #[]
     let mut logs := #[]
     let mut touched : Array Nat := #[]
+    let cap := p.frontEnd.codeSharedLinesPerKCycle.value * (stop - t)
+    let ccap := p.frontEnd.constSharedLinesPerKCycle.value * (stop - t)
+    let mut refills : Array Nat := Array.replicate gpcSize.size 0
+    let mut misses : Array Nat := Array.replicate gpcSize.size 0
+    for x in reports do
+      let g := gpcOf x.sm
+      if g < refills.size then
+        refills := refills.modify g (· + x.codeRefills)
+        misses := misses.modify g (· + x.constMisses)
+    codeShared := (Array.range nSms).map fun i =>
+      let d := (refills[gpcOf i]?).getD 0
+      if cap == 0 then 1000 else max 1000 (d * 1000000 / cap)
+    constShared := (Array.range nSms).map fun i =>
+      let d := (misses[gpcOf i]?).getD 0
+      if ccap == 0 then 1000 else max 1000 (d * 1000000 / ccap)
     for x in reports do
       resident := resident.set! x.sm x.resident
       earliest := earliest.set! x.sm x.earliest

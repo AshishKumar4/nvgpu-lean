@@ -103,6 +103,9 @@ def frontEnd : FrontEndParams where
   codeLaunchBytes := inferred 65536 "meas-gh200" ""
     ""
     (some "GH200")
+  codeSharedLinesPerKCycle := inferred 890 "meas-gh200" ""
+    ""
+    (some "GH200")
   takenBranchCycles := inferred 4 "meas-gh200" ""
     ""
   forwardBranchCycles := inferred 17 "meas-gh200" ""
@@ -119,10 +122,14 @@ def frontEnd : FrontEndParams where
     ""
   constLineBytes := inferred 64 "jia2018" "Table 3.1: constant L1 cache line, 64 B"
     "" (some "V100")
-  constMissCycles := inferred 79 "huerta2025" "§5.4: the issue was delayed 79 cycles, a miss"
-    "" (some "Ampere")
+  constMissCycles := inferred 53 "meas-gh200" ""
+    ""
+    (some "GH200")
   constMissSwitchCycles := inferred 4 "huerta2025" "§5.1.1: after four cycles of an unserved
     constant miss the scheduler switches warps" "" (some "Ampere")
+  constSharedLinesPerKCycle := inferred 54 "meas-gh200" ""
+    ""
+    (some "GH200")
 
 /-! ## Opcode classes
 

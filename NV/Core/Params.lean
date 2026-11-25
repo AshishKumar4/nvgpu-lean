@@ -211,6 +211,9 @@ structure FrontEndParams where
   /-- Bytes of a kernel's code, from its start, in the SM's last code cache when its CTAs start:
   fetched during the launch. -/
   codeLaunchBytes : Fact Nat
+  /-- Lines a cycle, in thousandths, the last code cache serves its GPC's SMs together: what it
+  refills of the cache before it is shared by the GPC's SMs. -/
+  codeSharedLinesPerKCycle : Fact Nat
   /-- Cycles a warp loses to the fetch redirect after a taken branch, call or return back to code
   it has run (a loop's back edge). -/
   takenBranchCycles : Fact Nat
@@ -231,6 +234,9 @@ structure FrontEndParams where
   constMissCycles : Fact Nat
   /-- Cycles the scheduler waits on a constant miss before switching to another warp. -/
   constMissSwitchCycles : Fact Nat
+  /-- Constant lines a cycle, in thousandths, the constant level a GPC's SMs share serves them
+  together: what a miss costs beyond `constMissCycles` when every SM of the GPC misses at once. -/
+  constSharedLinesPerKCycle : Fact Nat
   /-- Whether an SM rotates the sub-partitions of a CTA whose warps fill whole rows of them: the
   `k`-th CTA it places puts its warp `i` on sub-partition `(i + k) mod` the sub-partitions, so
   successive CTAs' first warps do not share one (a CTA of another warp count takes the next slots

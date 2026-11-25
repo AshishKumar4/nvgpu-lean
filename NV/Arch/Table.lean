@@ -105,8 +105,9 @@ def sections (p : Params) : List (String × List Row) :=
   let ⟨banks, readPortsPerBank, operandReadCycles, reuseEntriesPerBank, reuseSlotsPerEntry⟩ :=
     regFile
   let ⟨instBytes, fetchPerCycle, instBufferEntries, codeCaches, codePrefetchLines, codeLaunchBytes,
-    takenBranchCycles, forwardBranchCycles, indirectMissCycles, stallZeroInterlocks,
-    constCacheBytes, constLineBytes, constMissCycles, constMissSwitchCycles, rotateCtaWarps⟩ := frontEnd
+    codeSharedLinesPerKCycle, takenBranchCycles, forwardBranchCycles, indirectMissCycles, stallZeroInterlocks,
+    constCacheBytes, constLineBytes, constMissCycles, constMissSwitchCycles, constSharedLinesPerKCycle,
+    rotateCtaWarps⟩ := frontEnd
   let ⟨sectorBytes, lineBytes, l1SmemBytes, smemBanks, smemBankBytes, smemLatency, l1HitLatency,
     dsmemLatency, l2Bytes, l2Slices, l2Partitions, l2NearHitLatency, l2FarHitLatency, dramLatency,
     dramBusBits, dramClockMHz, dramBytesPerSec, dramStreamBytesPerSec, dramChannels, mioQueueDepth,
@@ -146,6 +147,7 @@ def sections (p : Params) : List (String × List Row) :=
      row "frontEnd.codeCaches" codeCaches showPairs,
      rowN "frontEnd.codePrefetchLines" codePrefetchLines,
      rowN "frontEnd.codeLaunchBytes" codeLaunchBytes,
+     rowN "frontEnd.codeSharedLinesPerKCycle" codeSharedLinesPerKCycle,
      rowN "frontEnd.takenBranchCycles" takenBranchCycles,
      rowN "frontEnd.forwardBranchCycles" forwardBranchCycles,
      rowN "frontEnd.indirectMissCycles" indirectMissCycles,
@@ -154,7 +156,8 @@ def sections (p : Params) : List (String × List Row) :=
      rowN "frontEnd.constCacheBytes" constCacheBytes,
      rowN "frontEnd.constLineBytes" constLineBytes,
      rowN "frontEnd.constMissCycles" constMissCycles,
-     rowN "frontEnd.constMissSwitchCycles" constMissSwitchCycles]),
+     rowN "frontEnd.constMissSwitchCycles" constMissSwitchCycles,
+     rowN "frontEnd.constSharedLinesPerKCycle" constSharedLinesPerKCycle]),
    ("Opcode classes (pipe, issue interval per sub-partition, latency, read release)",
     ops.toList.map fun r =>
       row (".".intercalate (r.opcode :: r.mods.toList) ++ (if r.indexed then " (indexed)" else ""))
