@@ -793,6 +793,83 @@ static void textureChecks(void) {
     CK(cuMemFree(dv));
     CK(cuMipmappedArrayDestroy(mip));
 
+    // Integer fetches by level and gathers from a mipmapped array (64 by 64 floats, 7 levels, texel
+    // (level k, x, y) 1000 k + 64 y + x): an integer fetch reads the level it names, its
+    // coordinates clamped, and a level past the last reads zero; a gather reads level 0 (a GH200's
+    // and an A100's results).
+    static const char *intPtx =
+      ".version 8.0\n.target sm_80\n.address_size 64\n"
+      ".visible .entry intk(.param .u64 tex_, .param .u64 in_, .param .u64 out_) {\n"
+      "  .reg .b64 t, p, o, a; .reg .b32 i, x, y, k, u, v, r0, r1, r2, r3, g0, g1, g2, g3;\n"
+      "  ld.param.u64 t, [tex_]; ld.param.u64 p, [in_]; ld.param.u64 o, [out_];\n"
+      "  mov.u32 i, %tid.x; mul.wide.u32 a, i, 20; add.s64 p, p, a; mul.wide.u32 a, i, 20; add.s64 o, o, a;\n"
+      "  ld.global.b32 x, [p]; ld.global.b32 y, [p+4]; ld.global.b32 k, [p+8];\n"
+      "  ld.global.b32 u, [p+12]; ld.global.b32 v, [p+16];\n"
+      "  tex.level.2d.v4.f32.s32 {r0, r1, r2, r3}, [t, {x, y}], k;\n"
+      "  tld4.r.2d.v4.f32.f32 {g0, g1, g2, g3}, [t, {u, v}];\n"
+      "  st.global.b32 [o], r0; st.global.b32 [o+4], g0; st.global.b32 [o+8], g1;\n"
+      "  st.global.b32 [o+12], g2; st.global.b32 [o+16], g3;\n"
+      "  ret;\n}\n";
+    CUDA_ARRAY3D_DESCRIPTOR id3 = {64, 64, 0, CU_AD_FORMAT_FLOAT, 1, 0};
+    CUmipmappedArray imip;
+    CK(cuMipmappedArrayCreate(&imip, &id3, 7));
+    for (unsigned k = 0; k < 7; k++) {
+      CUarray lv;
+      CK(cuMipmappedArrayGetLevel(&lv, imip, k));
+      unsigned w = 64 >> k;
+      static float ivals[64 * 64];
+      for (unsigned y = 0; y < w; y++)
+        for (unsigned x = 0; x < w; x++) ivals[y * w + x] = 1000.0f * k + 64.0f * y + x;
+      CUDA_MEMCPY2D cp;
+      memset(&cp, 0, sizeof cp);
+      cp.srcMemoryType = CU_MEMORYTYPE_HOST; cp.srcHost = ivals; cp.srcPitch = w * 4;
+      cp.dstMemoryType = CU_MEMORYTYPE_ARRAY; cp.dstArray = lv;
+      cp.WidthInBytes = w * 4; cp.Height = w;
+      CK(cuMemcpy2D(&cp));
+    }
+    // (x, y, level, u, v); the integer fetch's and the gather's results.
+    static const int ixy[4][3] = {{5, 3, 0}, {40, 33, 1}, {70, -2, 3}, {1, 0, 9}};
+    static const float iuv[4][2] = {{0.5f, 0.5f}, {0.1f, 0.2f}, {0.73f, 0.31f}, {0.02f, 0.97f}};
+    static const float iwant[4][5] = {{197, 2079, 2080, 2016, 2015}, {3015, 837, 838, 774, 773},
+                                      {3007, 1326, 1327, 1263, 1262}, {0, 3968, 3969, 3905, 3904}};
+    uint32_t iin[4][5];
+    for (int c = 0; c < 4; c++) {
+      for (int e = 0; e < 3; e++) iin[c][e] = (uint32_t)ixy[c][e];
+      memcpy(&iin[c][3], iuv[c], 8);
+    }
+    CUdeviceptr iinD, ioutD;
+    CK(cuMemAlloc(&iinD, sizeof iin));
+    CK(cuMemAlloc(&ioutD, sizeof iin));
+    CK(cuMemcpyHtoD(iinD, iin, sizeof iin));
+    mr.res.mipmap.hMipmappedArray = imip;
+    mt.filterMode = CU_TR_FILTER_MODE_POINT;
+    mt.mipmapFilterMode = CU_TR_FILTER_MODE_LINEAR;
+    mt.mipmapLevelBias = 0.0f;
+    mt.maxMipmapLevelClamp = 6.0f;
+    CUtexObject itex;
+    CK(cuTexObjectCreate(&itex, &mr, &mt, NULL));
+    CUmodule im;
+    CK(cuModuleLoadData(&im, intPtx));
+    CUfunction ik;
+    CK(cuModuleGetFunction(&ik, im, "intk"));
+    void *iargs[] = {&itex, &iinD, &ioutD};
+    CK(cuLaunchKernel(ik, 1, 1, 1, 4, 1, 1, 0, NULL, iargs, NULL));
+    CK(cuCtxSynchronize());
+    float iout[4][5];
+    CK(cuMemcpyDtoH(iout, ioutD, sizeof iout));
+    int iok = 1;
+    for (int c = 0; c < 4; c++)
+      for (int e = 0; e < 5; e++) {
+        iok = iok && iout[c][e] == iwant[c][e];
+        if (iout[c][e] != iwant[c][e]) printf("mip int/gather case %d.%d: %g, a GH200 %g\n", c, e, iout[c][e], iwant[c][e]);
+      }
+    check("a mipmapped array's integer fetch reads the level it names, and a gather level 0", iok);
+    CK(cuTexObjectDestroy(itex));
+    CK(cuModuleUnload(im));
+    CK(cuMemFree(iinD));
+    CK(cuMemFree(ioutD));
+    CK(cuMipmappedArrayDestroy(imip));
+
     // Linear texels between linearly filtered levels: two levels of 64 by 64 and 32 by 32 values
     // from a generator, fetched at (u, v, LOD) where a GH200 returns `want` (the first two clamped
     // past the left edge of level 1).

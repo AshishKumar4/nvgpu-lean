@@ -1304,12 +1304,22 @@ def texFetch : X (Effect Thread) := do
     unless dims == 2 do throw "tld4 is modelled for 2d textures"
   if cube && !offs.isEmpty then throw "cubemap fetches take no offsets"
   let tx := if gather then { tx with filter := .linear } else tx
-  -- A mipmapped object: `.level` reads the levels its LOD names (`Texture.mipFootprint`).
-  let fp ← if tx.levels > 1 then do
-      unless i.has .level && !gather && cty == .f32 do
-        throw "a fetch from a mipmapped texture other than tex.level of float coordinates (not modelled)"
-      let lod ← t.read e (match arg pi 2 with | .vec cs => cs[0]?.getD .sink | c => c) .f32
-      pure (tx.mipFootprint (tx.lodOf lod.toUInt32) fun tl s => NV.Tex.footprint (pick tl) coords offs s)
+  -- A mipmapped object: `.level` reads the levels its LOD names (`Texture.mipFootprint`), of
+  -- integer coordinates the level its LOD names as an integer (none past the last: zero); `tld4`
+  -- reads level 0 (a GH200 and an A100 do both).
+  let lodArg := match arg pi 2 with | .vec cs => cs[0]?.getD .sink | c => c
+  let fp ← if tx.levels > 1 && gather then pure (NV.Tex.footprint (pick (tx.level 0)) coords offs)
+    else if tx.levels > 1 then do
+      unless i.has .level do
+        throw "a fetch from a mipmapped texture other than tex.level and tld4 (not modelled)"
+      if cty == .s32 then do
+        let k := toInt true 32 (← t.read e lodArg .s32)
+        if k < 0 then throw "an integer fetch from a negative mipmap level (not modelled)"
+        if k ≥ tx.levels then pure [(none, 256)]
+        else pure (NV.Tex.footprint (pick (tx.level k.toNat)) coords offs)
+      else do
+        let lod ← t.read e lodArg .f32
+        pure (tx.mipFootprint (tx.lodOf lod.toUInt32) fun tl s => NV.Tex.footprint (pick tl) coords offs s)
     else pure (NV.Tex.footprint (pick tx) coords offs)
   let bytes := tx.texelBytes
   let req : Req := { space := .global, op := .ld, bytes, addrs := fp.toArray.map (·.1) }

@@ -1406,10 +1406,18 @@ def decodeTex (d : Dec) : Option Run :=
           let pick (t : NV.Tex.Texture) : NV.Tex.Texture := match layerK with
             | some k => t.layerAt k
             | none => t
-          -- A mipmapped object: an explicit-LOD `TEX` reads the levels its LOD names; a fetch
-          -- by gradients (`TXD`) or of integer coordinates or a gather is not modelled.
+          -- A mipmapped object: an explicit-LOD `TEX` reads the levels its LOD names, an integer
+          -- fetch (`TLD.LL`) the level its LOD names as an integer (none past the last: zero), a
+          -- gather (`TLD4`) level 0, as a GH200 and an A100 do; a fetch by gradients (`TXD`) or a
+          -- `TEX` without an LOD is not modelled.
           if tx.levels > 1 then
+            if gather then return NV.Tex.footprint (pick (tx.level 0)) cs offs
             let some lr := lodReg | throw "a fetch from a mipmapped texture without an explicit LOD (not modelled)"
+            if ints && op == "TLD" then
+              let k := (x.v.getR lr l).toInt32.toInt
+              if k < 0 then throw "an integer fetch from a negative mipmap level (not modelled)"
+              if k ≥ tx.levels then return [(none, 256)]
+              return NV.Tex.footprint (pick (tx.level k.toNat)) cs offs
             if op != "TEX" then throw s!"{op} from a mipmapped texture (not modelled)"
             return tx.mipFootprint (tx.lodOf (x.v.getR lr l)) fun t s => NV.Tex.footprint (pick t) cs offs s
           return NV.Tex.footprint (pick tx) cs offs

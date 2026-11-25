@@ -146,9 +146,8 @@ JAX's CUDA 13 plugin (its runtime asks the driver for a table not provided; the 
 `jax[cuda12]`, runs). PyTorch's matmuls: NVIDIA's math libraries, as PyTorch 2.9's CUDA 12 wheels
 load them, ask the runtime for a table entry the device does not provide (`runtime_tables.h` has
 only ZLUDA's), and stop; PyTorch's own kernels run (the `device-torch` row). IPC, a mipmapped
-texture's fetches other than by explicit LOD (by gradients, `TXD`; of integer coordinates; gathers),
-texture views of block-compressed formats or some of a cubemap's faces, external memory and
-semaphores, and kernels dereferencing host memory other than mapped page-locked memory
-(`cuMemHostAlloc` with `CU_MEMHOSTALLOC_DEVICEMAP`, `cudaHostAllocMapped`, which kernels reach at
-its host address as they do managed memory, and which takes device memory): each fails with a CUDA
-error naming it.
+texture's fetches by gradients (`TXD`), texture views of block-compressed formats or some of a
+cubemap's faces, external memory and semaphores, and kernels dereferencing host memory other than
+mapped page-locked memory (`cuMemHostAlloc` with `CU_MEMHOSTALLOC_DEVICEMAP`, `cudaHostAllocMapped`,
+which kernels reach at its host address as they do managed memory, and which takes device memory):
+each fails with a CUDA error naming it.

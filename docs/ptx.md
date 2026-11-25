@@ -57,9 +57,8 @@ Asynchronous operations (`cp.async*`, TMA, `mbarrier`, `wgmma`) are part H's
 the ISA allows). Not yet modelled, and faulting: stochastic rounding into the four-lane
 FP8/FP6/FP4 forms (the ISA says which half of `rbits` feeds which pair of inputs, not how a half
 divides between the pair), FP8 → FP16 `mma` on `sm_90a`, sparse `mma` of floats (no published numerics of the sparse datapath; the integer `mma.sp` forms are modelled, `Matrix.computeSparse`), `ldmatrix` `.s8.s4` (PTX ISA 9.4),
-texture samplers, depth compare, fetches from a mipmapped texture other than `tex.level`
-of float coordinates (by gradients, of integer coordinates, `tld4`; on a texture of one level the
-forms with an LOD or gradients fetch from that level),
+texture samplers, depth compare, fetches from a mipmapped texture by gradients (on a texture of
+one level the forms with an LOD or gradients fetch from that level),
 multisampling, formatted surface accesses (`.p`). `multimem.*` acts on a one-device multicast
 object (the device's own memory). Outside the model, faulting so: fabric memory (`fabric.*`) and
 `.layout::v1` mbarriers, which need PTX ISA 9.3.
