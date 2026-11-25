@@ -11,7 +11,7 @@ accumulators, `m16n8k4`/`m16n8k8` with `.tf32`, the integer forms (`m8n8k16`, `m
 `m16n8k128`, `m16n8k256` with `.b1` and `.and.popc` or `.xor.popc`), `m8n8k4`, `m16n8k4`,
 `m16n8k8`, `m16n8k16` with `.f64`, and `m16n8k32` with `.e4m3`/`.e5m2`: on a family whose
 `mma.sync` has an FP8 datapath (sm_120a) by its model; on `sm_90a` and `sm_100a` as FP16 MMAs
-(`loweredF8`). On sm_120a also `.kind::f8f6f4`'s
+into `.f32` or `.f16`, as ptxas lowers them (`loweredF8`). On sm_120a also `.kind::f8f6f4`'s
 `m16n8k32` with FP6 and FP4 inputs, each in a byte (an `.e2m1` in bits 2–5, an `.e3m2`/`.e2m3` in
 bits 0–5, §9.7.16.5.14: `unbox`), and the block-scaled kinds (§9.7.16.3): `.kind::mxf8f6f4`
 (`m16n8k32`) and `.kind::mxf4`/`mxf4nvf4` (`m16n8k64`, `.e2m1` eight to a register), each
@@ -199,15 +199,16 @@ cannot fail). -/
 def available (sm : Nat) (a d : Ty) : Except String Unit :=
   if exact a then pure ()
   else if f8Lowered sm && (a == .e4m3 || a == .e5m2) then
-    if d == .f32 then pure () else .error s!"FP8 mma.sync is into .f32 only on sm_{sm}"
+    if d == .f32 || d == .f16 then pure () else .error s!"FP8 mma.sync is into .f32 or .f16 only on sm_{sm}"
   else do let _ ← model sm a d
 
-/-- `mma.sync.m16n8k32` with FP8 inputs into `.f32` on sm_90a and sm_100a (`f8Lowered`), as the
-model defines it on the family's FP16 datapath: each FP8 element widened exactly to binary16, an
-FP16 MMA from zero over the K indices `k % 4 ∈ {0, 1}` (an A register's low half), a second over
-`k % 4 ∈ {2, 3}` accumulating onto the first, its K index `j` taking `k = 4⌊j/2⌋ + j % 2` (+ 2),
-then `d = c + P` (round to nearest, subnormals kept). -/
-def loweredF8 (sm : Nat) (a b : Ty) (m n k : Nat) (A B C : Array Nat) :
+/-- `mma.sync.m16n8k32` with FP8 inputs into `.f32` or `.f16` (`d`) on sm_90a and sm_100a
+(`f8Lowered`), as ptxas lowers it onto the family's FP16 datapath: each FP8 element widened
+exactly to binary16, an FP16 MMA into `d`'s format from zero over the K indices
+`k % 4 ∈ {0, 1}` (an A register's low half), a second over `k % 4 ∈ {2, 3}` accumulating onto
+the first, its K index `j` taking `k = 4⌊j/2⌋ + j % 2` (+ 2), then `d = c + P` in `d`'s format
+(round to nearest, subnormals kept: `FADD` or `HADD2`). -/
+def loweredF8 (sm : Nat) (a b d : Ty) (m n k : Nat) (A B C : Array Nat) :
     Except String (Array Nat) := do
   let some aF := (Float.lanes? a).map (·.1) | throw "unknown A format"
   let some bF := (Float.lanes? b).map (·.1) | throw "unknown B format"
@@ -217,14 +218,15 @@ def loweredF8 (sm : Nat) (a b : Ty) (m n k : Nat) (A B C : Array Nat) :
     let kk (j : Nat) : Nat := 4 * (j / 2) + j % 2 + off
     ((Array.range (m * kh)).map fun i => wide aF A[(i / kh) * k + kk (i % kh)]!,
      (Array.range (kh * n)).map fun i => wide bF B[kk (i / n) * n + i % n]!)
-  let t ← model sm .f16 .f32
+  let dF : Format := if d == .f16 then .f16 else .f32
+  let t ← model sm .f16 (if d == .f16 then .f16 else .f32)
   let tile (A' B' acc : Array Nat) : Array Nat :=
-    t.tile .f16 .f16 .f32 ((Array.range m).map fun r => A'.extract (r * kh) (r * kh + kh))
+    t.tile .f16 .f16 dF ((Array.range m).map fun r => A'.extract (r * kh) (r * kh + kh))
       ((Array.range n).map fun c => (Array.range kh).map fun j => B'[j * n + c]!) acc
   let (A1, B1) := half 0
   let (A2, B2) := half 2
   let P := tile A2 B2 (tile A1 B1 (Array.replicate (m * n) 0))
-  return (Array.range (m * n)).map fun rc => NV.Num.add .f32 .rn false C[rc]! P[rc]!
+  return (Array.range (m * n)).map fun rc => NV.Num.add dF .rn false C[rc]! P[rc]!
 
 /-- D = A·B + C by (row, col) for element bits `A` (M×K), `B` (K×N) and `C` (M×N), row-major:
 integers exactly (`.b1`: the population count of `A ∧ B`, or of `A ⊕ B` when `xor`, plus C;
@@ -252,11 +254,12 @@ def product (sm : Nat) (a b d : Ty) (satfinite : Bool) (m n k : Nat)
   | .f64, _ => pure <| (Array.range (m * n)).map fun rc =>
       NV.Num.dotF64 rows[rc / n]! cols[rc % n]! C[rc]!
   | .e4m3, .f32 | .e5m2, .f32 =>
-    if f8Lowered sm then loweredF8 sm a b m n k A B C else
+    if f8Lowered sm then loweredF8 sm a b d m n k A B C else
     let some aF := fmt a | throw "unknown A format"
     let some bF := fmt b | throw "unknown B format"
     pure ((← model sm a d).tile aF bF .f32 rows cols C)
   | _, _ =>
+    if f8Lowered sm && (a == .e4m3 || a == .e5m2) then loweredF8 sm a b d m n k A B C else
     let some aF := fmt a | throw "unknown A format"
     let some bF := fmt b | throw "unknown B format"
     let some dF := fmt d | throw "unknown D format"

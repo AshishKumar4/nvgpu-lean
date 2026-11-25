@@ -1098,7 +1098,7 @@ def tensorData (dir : String) : IO Bool := do
           -- The B200's FP8 outputs compared with `Matrix.loweredF8`.
           let ty : NV.PTX.Ty := if inF == .e4m3 then .e4m3 else .e5m2
           let got := if gpu == "B200" && fp8 then
-              match NV.PTX.Sem.Matrix.loweredF8 100 ty ty 1 1 k ai bi #[c] with
+              match NV.PTX.Sem.Matrix.loweredF8 100 ty ty .f32 1 1 k ai bi #[c] with
               | .ok ds => ds[0]!
               | .error _ => Format.f32.nan + 1
             else cvt outF .f32 .rn {} (model.block inF inF outF ai bi c)

@@ -438,6 +438,13 @@ def cases : List Case := [
       if w &&& 0x100 == 0 then (w &&& 0x87878787) ||| 0x30303030 else w],
     forms := ["QMMA.16832.F32.E4M3.E4M3", "QMMA.16832.F32.E5M2.E4M3"], formTargets := ["sm_120a"],
     skipOn := [("sm_80", "no FP8 mma.sync before sm_89")] },
+  -- Into f16 accumulators: ptxas's FP16 lowering on sm_90a and sm_100a (`Matrix.loweredF8`).
+  { file := "tests/diff/mma8.ptx", kernel := "mmas8h", threads := 32, per := 16,
+    bufs := [Array.replicate (16 * 32) 0, (inputs edges32 (16 * 32)).map fun w =>
+      if w &&& 0x100 == 0 then (w &&& 0x87878787) ||| 0x30303030 else w],
+    forms := ["HMMA.16816.F16"], formTargets := ["sm_90a"],
+    skipOn := [("sm_80", "no FP8 mma.sync before sm_89"),
+               ("sm_120a", "no published numerics of sm_120's FP8 datapath into FP16")] },
   -- FP6/FP4 and block-scaled mma.sync (sm_120a): moderate elements as for FP8, scale words of bytes
   -- 0x78-0x87 (UE8M0 2^-7 to 2^8).
   { file := "tests/diff/mma120.ptx", kernel := "mma120", threads := 32, per := 24,
