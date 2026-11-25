@@ -269,10 +269,19 @@ def taps (t : Texture) (d : Nat) (c : Dy) (off : Int := 0) : List (Option Nat ×
 /-- The footprint of a fetch at coordinates `cs` (one per dimension), each moved by `offs` texels
 (PTX's offset operand, §9.7.12.3: "applied to coordinates before doing texture lookup", from -8
 to 7; taken in texel units, after normalized coordinates are scaled and wrapped: inferred): each
-texel's address (`none`: a border texel, zero) and its weight out of `256^dims`. -/
+texel's address (`none`: a border texel, zero) and its weight, out of `256^dims` or, linearly
+filtering two dimensions, out of 256: the far corner's weight `p`, the product of the two axes'
+weights `a`, `b` in 1/256 rounded half up, and the others `a - p`, `b - p` and `256 - a - b + p`
+(a GH200 agrees on 4,096 fetches; three dimensions take the product, inferred). -/
 def footprint (t : Texture) (cs : Array Dy) (offs : Array Int := #[]) : List (Option UInt64 × Nat) :=
   let along (d : Nat) : List (Option Nat × Nat) :=
     if d < t.dims then taps t d (cs[d]?.getD ⟨0, 0⟩) (offs[d]?.getD 0) else [(some 0, 256)]
+  match t.dims, t.filter, along 0, along 1 with
+  | 2, .linear, [(i0, _), (i1, a)], [(j0, _), (j1, b)] =>
+    let p := (a * b + 128) / 256
+    let at_ (i j : Option Nat) : Option UInt64 := do pure (t.texelAddr (← i) (← j) 0)
+    [(at_ i0 j0, 256 + p - a - b), (at_ i1 j0, a - p), (at_ i0 j1, b - p), (at_ i1 j1, p)]
+  | _, _, _, _ =>
   (along 2).flatMap fun (k, wk) => (along 1).flatMap fun (j, wj) => (along 0).map fun (i, wi) =>
     let a := do let i ← i; let j ← j; let k ← k; pure (t.texelAddr i j k)
     (a, wi * wj * wk)
@@ -300,21 +309,21 @@ def channelVal (t : Texture) (v : Nat) : Option (Int × Nat × Int) :=
     let s : Int := if v ≥ 2 ^ (w - 1) then (v : Int) - 2 ^ w else v
     some (max s (-(2 ^ (w - 1) - 1 : Int)), 2 ^ (w - 1) - 1, 0)
 
-/-- `num / den · 2^e` rounded to nearest binary32, ties to even (`away`: away from zero). -/
-def toF32 (num : Int) (den : Nat) (e : Int) (away : Bool := false) : UInt32 :=
+/-- `num / den · 2^e` rounded to nearest binary32, ties away from zero. -/
+def toF32 (num : Int) (den : Nat) (e : Int) : UInt32 :=
   if num == 0 || den == 0 then 0 else
   -- Enough quotient bits for a correctly rounded binary32, the remainder as sticky.
   let neg := num < 0
   let a := num.natAbs * 2 ^ 60
   let q := a / den
   let sticky := a % den != 0
-  (Format.f32.round (if away then .rna else .rn) .ieee neg q (e - 60) sticky).toUInt32
+  (Format.f32.round .rna .ieee neg q (e - 60) sticky).toUInt32
 
 /-- The four result words of a fetch from the texels of its footprint (`resp`: each texel's
 words, `texelBytes` rounded up to words, in footprint order) and their weights. Floats and
 normalized integers: each channel the weighted sum computed exactly and rounded once to binary32,
-ties to even (inferred) or, blending two mipmap levels, away from zero (a GH200's and an A100's
-blends of point-sampled levels). Integers
+ties away from zero (a GH200's linear filtering in one and two dimensions, and its and an A100's
+blends of point-sampled mipmap levels). Integers
 read as they are (point sampling only): the texel's channels, sign-extended. A texel's missing
 channels read as zero (inferred). -/
 def combine (t : Texture) (fp : List (Option UInt64 × Nat)) (resp : Array UInt32) : Array UInt32 :=
@@ -346,7 +355,7 @@ def combine (t : Texture) (fp : List (Option UInt64 × Nat)) (resp : Array UInt3
         let den := terms.foldl (fun d (_, _, dn, _) => Nat.lcm d dn) 1
         let num := terms.foldl (fun s (wt, n, dn, e) =>
           s + (wt : Int) * n * (den / dn : Nat) * (2 ^ (e - emin).toNat : Nat)) 0
-        toF32 num (den * wsum) emin t.mipLinear
+        toF32 num (den * wsum) emin
 
 /-- The result of a `tld4` (gather) of component `c`: that component of the four texels of the
 bilinear footprint at `(x, y)`, in the order (i, j+1), (i+1, j+1), (i+1, j), (i, j) (inferred). -/

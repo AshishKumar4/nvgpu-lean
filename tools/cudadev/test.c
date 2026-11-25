@@ -481,6 +481,72 @@ static void textureChecks(void) {
   for (int y = 0; y < H; y++)
     for (int x = 0; x < W; x++) ok = ok && out[y * W + x] == in[y][x > 0 ? x - 1 : 0];
   check("a texture object fetches a CUDA array's texels, clamped", ok);
+
+  // Linear filtering of a float array, as a GH200 filters (8 by 8 texels, (3,3) one and (4,3)
+  // two): the far corner's weight the axes' 8-bit weights' product rounded to 1/256, the others
+  // by difference, the sum rounded ties away.
+  {
+    static const char *linPtx =
+      ".version 8.0\n.target sm_80\n.address_size 64\n"
+      ".visible .entry link(.param .u64 tex_, .param .u64 xy_, .param .u64 out_) {\n"
+      "  .reg .b64 t, p, o, a; .reg .b32 i; .reg .f32 x, y, r0, r1, r2, r3;\n"
+      "  ld.param.u64 t, [tex_]; ld.param.u64 p, [xy_]; ld.param.u64 o, [out_];\n"
+      "  mov.u32 i, %tid.x; mul.wide.u32 a, i, 8; add.s64 p, p, a; mul.wide.u32 a, i, 4; add.s64 o, o, a;\n"
+      "  ld.global.f32 x, [p]; ld.global.f32 y, [p+4];\n"
+      "  tex.2d.v4.f32.f32 {r0, r1, r2, r3}, [t, {x, y}];\n"
+      "  st.global.f32 [o], r0;\n"
+      "  ret;\n}\n";
+    static const uint32_t cases[6][3] = {
+      {0x40984bc8, 0x40459f10, 0x3f5e0000}, {0x406d0963, 0x408c3873, 0x3e100000},
+      {0x408227bf, 0x40749eed, 0x3f888000}, {0x407d12c5, 0x40639b02, 0x3fb00000},
+      {0x407abf87, 0x407f637c, 0x3f380000}, {0x40845e08, 0x408c2ea4, 0x3e4c0000}};
+    CUDA_ARRAY_DESCRIPTOR ld8 = {8, 8, CU_AD_FORMAT_FLOAT, 1};
+    CUarray la;
+    CK(cuArrayCreate(&la, &ld8));
+    float lt[64] = {0};
+    lt[3 * 8 + 3] = 1.0f;
+    lt[3 * 8 + 4] = 2.0f;
+    CUDA_MEMCPY2D lc;
+    memset(&lc, 0, sizeof lc);
+    lc.srcMemoryType = CU_MEMORYTYPE_HOST; lc.srcHost = lt; lc.srcPitch = 32;
+    lc.dstMemoryType = CU_MEMORYTYPE_ARRAY; lc.dstArray = la; lc.WidthInBytes = 32; lc.Height = 8;
+    CK(cuMemcpy2D(&lc));
+    CUDA_RESOURCE_DESC lr;
+    memset(&lr, 0, sizeof lr);
+    lr.resType = CU_RESOURCE_TYPE_ARRAY;
+    lr.res.array.hArray = la;
+    CUDA_TEXTURE_DESC ltd;
+    memset(&ltd, 0, sizeof ltd);
+    ltd.addressMode[0] = ltd.addressMode[1] = CU_TR_ADDRESS_MODE_CLAMP;
+    ltd.filterMode = CU_TR_FILTER_MODE_LINEAR;
+    CUtexObject ltex;
+    CK(cuTexObjectCreate(&ltex, &lr, &ltd, NULL));
+    uint32_t xy[12], lout[6];
+    for (int c = 0; c < 6; c++) { xy[2 * c] = cases[c][0]; xy[2 * c + 1] = cases[c][1]; }
+    CUdeviceptr dxy, dlo;
+    CK(cuMemAlloc(&dxy, sizeof xy));
+    CK(cuMemAlloc(&dlo, sizeof lout));
+    CK(cuMemcpyHtoD(dxy, xy, sizeof xy));
+    CUmodule lm;
+    CK(cuModuleLoadData(&lm, linPtx));
+    CUfunction lk;
+    CK(cuModuleGetFunction(&lk, lm, "link"));
+    void *largs[] = {&ltex, &dxy, &dlo};
+    CK(cuLaunchKernel(lk, 1, 1, 1, 6, 1, 1, 0, NULL, largs, NULL));
+    CK(cuCtxSynchronize());
+    CK(cuMemcpyDtoH(lout, dlo, sizeof lout));
+    int lok = 1;
+    for (int c = 0; c < 6; c++) {
+      lok = lok && lout[c] == cases[c][2];
+      if (lout[c] != cases[c][2]) printf("linear case %d: %08x, a GH200 %08x\n", c, lout[c], cases[c][2]);
+    }
+    check("linear filtering of a float array weighs texels as a GH200 does", lok);
+    CK(cuTexObjectDestroy(ltex));
+    CK(cuModuleUnload(lm));
+    CK(cuMemFree(dxy));
+    CK(cuMemFree(dlo));
+    CK(cuArrayDestroy(la));
+  }
   memset(&c, 0, sizeof c);
   c.srcMemoryType = CU_MEMORYTYPE_ARRAY;
   c.srcArray = sarr;
