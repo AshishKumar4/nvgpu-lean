@@ -104,6 +104,15 @@ def smIn : Resource where
   facts := [.of "mem.xbarBytesPerCycle" p.mem.xbarBytesPerCycle, smsFact p]
   note := ""
 
+/-- The GPCs' links from the L2 (`L2Res.gpc`), `gpcLinkBytesPerCycle` each: every byte the L2
+answers to an SM passes its GPC's. -/
+def gpcIn : Resource where
+  name := "GPC inbound (link from the L2)"
+  unit := "bytes"
+  capacity := { instances := max p.gpcSMs.value.length 1, rate := (Memory.Config.ofParams p 0).gpcLink }
+  facts := [.of "mem.gpcLinkBytesPerCycle" p.mem.gpcLinkBytesPerCycle, .of "gpcSMs" p.gpcSMs, clock p]
+  note := ""
+
 /-- The SMs' L1/shared data stages: one wavefront of `banks · bankBytes` per `wavefrontCycles`. -/
 def l1 : Resource :=
   let c := Memory.Config.ofParams p 0

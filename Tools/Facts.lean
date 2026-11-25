@@ -81,7 +81,7 @@ def json (key : String) (p : Params) : Json := Id.run do
       ("facts", Json.arr (r.facts.map (str ·.name)).toArray), ("note", str (cell r.note))]
   let resources : Array Json :=
     #[resource (NV.Bounds.Part.dram p), resource (NV.Bounds.Part.l2 p), resource (NV.Bounds.Part.smIn p),
-      resource (NV.Bounds.Part.l1 p), resource (NV.Bounds.Part.tma p), pipe (NV.Bounds.Part.issue p)] ++
+      resource (NV.Bounds.Part.gpcIn p), resource (NV.Bounds.Part.l1 p), resource (NV.Bounds.Part.tma p), pipe (NV.Bounds.Part.issue p)] ++
     (p.ops.map (·.opcode)).toList.eraseDups.toArray.map (pipe <| NV.Bounds.Part.pipeOf p ·)
   return Json.mkObj [("part", str key), ("name", str p.name), ("clockMHz", nat p.clockMHz.value),
     ("sms", nat p.sms.value), ("smsps", nat p.smsps.value),

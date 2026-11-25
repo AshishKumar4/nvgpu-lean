@@ -99,7 +99,10 @@ def axpy (p : Params) (n bytes : Nat) : Bound where
       data: a odd, and a·x[i] with no zero byte); an empty L2 sends each first read to DRAM",
     (Part.l2 p).term (3 * n * bytes) "every program, fresh machine"
       "compulsory_traffic for x and y, compulsory_write_traffic for the y bytes that change; every \
-      L1 miss and every store passes an L2 slice"]
+      L1 miss and every store passes an L2 slice",
+    (Part.gpcIn p).term (2 * n * bytes) "every program, fresh machine"
+      "compulsory_traffic for x and y: each byte reaches some SM from the L2 at least once, through \
+      that SM's GPC's link"]
 
 structure Gemm where
   name : String
@@ -127,6 +130,9 @@ def gemm (p : Params) (g : Gemm) : Bound :=
         "every program, fresh machine"
         "compulsory_traffic for A and B, compulsory_write_traffic for C; every L1 miss and every \
         store passes an L2 slice",
+      (Part.gpcIn p).term ((g.m * g.k + g.k * g.n) * g.inBytes) "every program, fresh machine"
+        "compulsory_traffic for A and B: each byte reaches some SM from the L2 at least once, through \
+        that SM's GPC's link",
       (Part.macs p g.name g.tensor).term words "classical algorithms (every product formed)"
         "each of the m·n·k products a_ik·b_kj is formed by some unit",
       { (smInbound p).term (pebbleWords g.m g.n g.k sm p.sms.value * g.inBytes)
@@ -163,6 +169,9 @@ def attention (p : Params) (a : Attn) : Bound :=
         (Attention.prop3) adds nothing at a fixed SRAM size",
       (Part.l2 p).term (4 * io) "every program, fresh machine"
         "compulsory_traffic for Q, K, V; compulsory_write_traffic for O",
+      (Part.gpcIn p).term (3 * io) "every program, fresh machine"
+        "compulsory_traffic for Q, K and V: each byte reaches some SM from the L2 at least once, \
+        through that SM's GPC's link",
       (Part.macs p a.name a.tensor).term (2 * scores * a.dim) "classical attention (scores and P·V as dot products)"
         "each score is a dot product of dim multiply-adds, and each output a sum of dim-wide products",
       (Part.pipeOf p "MUFU").term (cdiv scores 32) "classical attention, exponentials on MUFU"
