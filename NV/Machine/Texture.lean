@@ -69,6 +69,15 @@ structure Texture where
   layers : Nat := 0
   /-- A cubemap (`cudaArrayCubemap`): square 2D layers, six a cubemap (`layers` counts faces). -/
   cube : Bool := false
+  /-- A mipmapped array's levels (`Texture.level`), 1 for any other object. -/
+  levels : Nat := 1
+  /-- Between levels, linear filtering rather than the nearest level (`cudaTextureDesc
+  ::mipmapFilterMode`). -/
+  mipLinear : Bool := false
+  /-- The level bias and the level clamps (`mipmapLevelBias`, `min`/`maxMipmapLevelClamp`), binary32. -/
+  lodBias : UInt32 := 0
+  lodMin : UInt32 := 0
+  lodMax : UInt32 := 0
   deriving Repr, Inhabited
 
 namespace Texture
@@ -122,6 +131,50 @@ def layer (t : Texture) (k : Nat) : Except String Texture :=
   else if k ≥ t.layers then .error s!"layer {k} of {t.layers}"
   else .ok { t with base := t.base + (k * (if t.dims == 1 then t.pitch else t.slice)).toUInt64,
                     layers := 0 }
+
+/-- Level `k` of a mipmapped object, as an object of its own: each dimension half the last
+level's (at least 1), rows 128-byte aligned, the levels one after another from level 0's base
+(the driver's layout, `tools/cudadev/tex.h`). -/
+def level (t : Texture) (k : Nat) : Texture := Id.run do
+  let mut base := t.base
+  let mut lv := { t with levels := 1 }
+  for j in [0:k + 1] do
+    let w := max 1 (t.width >>> j)
+    let h := if t.dims ≥ 2 then max 1 (t.height >>> j) else 1
+    let d := if t.dims ≥ 3 then max 1 (t.depth >>> j) else 1
+    let pitch := (w * t.texelBytes + 127) / 128 * 128
+    lv := { lv with base, width := w, height := h, depth := d, pitch, slice := pitch * h }
+    base := base + (pitch * h * d).toUInt64
+  return lv
+
+/-- A binary32 value in 1/256 units, truncated toward zero (non-finite values read as 0). -/
+def fixed8 (bits : UInt32) : Int :=
+  match Format.f32.decode bits.toNat with
+  | .fin neg m e =>
+    let v : Nat := if e + 8 ≥ 0 then m * 2 ^ (e + 8).toNat else m / 2 ^ (-(e + 8)).toNat
+    if neg then -(v : Int) else v
+  | _ => 0
+
+/-- The level of detail of an explicit-LOD fetch (`lod`, binary32), in 1/256 of a level: the
+LOD and the bias each truncated toward zero to 1/256, summed, clamped to the level clamps (so
+truncated) and to the levels there are. A GH200 and an A100 agree with this on 172,032 fetches
+of 7 levels (LODs from -1/2 to 6.5 in steps of 1/4096; biases 0.3 and 1/3; clamps 0.3 and 5.7). -/
+def lodOf (t : Texture) (lod : UInt32) : Int :=
+  let l := fixed8 lod + fixed8 t.lodBias
+  let hi := min (fixed8 t.lodMax) (256 * ((t.levels : Int) - 1))
+  max 0 (max (fixed8 t.lodMin) (min l hi))
+
+/-- The footprint of a fetch at LOD `l` (`lodOf`) over the levels it reads, `fpAt` a level's own
+footprint: nearest-level filtering the level nearest `l` (halves up); linear filtering the two
+levels about `l` (the last level twice past it), each footprint's weights scaled by its share
+out of 256, so that every fetch of the object reads as many texels. -/
+def mipFootprint (t : Texture) (l : Int)
+    (fpAt : Texture → List (Option UInt64 × Nat)) : List (Option UInt64 × Nat) :=
+  let last := t.levels - 1
+  if !t.mipLinear then fpAt (t.level (min last ((l + 128) / 256).toNat)) else
+  let k := min last (l / 256).toNat
+  let f := if k == last then 0 else (l % 256).toNat
+  (fpAt (t.level k)).map (fun (a, w) => (a, w * (256 - f))) ++ (fpAt (t.level (min last (k + 1)))).map (fun (a, w) => (a, w * f))
 
 /-- The address of texel `(i, j, k)`, which must be in range. -/
 def texelAddr (t : Texture) (i j k : Nat) : UInt64 :=
@@ -247,20 +300,21 @@ def channelVal (t : Texture) (v : Nat) : Option (Int × Nat × Int) :=
     let s : Int := if v ≥ 2 ^ (w - 1) then (v : Int) - 2 ^ w else v
     some (max s (-(2 ^ (w - 1) - 1 : Int)), 2 ^ (w - 1) - 1, 0)
 
-/-- `num / den · 2^e` rounded to nearest even binary32. -/
-def toF32 (num : Int) (den : Nat) (e : Int) : UInt32 :=
+/-- `num / den · 2^e` rounded to nearest binary32, ties to even (`away`: away from zero). -/
+def toF32 (num : Int) (den : Nat) (e : Int) (away : Bool := false) : UInt32 :=
   if num == 0 || den == 0 then 0 else
   -- Enough quotient bits for a correctly rounded binary32, the remainder as sticky.
   let neg := num < 0
   let a := num.natAbs * 2 ^ 60
   let q := a / den
   let sticky := a % den != 0
-  (Format.f32.round .rn .ieee neg q (e - 60) sticky).toUInt32
+  (Format.f32.round (if away then .rna else .rn) .ieee neg q (e - 60) sticky).toUInt32
 
 /-- The four result words of a fetch from the texels of its footprint (`resp`: each texel's
 words, `texelBytes` rounded up to words, in footprint order) and their weights. Floats and
-normalized integers: each channel the weighted sum computed exactly and rounded once to binary32
-(inferred). Integers
+normalized integers: each channel the weighted sum computed exactly and rounded once to binary32,
+ties to even (inferred) or, blending two mipmap levels, away from zero (a GH200's and an A100's
+blends of point-sampled levels). Integers
 read as they are (point sampling only): the texel's channels, sign-extended. A texel's missing
 channels read as zero (inferred). -/
 def combine (t : Texture) (fp : List (Option UInt64 × Nat)) (resp : Array UInt32) : Array UInt32 :=
@@ -292,7 +346,7 @@ def combine (t : Texture) (fp : List (Option UInt64 × Nat)) (resp : Array UInt3
         let den := terms.foldl (fun d (_, _, dn, _) => Nat.lcm d dn) 1
         let num := terms.foldl (fun s (wt, n, dn, e) =>
           s + (wt : Int) * n * (den / dn : Nat) * (2 ^ (e - emin).toNat : Nat)) 0
-        toF32 num (den * wsum) emin
+        toF32 num (den * wsum) emin t.mipLinear
 
 /-- The result of a `tld4` (gather) of component `c`: that component of the four texels of the
 bilinear footprint at `(x, y)`, in the order (i, j+1), (i+1, j+1), (i+1, j), (i, j) (inferred). -/

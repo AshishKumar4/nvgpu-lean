@@ -349,13 +349,15 @@ object 24 little-endian 64-bit words: texel (0, 0, 0)'s address, the dimensions 
 height, depth, the row and slice pitches, the channels and each one's bits (four words), the
 channels' kind (0 unsigned, 1 signed, 2 float), integers read normalized, coordinates normalized,
 the filter (0 point, 1 linear), the three coordinates' addressing modes (0 wrap, 1 clamp,
-2 mirror, 3 border), a surface, the layers, a cubemap; a freed object's words are all zero. -/
+2 mirror, 3 border), a surface, the layers, a cubemap, a mipmapped array's levels (1 for any
+other object), linear filtering between levels, and the level bias and clamps (binary32); 28 words
+an object, a freed object's all zero. -/
 @[export nvgpu_set_textures]
 def setTextures (d : Device) (table : ByteArray) : Device := Id.run do
   let word (i : Nat) : Nat := (List.range 8).foldl (fun a b => a + (table.get! (8 * i + b)).toNat * 256 ^ b) 0
   let mut ts := #[]
-  for o in [0:table.size / 192] do
-    let w (k : Nat) := word (24 * o + k)
+  for o in [0:table.size / 224] do
+    let w (k : Nat) := word (28 * o + k)
     let n := w 7
     let addr (m : Nat) : NV.Tex.Address := match m with | 0 => .wrap | 2 => .mirror | 3 => .border | _ => .clamp
     ts := ts.push {
@@ -364,7 +366,9 @@ def setTextures (d : Device) (table : ByteArray) : Device := Id.run do
       kind := match w 12 with | 1 => .signed | 2 => .float | _ => .unsigned,
       readNormalized := w 13 != 0, normalizedCoords := w 14 != 0,
       filter := if w 15 == 1 then .linear else .point, address := #[addr (w 16), addr (w 17), addr (w 18)],
-      surface := w 19 != 0, layers := w 20, cube := w 21 != 0 }
+      surface := w 19 != 0, layers := w 20, cube := w 21 != 0, levels := max 1 (w 22),
+      mipLinear := w 23 != 0, lodBias := (w 24).toUInt32, lodMin := (w 25).toUInt32,
+      lodMax := (w 26).toUInt32 }
   return { d with textures := ts }
 
 @[export nvgpu_error_string]

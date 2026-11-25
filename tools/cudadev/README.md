@@ -51,8 +51,9 @@ libraries and frameworks built on it load them where they would load NVIDIA's, a
   concurrent managed access); mapped page-locked memory (`CU_MEMHOSTALLOC_DEVICEMAP`) is kept the
   same way.
 * `tex.h`: CUDA arrays (pitch-linear device memory, which a texture or surface instruction cannot
-  tell from the hardware's block-linear layout) and texture and surface objects over arrays, linear
-  and pitched memory (each the device's table entry its handle names, `Device.setTextures`, as the
+  tell from the hardware's block-linear layout), mipmapped arrays (their levels one after another in
+  one allocation) and texture and surface objects over arrays, mipmapped arrays, linear and pitched
+  memory (each the device's table entry its handle names, `Device.setTextures`, as the
   simulator's texture unit reads them, `NV/Machine/Texture.lean`); 2D and 3D copies reach arrays.
 * `module.h`: modules and libraries. An image is a cubin, a fat binary (or cudart's wrapper of
   one, as `__cudaRegisterFatBinary` hands it over), or PTX. The driver's choice from a fat binary:
@@ -141,8 +142,9 @@ JAX's CUDA 13 plugin (its runtime asks the driver for a table not provided; the 
 `jax[cuda12]`, runs). PyTorch's matmuls: NVIDIA's math libraries, as PyTorch 2.9's CUDA 12
 wheels load them, ask the runtime for a table entry the device does not provide
 (`runtime_tables.h` has only ZLUDA's), and stop; PyTorch's own kernels run (the `device-torch`
-row). IPC, mipmapped arrays and texture views of block-compressed formats, mipmap levels or
-some of a cubemap's faces, conditional graph nodes (they need the device runtime's
+row). IPC, layered and cubemap mipmapped arrays, a mipmapped texture's fetches other than by
+explicit LOD (by gradients, `TXD`; of integer coordinates; gathers), texture views of
+block-compressed formats, mipmap levels or some of a cubemap's faces, conditional graph nodes (they need the device runtime's
 `cudaGraphSetConditional`), external memory and semaphores, and kernels dereferencing host memory
 other than mapped page-locked memory (`cuMemHostAlloc` with `CU_MEMHOSTALLOC_DEVICEMAP`,
 `cudaHostAllocMapped`, which kernels reach at its host address as they do managed memory, and

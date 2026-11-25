@@ -10,6 +10,14 @@ struct CUarray_st {
   unsigned format, channels, flags;
   size_t pitch, slice;          // bytes from a row to the next, from a slice (or layer) to the next
   int device;
+  int level;                    // a mipmapped array's level, whose memory the mipmapped array owns
+};
+
+// A mipmapped array: its levels, each an array of half the last one's extent (at least 1), laid
+// out one after another in one allocation (`NV.Tex.Texture.level` recomputes the layout).
+struct CUmipmappedArray_st {
+  struct CUarray_st *levels;
+  unsigned count;
 };
 
 // Bits of one channel of `format`, and its kind (0 unsigned, 1 signed, 2 float); 0 bits if unknown.
@@ -25,6 +33,12 @@ static unsigned formatBits(unsigned format, unsigned *kind) {
     case CU_AD_FORMAT_FLOAT: *kind = 2; return 32;
     default: *kind = 0; return 0;
   }
+}
+
+// An array's row pitch: its texels' bytes rounded up to 128.
+static size_t arrayPitch(size_t w, unsigned format, unsigned channels) {
+  unsigned kind;
+  return (w * channels * formatBits(format, &kind) / 8 + 127) / 128 * 128;
 }
 
 static CUresult arrayCreate(CUarray *out, size_t w, size_t h, size_t d, unsigned format, unsigned channels,
@@ -45,7 +59,7 @@ static CUresult arrayCreate(CUarray *out, size_t w, size_t h, size_t d, unsigned
   a->format = format;
   a->channels = channels;
   a->flags = flags;
-  a->pitch = (w * channels * bits / 8 + 127) / 128 * 128;
+  a->pitch = arrayPitch(w, format, channels);
   a->slice = a->pitch * (h ? h : 1);
   a->device = gcur;
   CUresult r = cuMemAlloc(&a->base, a->slice * (d ? d : 1));
@@ -69,7 +83,7 @@ CUresult CUDAAPI cuArray3DCreate(CUarray *out, const CUDA_ARRAY3D_DESCRIPTOR *d)
 }
 CUresult CUDAAPI cuArrayDestroy(CUarray a) {
   NEED_INIT();
-  if (!a) return CUDA_ERROR_INVALID_HANDLE;
+  if (!a || a->level) return CUDA_ERROR_INVALID_HANDLE;
   CUresult r = cuMemFree(a->base);
   free(a);
   return r;
@@ -93,8 +107,69 @@ CUresult CUDAAPI cuArray3DGetDescriptor(CUDA_ARRAY3D_DESCRIPTOR *d, CUarray a) {
   return CUDA_SUCCESS;
 }
 
-// The objects: 24 words each (`Device.setTextures`), per device; a destroyed one's words zero.
-#define TEX_WORDS 24
+CUresult CUDAAPI cuMipmappedArrayCreate(CUmipmappedArray *out, const CUDA_ARRAY3D_DESCRIPTOR *d, unsigned int levels) {
+  NEED_INIT();
+  if (!out || !d || !d->Width || levels == 0) return CUDA_ERROR_INVALID_VALUE;
+  if (d->Flags & ~(unsigned)(CUDA_ARRAY3D_SURFACE_LDST | CUDA_ARRAY3D_TEXTURE_GATHER)) {
+    note("mipmapped arrays with flags %#x (layered or cubemap) are not modelled", d->Flags);
+    return CUDA_ERROR_NOT_SUPPORTED;
+  }
+  size_t big = d->Width > d->Height ? d->Width : d->Height;
+  if (d->Depth > big) big = d->Depth;
+  unsigned most = 1;
+  while ((big >> most) > 0) most++;
+  if (levels > most) return CUDA_ERROR_INVALID_VALUE;
+  struct CUmipmappedArray_st *m = calloc(1, sizeof *m);
+  struct CUarray_st *ls = calloc(levels, sizeof *ls);
+  if (!m || !ls) { free(m); free(ls); return CUDA_ERROR_OUT_OF_MEMORY; }
+  size_t total = 0;
+  for (unsigned k = 0; k < levels; k++) {
+    struct CUarray_st *a = &ls[k];
+    a->width = d->Width >> k ? d->Width >> k : 1;
+    a->height = d->Height ? (d->Height >> k ? d->Height >> k : 1) : 0;
+    a->depth = d->Depth ? (d->Depth >> k ? d->Depth >> k : 1) : 0;
+    a->format = d->Format;
+    a->channels = d->NumChannels;
+    a->flags = d->Flags;
+    a->pitch = arrayPitch(a->width, d->Format, d->NumChannels);
+    a->slice = a->pitch * (a->height ? a->height : 1);
+    a->device = gcur;
+    a->level = k + 1;
+    a->base = total;
+    total += a->slice * (a->depth ? a->depth : 1);
+  }
+  unsigned kind;
+  if (formatBits(d->Format, &kind) == 0 || (d->NumChannels != 1 && d->NumChannels != 2 && d->NumChannels != 4)) {
+    free(m); free(ls);
+    return CUDA_ERROR_INVALID_VALUE;
+  }
+  CUdeviceptr base;
+  CUresult r = cuMemAlloc(&base, total);
+  if (r != CUDA_SUCCESS) { free(m); free(ls); return r; }
+  for (unsigned k = 0; k < levels; k++) ls[k].base += base;
+  m->levels = ls;
+  m->count = levels;
+  *out = m;
+  return CUDA_SUCCESS;
+}
+CUresult CUDAAPI cuMipmappedArrayGetLevel(CUarray *out, CUmipmappedArray m, unsigned int level) {
+  NEED_INIT();
+  if (!out || !m) return CUDA_ERROR_INVALID_VALUE;
+  if (level >= m->count) return CUDA_ERROR_INVALID_VALUE;
+  *out = &m->levels[level];
+  return CUDA_SUCCESS;
+}
+CUresult CUDAAPI cuMipmappedArrayDestroy(CUmipmappedArray m) {
+  NEED_INIT();
+  if (!m) return CUDA_ERROR_INVALID_HANDLE;
+  CUresult r = cuMemFree(m->levels[0].base);
+  free(m->levels);
+  free(m);
+  return r;
+}
+
+// The objects: 28 words each (`Device.setTextures`), per device; a destroyed one's words zero.
+#define TEX_WORDS 28
 static uint64_t *texTable[MAX_GPUS];
 static size_t texCount[MAX_GPUS];
 
@@ -140,14 +215,16 @@ static CUresult texRemove(unsigned long long h) {
   return r;
 }
 
-// The words of an object over resource `rd`: its memory and shape (an array's, linear memory's or
-// pitched 2D memory's); 0 if the resource is not modelled (a mipmapped array).
+// The words of an object over resource `rd`: its memory and shape (an array's, a mipmapped array's
+// first level's and its levels, linear memory's or pitched 2D memory's); 0 if not modelled.
 static int texResource(const CUDA_RESOURCE_DESC *rd, uint64_t *w) {
   unsigned kind, bits, chans;
   memset(w, 0, TEX_WORDS * 8);
+  CUmipmappedArray mip = rd->resType == CU_RESOURCE_TYPE_MIPMAPPED_ARRAY ? rd->res.mipmap.hMipmappedArray : NULL;
   switch (rd->resType) {
+    case CU_RESOURCE_TYPE_MIPMAPPED_ARRAY:
     case CU_RESOURCE_TYPE_ARRAY: {
-      CUarray a = rd->res.array.hArray;
+      CUarray a = mip ? &mip->levels[0] : rd->res.array.hArray;
       if (!a) return 0;
       bits = formatBits(a->format, &kind);
       chans = a->channels;
@@ -163,6 +240,7 @@ static int texResource(const CUDA_RESOURCE_DESC *rd, uint64_t *w) {
       w[21] = cube;
       // A 1D layered array's layers are `pitch` apart (`NV.Tex.Texture.layers`).
       if (layered && !a->height) { w[1] = 1; w[3] = 1; }
+      w[22] = mip ? mip->count : 1;
       break;
     }
     case CU_RESOURCE_TYPE_LINEAR:
@@ -269,9 +347,20 @@ CUresult CUDAAPI cuTexObjectCreate(CUtexObject *out, const CUDA_RESOURCE_DESC *r
     CUresult r = texView(rd, view, w);
     if (r != CUDA_SUCCESS) return r;
   }
-  if (td->mipmapFilterMode || td->maxAnisotropy > 1 || td->maxMipmapLevelClamp != 0.0f) {
-    note("mipmapped and anisotropic texture sampling are not modelled");
+  if (td->maxAnisotropy > 1) {
+    note("anisotropic texture sampling is not modelled");
     return CUDA_ERROR_NOT_SUPPORTED;
+  }
+  // A mipmapped array's sampling: the filter between levels, the level bias and clamps (binary32
+  // bits); over anything else, level 0 alone.
+  if (rd->resType == CU_RESOURCE_TYPE_MIPMAPPED_ARRAY) {
+    float f[3] = {td->mipmapLevelBias, td->minMipmapLevelClamp, td->maxMipmapLevelClamp};
+    uint32_t b[3];
+    memcpy(b, f, sizeof b);
+    w[23] = td->mipmapFilterMode == CU_TR_FILTER_MODE_LINEAR;
+    w[24] = b[0];
+    w[25] = b[1];
+    w[26] = b[2];
   }
   // Integer texels of 8 and 16 bits read as normalized floats unless read as integers.
   w[13] = !(td->flags & CU_TRSF_READ_AS_INTEGER) && w[12] != 2 && w[8] < 32;

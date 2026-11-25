@@ -1222,7 +1222,9 @@ def texOperand (k : Nat) : X (UInt64 × Array Arg) := do
 (`NV.Tex.combine`). Integer coordinates (`.s32`) index texels directly with nearest-point
 sampling (`tex1Dfetch`; inferred for 2d and 3d). The launch's textures have one level, so the
 mipmap forms (`.base`, `.level` with its LOD, `.grad` with its gradients) fetch from it: the LOD
-clamps to the one level there is (inferred; the LOD and gradients are read, not used). The array geometries (`.a1d`, `.a2d`) fetch from the layer their
+clamps to the one level there is (inferred; the LOD and gradients are read, not used); a
+mipmapped object's `.level` fetch reads the levels its LOD names (`Texture.lodOf`), and its other
+fetches are not modelled. The array geometries (`.a1d`, `.a2d`) fetch from the layer their
 first coordinate names (`Texture.layer`). `.cube`/`.acube` fetch from the face their direction
 points at (`Texture.cubeFace`), the direction first scaled by the reciprocal of its largest
 magnitude, and
@@ -1296,7 +1298,13 @@ def texFetch : X (Effect Thread) := do
     unless dims == 2 do throw "tld4 is modelled for 2d textures"
   if cube && !offs.isEmpty then throw "cubemap fetches take no offsets"
   let tx := if gather then { tx with filter := .linear } else tx
-  let fp := NV.Tex.footprint tx coords offs
+  -- A mipmapped object: `.level` reads the levels its LOD names (`Texture.mipFootprint`).
+  let fp ← if tx.levels > 1 then do
+      unless i.has .level && !gather && cty == .f32 do
+        throw "a fetch from a mipmapped texture other than tex.level of float coordinates (not modelled)"
+      let lod ← t.read e (match arg pi 2 with | .vec cs => cs[0]?.getD .sink | c => c) .f32
+      pure (tx.mipFootprint (tx.lodOf lod.toUInt32) fun tl => NV.Tex.footprint tl coords offs)
+    else pure (NV.Tex.footprint tx coords offs)
   let bytes := tx.texelBytes
   let req : Req := { space := .global, op := .ld, bytes, addrs := fp.toArray.map (·.1) }
   let ds ← Thread.elems (arg pi 0) 4

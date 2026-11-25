@@ -469,6 +469,114 @@ static void textureChecks(void) {
   check("a resource view reads a float array's texels as integers, and refuses another size", ok);
   CK(cuTexObjectDestroy(vtex));
   CK(cuModuleUnload(vm));
+
+  // A mipmapped array of 64 by 64 floats, 7 levels, level k all 2^k: an explicit-LOD fetch at its
+  // middle reads the nearest level, or blends the two about the LOD (a GH200 and an A100 both:
+  // LOD 0.5 reads level 1, 1.25 reads 2.5, a bias of 0.3 adds 76/256, the LOD -0.2966 is -75/256
+  // (truncated toward zero), clamps hold the LOD); a blend that ties rounds away from zero.
+  {
+    static const char *mipPtx =
+      ".version 8.0\n.target sm_80\n.address_size 64\n"
+      ".visible .entry mipk(.param .u64 tex_, .param .u64 out_, .param .u64 lods_) {\n"
+      "  .reg .b64 t, o, l, a; .reg .b32 i; .reg .f32 x, lod, r0, r1, r2, r3;\n"
+      "  ld.param.u64 t, [tex_]; ld.param.u64 o, [out_]; ld.param.u64 l, [lods_];\n"
+      "  mov.u32 i, %tid.x; mul.wide.u32 a, i, 4; add.s64 l, l, a; add.s64 o, o, a;\n"
+      "  ld.global.f32 lod, [l]; mov.f32 x, 0f3F000000;\n"
+      "  tex.level.2d.v4.f32.f32 {r0, r1, r2, r3}, [t, {x, x}], lod;\n"
+      "  st.global.f32 [o], r0;\n"
+      "  ret;\n}\n";
+    CUDA_ARRAY3D_DESCRIPTOR md = {64, 64, 0, CU_AD_FORMAT_FLOAT, 1, 0};
+    CUmipmappedArray mip;
+    CK(cuMipmappedArrayCreate(&mip, &md, 7));
+    for (unsigned k = 0; k < 7; k++) {
+      CUarray lv;
+      CK(cuMipmappedArrayGetLevel(&lv, mip, k));
+      unsigned w = 64 >> k;
+      float lvl[64 * 64];
+      for (unsigned e = 0; e < w * w; e++) lvl[e] = (float)(1u << k);
+      CUDA_MEMCPY2D cp;
+      memset(&cp, 0, sizeof cp);
+      cp.srcMemoryType = CU_MEMORYTYPE_HOST; cp.srcHost = lvl; cp.srcPitch = w * 4;
+      cp.dstMemoryType = CU_MEMORYTYPE_ARRAY; cp.dstArray = lv;
+      cp.WidthInBytes = w * 4; cp.Height = w;
+      CK(cuMemcpy2D(&cp));
+    }
+    CUDA_RESOURCE_DESC mr;
+    memset(&mr, 0, sizeof mr);
+    mr.resType = CU_RESOURCE_TYPE_MIPMAPPED_ARRAY;
+    mr.res.mipmap.hMipmappedArray = mip;
+    CUDA_TEXTURE_DESC mt;
+    memset(&mt, 0, sizeof mt);
+    mt.addressMode[0] = mt.addressMode[1] = CU_TR_ADDRESS_MODE_CLAMP;
+    mt.flags = CU_TRSF_NORMALIZED_COORDINATES;
+    mt.maxMipmapLevelClamp = 6.0f;
+    const float lods[8] = {-0.2966f, 0.49609375f, 0.5f, 1.25f, 2.75f, 5.5f, 9.0f, 0.05f};
+    const float point[8] = {1, 1, 2, 2, 8, 64, 64, 1};
+    const float linear[8] = {1, 1.49609375f, 1.5f, 2.5f, 7.0f, 48, 64, 1.046875f};
+    const float biased[8] = {1.00390625f, 1.79296875f, 1.796875f, 3.09375f, 8.375f, 57.5f, 64, 1.34375f};
+    CUdeviceptr dl, dv;
+    CK(cuMemAlloc(&dl, sizeof lods));
+    CK(cuMemAlloc(&dv, sizeof lods));
+    CK(cuMemcpyHtoD(dl, lods, sizeof lods));
+    CUmodule mm;
+    CK(cuModuleLoadData(&mm, mipPtx));
+    CUfunction mk;
+    CK(cuModuleGetFunction(&mk, mm, "mipk"));
+    const float *want[3] = {point, linear, biased};
+    ok = 1;
+    for (int c = 0; c < 3; c++) {
+      mt.mipmapFilterMode = c ? CU_TR_FILTER_MODE_LINEAR : CU_TR_FILTER_MODE_POINT;
+      mt.mipmapLevelBias = c == 2 ? 0.3f : 0.0f;
+      CUtexObject mtex;
+      CK(cuTexObjectCreate(&mtex, &mr, &mt, NULL));
+      void *margs[] = {&mtex, &dv, &dl};
+      CK(cuLaunchKernel(mk, 1, 1, 1, 8, 1, 1, 0, NULL, margs, NULL));
+      CK(cuCtxSynchronize());
+      float got[8];
+      CK(cuMemcpyDtoH(got, dv, sizeof got));
+      for (int k = 0; k < 8; k++) ok = ok && got[k] == want[c][k];
+      CK(cuTexObjectDestroy(mtex));
+    }
+    // Two levels of 0x3f0fab54 and 0x3faac74f blended at LOD 1/4: an exact tie, 0x3f412427.
+    CUDA_ARRAY3D_DESCRIPTOR td2 = {64, 64, 0, CU_AD_FORMAT_FLOAT, 1, 0};
+    CUmipmappedArray mip2;
+    CK(cuMipmappedArrayCreate(&mip2, &td2, 2));
+    const uint32_t two[2] = {0x3f0fab54u, 0x3faac74fu};
+    for (unsigned k = 0; k < 2; k++) {
+      CUarray lv;
+      CK(cuMipmappedArrayGetLevel(&lv, mip2, k));
+      unsigned w = 64 >> k;
+      uint32_t lvl[64 * 64];
+      for (unsigned e = 0; e < w * w; e++) lvl[e] = two[k];
+      CUDA_MEMCPY2D cp;
+      memset(&cp, 0, sizeof cp);
+      cp.srcMemoryType = CU_MEMORYTYPE_HOST; cp.srcHost = lvl; cp.srcPitch = w * 4;
+      cp.dstMemoryType = CU_MEMORYTYPE_ARRAY; cp.dstArray = lv;
+      cp.WidthInBytes = w * 4; cp.Height = w;
+      CK(cuMemcpy2D(&cp));
+    }
+    mr.res.mipmap.hMipmappedArray = mip2;
+    mt.mipmapFilterMode = CU_TR_FILTER_MODE_LINEAR;
+    mt.mipmapLevelBias = 0.0f;
+    mt.maxMipmapLevelClamp = 1.0f;
+    CUtexObject ttex;
+    CK(cuTexObjectCreate(&ttex, &mr, &mt, NULL));
+    const float quarter[8] = {0.25f, 0.25f, 0.25f, 0.25f, 0.25f, 0.25f, 0.25f, 0.25f};
+    CK(cuMemcpyHtoD(dl, quarter, sizeof quarter));
+    void *targs[] = {&ttex, &dv, &dl};
+    CK(cuLaunchKernel(mk, 1, 1, 1, 8, 1, 1, 0, NULL, targs, NULL));
+    CK(cuCtxSynchronize());
+    uint32_t tie[8];
+    CK(cuMemcpyDtoH(tie, dv, sizeof tie));
+    ok = ok && tie[0] == 0x3f412427u;
+    CK(cuTexObjectDestroy(ttex));
+    CK(cuMipmappedArrayDestroy(mip2));
+    check("a mipmapped array's explicit-LOD fetch reads the nearest level or blends two, with bias and clamps", ok);
+    CK(cuModuleUnload(mm));
+    CK(cuMemFree(dl));
+    CK(cuMemFree(dv));
+    CK(cuMipmappedArrayDestroy(mip));
+  }
   CK(cuTexObjectDestroy(tex));
   CK(cuSurfObjectDestroy(surf));
   CK(cuArrayDestroy(tarr));

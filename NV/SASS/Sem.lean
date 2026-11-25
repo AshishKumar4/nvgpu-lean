@@ -1375,12 +1375,25 @@ def decodeTex (d : Dec) : Option Run :=
             let ka := (vals + 1) / 2
             (List.range vals).map fun j => if j < ka then ra + j else rb.getD 255 + (j - ka)
         let regs := all.take nvals
+        let lodReg := if ll then all[nvals]? else none
         let offReg := if i.hasMod "AOFFI" then all[nvals + (if ll then 1 else 0)]? else none
         let coordRegs := regs.drop lead
         let tx := if ints then { tx0 with filter := .point, normalizedCoords := false } else
           if gather then { tx0 with filter := .linear } else tx0
         let fpOf (l : Nat) : Except String (List (Option UInt64 × Nat)) := do
           if tx.cube != cube then throw "a cubemap fetch from a plain texture, or the reverse"
+          -- A mipmapped object: an explicit-LOD `TEX` reads the levels its LOD names; a fetch
+          -- by gradients (`TXD`) or of integer coordinates or a gather is not modelled.
+          if tx.levels > 1 then
+            let some lr := lodReg | throw "a fetch from a mipmapped texture without an explicit LOD (not modelled)"
+            if op != "TEX" then throw s!"{op} from a mipmapped texture (not modelled)"
+            let cs ← (coordRegs.take tx.dims).toArray.mapM fun r => NV.Tex.coordOf (x.v.getR r l)
+            let offs : Array Int := match offReg with
+              | some r => (Array.range 3).map fun k =>
+                  let v := ((x.v.getR r l).toNat >>> (4 * k)) % 16
+                  if v ≥ 8 then (v : Int) - 16 else v
+              | none => #[]
+            return tx.mipFootprint (tx.lodOf (x.v.getR lr l)) fun t => NV.Tex.footprint t cs offs
           if cube then
             let (face, u, v) := NV.Tex.Texture.cubeFace (x.v.getR coordRegs[0]! l)
               (x.v.getR coordRegs[1]! l) (x.v.getR coordRegs[2]! l)
