@@ -1228,9 +1228,9 @@ fetches are not modelled. The array geometries (`.a1d`, `.a2d`) fetch from the l
 first coordinate names (`Texture.layer`). `.cube`/`.acube` fetch from the face their direction
 points at (`Texture.cubeFace`), the direction first scaled by the reciprocal of its largest
 magnitude, and
-`.acube`'s cubemap index clamped to 65535 (`SEL`). Not modelled, and faulting: samplers, offsets,
-depth compare, multisampling, `.f16` results, the residency predicate. The offset operand moves the
-coordinates by whole texels (`Texture.footprint`). -/
+`.acube`'s cubemap index clamped to 65535 (`SEL`). The offset operand moves the coordinates by
+whole texels (`Texture.footprint`). Not modelled, and faulting: samplers, depth compare,
+multisampling, `.f16` results, the residency predicate. -/
 def texFetch : X (Effect Thread) := do
   let i := pi.i
   if i.has .geom2dms || i.has .a2dms then throw "this texture geometry is not modelled"
