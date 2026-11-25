@@ -52,11 +52,11 @@ libraries and frameworks built on it load them where they would load NVIDIA's, a
   same way.
 * `tex.h`: CUDA arrays (pitch-linear device memory, which a texture or surface instruction cannot
   tell from the hardware's block-linear layout), mipmapped arrays (their levels one after another in
-  one allocation) and texture and surface objects over arrays, mipmapped arrays, linear and pitched
-  memory (each the device's table entry its handle names, `Device.setTextures`, as the
-  simulator's texture unit reads them, `NV/Machine/Texture.lean`), and views of arrays and
-  mipmapped arrays in another texel format or of some of their layers or mipmap levels; 2D and 3D
-  copies reach arrays.
+  one allocation, a layered or cubemap level's layers or faces together) and texture and surface
+  objects over arrays, mipmapped arrays, linear and pitched memory (each the device's table entry
+  its handle names, `Device.setTextures`, as the simulator's texture unit reads them,
+  `NV/Machine/Texture.lean`), and views of arrays and mipmapped arrays in another texel format or of
+  some of their layers or mipmap levels; 2D and 3D copies reach arrays.
 * `module.h`: modules and libraries. An image is a cubin, a fat binary (or cudart's wrapper of
   one, as `__cudaRegisterFatBinary` hands it over), or PTX. The driver's choice from a fat binary:
   the device's architecture's cubin (`sm_XYa` only on that architecture, `sm_XY` on its major with
@@ -143,13 +143,12 @@ simulated time (a step's time is the largest).
 ## Not provided
 
 JAX's CUDA 13 plugin (its runtime asks the driver for a table not provided; the CUDA 12 plugin,
-`jax[cuda12]`, runs). PyTorch's matmuls: NVIDIA's math libraries, as PyTorch 2.9's CUDA 12
-wheels load them, ask the runtime for a table entry the device does not provide
-(`runtime_tables.h` has only ZLUDA's), and stop; PyTorch's own kernels run (the `device-torch`
-row). IPC, layered and cubemap mipmapped arrays, a mipmapped texture's fetches other than by
-explicit LOD (by gradients, `TXD`; of integer coordinates; gathers), texture views of
-block-compressed formats or some of a cubemap's faces, external memory and
+`jax[cuda12]`, runs). PyTorch's matmuls: NVIDIA's math libraries, as PyTorch 2.9's CUDA 12 wheels
+load them, ask the runtime for a table entry the device does not provide (`runtime_tables.h` has
+only ZLUDA's), and stop; PyTorch's own kernels run (the `device-torch` row). IPC, a mipmapped
+texture's fetches other than by explicit LOD (by gradients, `TXD`; of integer coordinates; gathers),
+texture views of block-compressed formats or some of a cubemap's faces, external memory and
 semaphores, and kernels dereferencing host memory other than mapped page-locked memory
 (`cuMemHostAlloc` with `CU_MEMHOSTALLOC_DEVICEMAP`, `cudaHostAllocMapped`, which kernels reach at
-its host address as they do managed memory, and which takes device memory): each fails with a
-CUDA error naming it.
+its host address as they do managed memory, and which takes device memory): each fails with a CUDA
+error naming it.

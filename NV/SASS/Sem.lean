@@ -1382,34 +1382,37 @@ def decodeTex (d : Dec) : Option Run :=
           if gather then { tx0 with filter := .linear } else tx0
         let fpOf (l : Nat) : Except String (List (Option UInt64 × Nat)) := do
           if tx.cube != cube then throw "a cubemap fetch from a plain texture, or the reverse"
-          -- A mipmapped object: an explicit-LOD `TEX` reads the levels its LOD names; a fetch
-          -- by gradients (`TXD`) or of integer coordinates or a gather is not modelled.
-          if tx.levels > 1 then
-            let some lr := lodReg | throw "a fetch from a mipmapped texture without an explicit LOD (not modelled)"
-            if op != "TEX" then throw s!"{op} from a mipmapped texture (not modelled)"
-            let cs ← (coordRegs.take tx.dims).toArray.mapM fun r => NV.Tex.coordOf (x.v.getR r l)
-            let offs : Array Int := match offReg with
-              | some r => (Array.range 3).map fun k =>
-                  let v := ((x.v.getR r l).toNat >>> (4 * k)) % 16
-                  if v ≥ 8 then (v : Int) - 16 else v
-              | none => #[]
-            return tx.mipFootprint (tx.lodOf (x.v.getR lr l)) fun t s => NV.Tex.footprint t cs offs s
-          if cube then
-            let (face, u, v) := NV.Tex.Texture.cubeFace (x.v.getR coordRegs[0]! l)
-              (x.v.getR coordRegs[1]! l) (x.v.getR coordRegs[2]! l)
-            let idx := if array then (x.v.getR regs[0]! l).toNat else 0
-            let tf := { (← NV.Tex.Texture.layer tx (6 * idx + face)) with normalizedCoords := true }
-            return NV.Tex.footprint tf #[← NV.Tex.coordOf u, ← NV.Tex.coordOf v]
-          let tx ← if array then NV.Tex.Texture.layer tx (x.v.getR regs[0]! l).toNat else pure tx
-          let cs ← (coordRegs.take tx.dims).toArray.mapM fun r =>
-            if ints then pure ({ n := (x.v.getR r l).toInt32.toInt, e := 0 } : NV.Tex.Dy)
-            else NV.Tex.coordOf (x.v.getR r l)
           let offs : Array Int := match offReg with
             | some r => (Array.range 3).map fun k =>
                 let v := ((x.v.getR r l).toNat >>> (4 * k)) % 16
                 if v ≥ 8 then (v : Int) - 16 else v
             | none => #[]
-          return NV.Tex.footprint tx cs offs
+          -- The layer an array fetch names, or the cubemap's face the direction picks within it,
+          -- taken from each level the fetch reads (`pick`): a level holds its layers together.
+          let (tx, layerK, cs, offs) ← if cube then do
+              let (face, u, v) := NV.Tex.Texture.cubeFace (x.v.getR coordRegs[0]! l)
+                (x.v.getR coordRegs[1]! l) (x.v.getR coordRegs[2]! l)
+              let k := 6 * (if array then (x.v.getR regs[0]! l).toNat else 0) + face
+              discard <| NV.Tex.Texture.layer tx k
+              pure ({ tx with normalizedCoords := true }, some k,
+                    #[← NV.Tex.coordOf u, ← NV.Tex.coordOf v], #[])
+            else do
+              let k := if array then some (x.v.getR regs[0]! l).toNat else none
+              if let some k := k then discard <| NV.Tex.Texture.layer tx k
+              let cs ← (coordRegs.take tx.dims).toArray.mapM fun r =>
+                if ints then pure ({ n := (x.v.getR r l).toInt32.toInt, e := 0 } : NV.Tex.Dy)
+                else NV.Tex.coordOf (x.v.getR r l)
+              pure (tx, k, cs, offs)
+          let pick (t : NV.Tex.Texture) : NV.Tex.Texture := match layerK with
+            | some k => t.layerAt k
+            | none => t
+          -- A mipmapped object: an explicit-LOD `TEX` reads the levels its LOD names; a fetch
+          -- by gradients (`TXD`) or of integer coordinates or a gather is not modelled.
+          if tx.levels > 1 then
+            let some lr := lodReg | throw "a fetch from a mipmapped texture without an explicit LOD (not modelled)"
+            if op != "TEX" then throw s!"{op} from a mipmapped texture (not modelled)"
+            return tx.mipFootprint (tx.lodOf (x.v.getR lr l)) fun t s => NV.Tex.footprint (pick t) cs offs s
+          return NV.Tex.footprint (pick tx) cs offs
         match lanes.mapM fun l => do pure (l, ← fpOf l) with
         | .error e => .fault s!"{i.full} at {i.pc}: {e}"
         | .ok fps =>

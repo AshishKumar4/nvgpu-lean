@@ -1268,17 +1268,23 @@ def texFetch : X (Effect Thread) := do
       let k ← t.read e (cargs[0]?.getD .sink) .u32
       pure (if cube then min k.toNat 65535 else k.toNat, cargs.extract 1 cargs.size)
     else pure (0, cargs)
-  let (tx, cargs, faceUV) ← if cube then do
+  -- The layer is taken from each level a fetch reads (`pick`): a level holds its layers together.
+  let (tx, layerK, cargs, faceUV) ← if cube then do
       let x ← (cargs.extract 0 3).mapM fun c => do pure (← t.read e c .f32).toUInt32
       let mx := NV.Num.F32.minMax true false false
       let m := mx (mx (x[0]! &&& 0x7fffffff) (x[1]! &&& 0x7fffffff)) (x[2]! &&& 0x7fffffff)
       let r := (NV.Num.Approx.rcp .f32 true m.toNat).toUInt32
       let x := x.map (NV.Num.F32.mul .rn false · r)
       let (face, u, v) := NV.Tex.Texture.cubeFace x[0]! x[1]! x[2]!
-      pure ({ (← NV.Tex.Texture.layer tx (6 * idx + face)) with normalizedCoords := true },
-            #[], some (u, v))
-    else if array then pure (← NV.Tex.Texture.layer tx idx, cargs, none)
-    else pure (tx, cargs, none)
+      discard <| NV.Tex.Texture.layer tx (6 * idx + face)
+      pure ({ tx with normalizedCoords := true }, some (6 * idx + face), #[], some (u, v))
+    else if array then do
+      discard <| NV.Tex.Texture.layer tx idx
+      pure (tx, some idx, cargs, none)
+    else pure (tx, none, cargs, none)
+  let pick (tl : NV.Tex.Texture) : NV.Tex.Texture := match layerK with
+    | some k => tl.layerAt k
+    | none => tl
   let floats := tx.kind == .float || tx.readNormalized
   unless (dty == .f32) == floats do
     throw s!".{Keyword.name dty} results from a texture of {repr tx.kind} texels{if tx.readNormalized then " read normalized" else ""}"
@@ -1303,8 +1309,8 @@ def texFetch : X (Effect Thread) := do
       unless i.has .level && !gather && cty == .f32 do
         throw "a fetch from a mipmapped texture other than tex.level of float coordinates (not modelled)"
       let lod ← t.read e (match arg pi 2 with | .vec cs => cs[0]?.getD .sink | c => c) .f32
-      pure (tx.mipFootprint (tx.lodOf lod.toUInt32) fun tl s => NV.Tex.footprint tl coords offs s)
-    else pure (NV.Tex.footprint tx coords offs)
+      pure (tx.mipFootprint (tx.lodOf lod.toUInt32) fun tl s => NV.Tex.footprint (pick tl) coords offs s)
+    else pure (NV.Tex.footprint (pick tx) coords offs)
   let bytes := tx.texelBytes
   let req : Req := { space := .global, op := .ld, bytes, addrs := fp.toArray.map (·.1) }
   let ds ← Thread.elems (arg pi 0) 4

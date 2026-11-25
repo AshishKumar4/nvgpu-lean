@@ -123,18 +123,21 @@ def cubeFace (x y z : UInt32) : Nat × UInt32 × UInt32 :=
     NV.Num.F32.mul .rn false (NV.Num.F32.add .rn false q 0x3f800000) 0x3f000000
   (face, unit s, unit t)
 
+/-- Layer `k` of a layered object, which must be one of its layers (`layer`). -/
+def layerAt (t : Texture) (k : Nat) : Texture :=
+  { t with base := t.base + (k * (if t.dims == 1 then t.pitch else t.slice)).toUInt64, layers := 0 }
+
 /-- Layer `k` of a layered object, as an object of its own (filtering stays within a layer, CUDA
 Programming Guide, layered textures). A layer index past the last is left undefined by the
 ISA (§9.7.12.3: an unsigned index into the array), so it is an error. -/
 def layer (t : Texture) (k : Nat) : Except String Texture :=
   if t.layers == 0 then .error "an array access to an object that is not layered"
   else if k ≥ t.layers then .error s!"layer {k} of {t.layers}"
-  else .ok { t with base := t.base + (k * (if t.dims == 1 then t.pitch else t.slice)).toUInt64,
-                    layers := 0 }
+  else .ok (t.layerAt k)
 
 /-- Level `k` of a mipmapped object, as an object of its own: each dimension half the last
-level's (at least 1), rows 128-byte aligned, the levels one after another from level 0's base
-(the driver's layout, `tools/cudadev/tex.h`). -/
+level's (at least 1), rows 128-byte aligned, the levels one after another from level 0's base,
+a layered level's layers (a cubemap's faces) together (the driver's layout, `tools/cudadev/tex.h`). -/
 def level (t : Texture) (k : Nat) : Texture := Id.run do
   let mut base := t.base
   let mut lv := { t with levels := 1 }
@@ -144,7 +147,7 @@ def level (t : Texture) (k : Nat) : Texture := Id.run do
     let d := if t.dims ≥ 3 then max 1 (t.depth >>> j) else 1
     let pitch := (w * t.texelBytes + 127) / 128 * 128
     lv := { lv with base, width := w, height := h, depth := d, pitch, slice := pitch * h }
-    base := base + (pitch * h * d).toUInt64
+    base := base + (pitch * h * d * max 1 t.layers).toUInt64
   return lv
 
 /-- A binary32 value in 1/256 units, truncated toward zero (non-finite values read as 0). -/

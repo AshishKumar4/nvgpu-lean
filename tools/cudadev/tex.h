@@ -110,12 +110,18 @@ CUresult CUDAAPI cuArray3DGetDescriptor(CUDA_ARRAY3D_DESCRIPTOR *d, CUarray a) {
 CUresult CUDAAPI cuMipmappedArrayCreate(CUmipmappedArray *out, const CUDA_ARRAY3D_DESCRIPTOR *d, unsigned int levels) {
   NEED_INIT();
   if (!out || !d || !d->Width || levels == 0) return CUDA_ERROR_INVALID_VALUE;
-  if (d->Flags & ~(unsigned)(CUDA_ARRAY3D_SURFACE_LDST | CUDA_ARRAY3D_TEXTURE_GATHER)) {
-    note("mipmapped arrays with flags %#x (layered or cubemap) are not modelled", d->Flags);
+  const unsigned layers = CUDA_ARRAY3D_LAYERED | CUDA_ARRAY3D_CUBEMAP;
+  if (d->Flags & ~(unsigned)(CUDA_ARRAY3D_SURFACE_LDST | CUDA_ARRAY3D_TEXTURE_GATHER | layers)) {
+    note("mipmapped arrays with flags %#x are not modelled", d->Flags);
     return CUDA_ERROR_NOT_SUPPORTED;
   }
+  // A layered array's depth counts its layers, a cubemap's its faces: each level has them all.
+  if ((d->Flags & layers) && !d->Depth) return CUDA_ERROR_INVALID_VALUE;
+  if ((d->Flags & CUDA_ARRAY3D_CUBEMAP) &&
+      (d->Width != d->Height || d->Depth % 6 || (!(d->Flags & CUDA_ARRAY3D_LAYERED) && d->Depth != 6)))
+    return CUDA_ERROR_INVALID_VALUE;
   size_t big = d->Width > d->Height ? d->Width : d->Height;
-  if (d->Depth > big) big = d->Depth;
+  if (d->Depth > big && !(d->Flags & layers)) big = d->Depth;
   unsigned most = 1;
   while ((big >> most) > 0) most++;
   if (levels > most) return CUDA_ERROR_INVALID_VALUE;
@@ -127,7 +133,7 @@ CUresult CUDAAPI cuMipmappedArrayCreate(CUmipmappedArray *out, const CUDA_ARRAY3
     struct CUarray_st *a = &ls[k];
     a->width = d->Width >> k ? d->Width >> k : 1;
     a->height = d->Height ? (d->Height >> k ? d->Height >> k : 1) : 0;
-    a->depth = d->Depth ? (d->Depth >> k ? d->Depth >> k : 1) : 0;
+    a->depth = (d->Flags & layers) ? d->Depth : d->Depth ? (d->Depth >> k ? d->Depth >> k : 1) : 0;
     a->format = d->Format;
     a->channels = d->NumChannels;
     a->flags = d->Flags;

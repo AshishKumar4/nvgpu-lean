@@ -857,6 +857,96 @@ static void textureChecks(void) {
     CK(cuMemFree(din));
     CK(cuMemFree(dout));
     CK(cuMipmappedArrayDestroy(mip3));
+
+    // Layered and cubemap mipmapped arrays: 32 by 32, 6 levels, 3 layers or 6 faces, texel (level
+    // k, layer or face l, x, y) 1000 l + 100 k + 4 y + x; explicit-LOD fetches, linear between
+    // levels, where a GH200 returns `want`: a layered fetch (layer, x, 1 - x) and a cubemap fetch
+    // of the direction (2x - 1, 0.4 - x, 0.3) with the face's axis set to +-1, at each LOD.
+    static const char *layPtx =
+      ".version 8.0\n.target sm_80\n.address_size 64\n"
+      ".visible .entry layk(.param .u64 tex_, .param .u64 in_, .param .u64 out_) {\n"
+      "  .reg .b64 t, p, o, a; .reg .b32 i, l, x, y, lod, r0, r1, r2, r3;\n"
+      "  ld.param.u64 t, [tex_]; ld.param.u64 p, [in_]; ld.param.u64 o, [out_];\n"
+      "  mov.u32 i, %tid.x; mul.wide.u32 a, i, 16; add.s64 p, p, a; mul.wide.u32 a, i, 4; add.s64 o, o, a;\n"
+      "  ld.global.b32 l, [p]; ld.global.b32 x, [p+4]; ld.global.b32 y, [p+8]; ld.global.b32 lod, [p+12];\n"
+      "  tex.level.a2d.v4.f32.f32 {r0, r1, r2, r3}, [t, {l, x, y, y}], lod;\n"
+      "  st.global.b32 [o], r0;\n"
+      "  ret;\n}\n"
+      ".visible .entry cubek(.param .u64 tex_, .param .u64 in_, .param .u64 out_) {\n"
+      "  .reg .b64 t, p, o, a; .reg .b32 i, x, y, z, lod, r0, r1, r2, r3;\n"
+      "  ld.param.u64 t, [tex_]; ld.param.u64 p, [in_]; ld.param.u64 o, [out_];\n"
+      "  mov.u32 i, %tid.x; mul.wide.u32 a, i, 16; add.s64 p, p, a; mul.wide.u32 a, i, 4; add.s64 o, o, a;\n"
+      "  ld.global.b32 x, [p]; ld.global.b32 y, [p+4]; ld.global.b32 z, [p+8]; ld.global.b32 lod, [p+12];\n"
+      "  tex.level.cube.v4.f32.f32 {r0, r1, r2, r3}, [t, {x, y, z, z}], lod;\n"
+      "  st.global.b32 [o], r0;\n"
+      "  ret;\n}\n";
+    static const float layArgs[2][4][3] = {
+      {{0, 0.1f, 1.25f}, {2, 0.5f, 4}, {1, 0.83f, 2.75f}, {2, 0.1f, 0.5f}},
+      {{4, 0.5f, 0}, {5, 0.5f, 1}, {0, 0.83f, 2.75f}, {1, 0.83f, 6}}};
+    static const float layWant[2][4] = {{174.75f, 2405, 1279.75f, 2136}, {4084, 5140, 287.25f, 1500}};
+    CUmodule lym;
+    CK(cuModuleLoadData(&lym, layPtx));
+    CUdeviceptr lyin, lyout;
+    CK(cuMemAlloc(&lyin, 64));
+    CK(cuMemAlloc(&lyout, 16));
+    int lyok = 1;
+    for (int c = 0; c < 2; c++) {
+      CUDA_ARRAY3D_DESCRIPTOR ld = {32, 32, c ? 6 : 3, CU_AD_FORMAT_FLOAT, 1, c ? CUDA_ARRAY3D_CUBEMAP : CUDA_ARRAY3D_LAYERED};
+      CUmipmappedArray lay;
+      CK(cuMipmappedArrayCreate(&lay, &ld, 6));
+      for (unsigned k = 0; k < 6; k++) {
+        CUarray lv;
+        CK(cuMipmappedArrayGetLevel(&lv, lay, k));
+        unsigned w = 32 >> k;
+        static float vals[6 * 32 * 32];
+        for (unsigned l = 0; l < ld.Depth; l++)
+          for (unsigned y = 0; y < w; y++)
+            for (unsigned x = 0; x < w; x++) vals[(l * w + y) * w + x] = 1000.0f * l + 100.0f * k + 4.0f * y + x;
+        CUDA_MEMCPY3D cp;
+        memset(&cp, 0, sizeof cp);
+        cp.srcMemoryType = CU_MEMORYTYPE_HOST; cp.srcHost = vals; cp.srcPitch = w * 4; cp.srcHeight = w;
+        cp.dstMemoryType = CU_MEMORYTYPE_ARRAY; cp.dstArray = lv;
+        cp.WidthInBytes = w * 4; cp.Height = w; cp.Depth = ld.Depth;
+        CK(cuMemcpy3D(&cp));
+      }
+      float in[4][4];
+      for (int e = 0; e < 4; e++) {
+        float x = layArgs[c][e][1];
+        if (c) {
+          float d[3] = {2 * x - 1, 0.4f - x, 0.3f};
+          d[(int)layArgs[c][e][0] / 2] = (int)layArgs[c][e][0] % 2 ? -1.0f : 1.0f;
+          in[e][0] = d[0]; in[e][1] = d[1]; in[e][2] = d[2];
+        } else {
+          uint32_t l = (uint32_t)layArgs[c][e][0];
+          memcpy(&in[e][0], &l, 4); in[e][1] = x; in[e][2] = 1 - x;
+        }
+        in[e][3] = layArgs[c][e][2];
+      }
+      CK(cuMemcpyHtoD(lyin, in, sizeof in));
+      mr.res.mipmap.hMipmappedArray = lay;
+      mt.filterMode = CU_TR_FILTER_MODE_POINT;
+      mt.mipmapFilterMode = CU_TR_FILTER_MODE_LINEAR;
+      mt.maxMipmapLevelClamp = 5.0f;
+      CUtexObject lyt;
+      CK(cuTexObjectCreate(&lyt, &mr, &mt, NULL));
+      CUfunction lyk;
+      CK(cuModuleGetFunction(&lyk, lym, c ? "cubek" : "layk"));
+      void *lyargs[] = {&lyt, &lyin, &lyout};
+      CK(cuLaunchKernel(lyk, 1, 1, 1, 4, 1, 1, 0, NULL, lyargs, NULL));
+      CK(cuCtxSynchronize());
+      float got[4];
+      CK(cuMemcpyDtoH(got, lyout, sizeof got));
+      for (int e = 0; e < 4; e++) {
+        lyok = lyok && got[e] == layWant[c][e];
+        if (got[e] != layWant[c][e]) printf("%s case %d: %g, a GH200 %g\n", c ? "cubemap" : "layered", e, got[e], layWant[c][e]);
+      }
+      CK(cuTexObjectDestroy(lyt));
+      CK(cuMipmappedArrayDestroy(lay));
+    }
+    check("layered and cubemap mipmapped arrays read the level and layer or face a fetch names", lyok);
+    CK(cuModuleUnload(lym));
+    CK(cuMemFree(lyin));
+    CK(cuMemFree(lyout));
   }
   CK(cuTexObjectDestroy(tex));
   CK(cuSurfObjectDestroy(surf));
