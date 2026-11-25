@@ -35,17 +35,41 @@ static unsigned formatBits(unsigned format, unsigned *kind) {
   }
 }
 
-// An array's row pitch: its texels' bytes rounded up to 128.
+// A block-compressed format (CU_AD_FORMAT_BC1_UNORM to BC7_UNORM_SRGB): its BC number, 1 to 7,
+// and its 4x4 blocks' bytes; 0 for any other format.
+static unsigned bcOf(unsigned format, unsigned *blockBytes) {
+  if (format < CU_AD_FORMAT_BC1_UNORM || format > CU_AD_FORMAT_BC7_UNORM_SRGB) return 0;
+  static const unsigned bc[] = {1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7};
+  unsigned n = bc[format - CU_AD_FORMAT_BC1_UNORM];
+  *blockBytes = n == 1 || n == 4 ? 8 : 16;
+  return n;
+}
+
+// An array's row pitch: its texels' bytes rounded up to 128; a block-compressed array's rows are
+// of blocks.
 static size_t arrayPitch(size_t w, unsigned format, unsigned channels) {
-  unsigned kind;
+  unsigned kind, bb;
+  if (bcOf(format, &bb)) return ((w + 3) / 4 * bb + 127) / 128 * 128;
   return (w * channels * formatBits(format, &kind) / 8 + 127) / 128 * 128;
+}
+
+// An array's rows a slice: a block-compressed array's are rows of 4x4 blocks.
+static size_t arrayRows(const struct CUarray_st *a) {
+  unsigned bb;
+  size_t h = a->height ? a->height : 1;
+  return bcOf(a->format, &bb) ? (h + 3) / 4 : h;
 }
 
 static CUresult arrayCreate(CUarray *out, size_t w, size_t h, size_t d, unsigned format, unsigned channels,
                             unsigned flags) {
-  unsigned kind;
+  unsigned kind, bb;
   unsigned bits = formatBits(format, &kind);
-  if (!out || !w || bits == 0 || (channels != 1 && channels != 2 && channels != 4)) return CUDA_ERROR_INVALID_VALUE;
+  // Block-compressed arrays are 2D, of the format's channels (BC6H's three).
+  static const unsigned bcChannels[] = {0, 4, 4, 4, 1, 2, 3, 4};
+  unsigned bc = bcOf(format, &bb);
+  if (bc && (channels != bcChannels[bc] || !h || d || flags)) return CUDA_ERROR_INVALID_VALUE;
+  if (!out || !w || (!bc && (bits == 0 || (channels != 1 && channels != 2 && channels != 4))))
+    return CUDA_ERROR_INVALID_VALUE;
   if (flags & ~(unsigned)(CUDA_ARRAY3D_LAYERED | CUDA_ARRAY3D_SURFACE_LDST | CUDA_ARRAY3D_CUBEMAP |
                           CUDA_ARRAY3D_TEXTURE_GATHER)) {
     note("CUDA array flags %#x are not modelled", flags);
@@ -60,7 +84,7 @@ static CUresult arrayCreate(CUarray *out, size_t w, size_t h, size_t d, unsigned
   a->channels = channels;
   a->flags = flags;
   a->pitch = arrayPitch(w, format, channels);
-  a->slice = a->pitch * (h ? h : 1);
+  a->slice = a->pitch * arrayRows(a);
   a->device = gcur;
   CUresult r = cuMemAlloc(&a->base, a->slice * (d ? d : 1));
   if (r != CUDA_SUCCESS) {
@@ -234,6 +258,17 @@ static int texResource(const CUDA_RESOURCE_DESC *rd, uint64_t *w) {
       if (!a) return 0;
       bits = formatBits(a->format, &kind);
       chans = a->channels;
+      // A block-compressed array: its format in word 27, its texels 8-bit channels (BC6H's
+      // halves, three of four) of the format's kind (`NV.Tex.Texture.bc`).
+      unsigned bb, bc = bcOf(a->format, &bb);
+      if (bc) {
+        int sgn = a->format == CU_AD_FORMAT_BC4_SNORM || a->format == CU_AD_FORMAT_BC5_SNORM ||
+                  a->format == CU_AD_FORMAT_BC6H_SF16;
+        bits = bc == 6 ? 16 : 8;
+        kind = bc == 6 ? 2 : sgn;
+        if (bc == 6) chans = 4;
+        w[27] = a->format;
+      }
       int layered = (a->flags & CUDA_ARRAY3D_LAYERED) != 0, cube = (a->flags & CUDA_ARRAY3D_CUBEMAP) != 0;
       w[0] = a->base;
       w[1] = cube ? 2 : (a->depth && !layered) ? 3 : a->height ? 2 : 1;

@@ -1380,7 +1380,7 @@ def decodeTex (d : Dec) : Option Run :=
         let coordRegs := regs.drop lead
         let tx := if ints then { tx0 with filter := .point, normalizedCoords := false } else
           if gather then { tx0 with filter := .linear } else tx0
-        let fpOf (l : Nat) : Except String (List (Option UInt64 × Nat)) := do
+        let fpOf (l : Nat) : Except String (List (Option NV.Tex.Texel × Nat)) := do
           if tx.cube != cube then throw "a cubemap fetch from a plain texture, or the reverse"
           let offs : Array Int := match offReg with
             | some r => (Array.range 3).map fun k =>
@@ -1426,7 +1426,7 @@ def decodeTex (d : Dec) : Option Run :=
         | .ok fps =>
           let k := (fps.head?.map (·.2.length)).getD 1
           let addrs := (Array.range 32).flatMap fun l => match fps.lookup l with
-            | some fp => fp.toArray.map (·.1)
+            | some fp => fp.toArray.map (·.1.map (·.addr))
             | none => Array.replicate k none
           let req : Req := { space := .global, op := .ld, bytes := tx.texelBytes, addrs }
           let wpt := (tx.texelBytes + 3) / 4

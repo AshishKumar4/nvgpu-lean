@@ -350,8 +350,9 @@ height, depth, the row and slice pitches, the channels and each one's bits (four
 channels' kind (0 unsigned, 1 signed, 2 float), integers read normalized, coordinates normalized,
 the filter (0 point, 1 linear), the three coordinates' addressing modes (0 wrap, 1 clamp,
 2 mirror, 3 border), a surface, the layers, a cubemap, a mipmapped array's levels (1 for any
-other object), linear filtering between levels, and the level bias and clamps (binary32); 28 words
-an object, a freed object's all zero. -/
+other object), linear filtering between levels, the level bias and clamps (binary32), and a
+block-compressed array's format (0 for any other object); 28 words an object, a freed object's all
+zero. -/
 @[export nvgpu_set_textures]
 def setTextures (d : Device) (table : ByteArray) : Device := Id.run do
   let word (i : Nat) : Nat := (List.range 8).foldl (fun a b => a + (table.get! (8 * i + b)).toNat * 256 ^ b) 0
@@ -368,7 +369,7 @@ def setTextures (d : Device) (table : ByteArray) : Device := Id.run do
       filter := if w 15 == 1 then .linear else .point, address := #[addr (w 16), addr (w 17), addr (w 18)],
       surface := w 19 != 0, layers := w 20, cube := w 21 != 0, levels := max 1 (w 22),
       mipLinear := w 23 != 0, lodBias := (w 24).toUInt32, lodMin := (w 25).toUInt32,
-      lodMax := (w 26).toUInt32 }
+      lodMax := (w 26).toUInt32, bcFormat := w 27 }
   return { d with textures := ts }
 
 @[export nvgpu_error_string]

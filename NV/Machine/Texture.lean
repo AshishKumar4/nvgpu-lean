@@ -42,6 +42,13 @@ inductive Filter where
   | point | linear
   deriving DecidableEq, Repr, Inhabited
 
+/-- A texel a fetch reads: the address it reads, and of a block-compressed object, whose texels a
+fetch reads by their 4×4 block, the texel's place in the block (`4 · row + column`). -/
+structure Texel where
+  addr : UInt64
+  sub : Nat := 0
+  deriving Repr, Inhabited, BEq
+
 structure Texture where
   /-- Global address of texel (0, 0, 0). -/
   base : UInt64
@@ -78,11 +85,21 @@ structure Texture where
   lodBias : UInt32 := 0
   lodMin : UInt32 := 0
   lodMax : UInt32 := 0
+  /-- A block-compressed array's format (`CUarray_format`, `CU_AD_FORMAT_BC1_UNORM` 0x91 to
+  `BC7_UNORM_SRGB` 0x9e), 0 for any other object: its texels in 4×4 blocks of 8 or 16 bytes. -/
+  bcFormat : Nat := 0
   deriving Repr, Inhabited
 
 namespace Texture
 
-def texelBytes (t : Texture) : Nat := t.chans.foldl (· + ·) 0 / 8
+/-- A block-compressed object's BC number (1 to 7), 0 for any other. -/
+def bc (t : Texture) : Nat :=
+  if 0x91 ≤ t.bcFormat && t.bcFormat ≤ 0x9e then [1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7][t.bcFormat - 0x91]!
+  else 0
+
+/-- The bytes a fetch reads for a texel: its own, or a block-compressed object's block's. -/
+def texelBytes (t : Texture) : Nat :=
+  if t.bc == 0 then t.chans.foldl (· + ·) 0 / 8 else if t.bc ∈ [1, 4] then 8 else 16
 
 def size (t : Texture) (d : Nat) : Nat := match d with | 0 => t.width | 1 => t.height | _ => t.depth
 
@@ -92,6 +109,11 @@ def invalid? (t : Texture) : Option String :=
   else if !(t.chans.size ∈ [1, 2, 4]) then some s!"{t.chans.size} channels"
   else if t.chans.any (· != t.chans[0]!) then some "channels of different widths"
   else if !(t.texelBytes ∈ [1, 2, 4, 8, 16]) then some s!"{t.texelBytes}-byte texels"
+  else if t.bc != 0 && (t.dims != 2 || t.layers != 0 || t.levels != 1 || t.surface) then
+    some "a block-compressed object other than a 2D array"
+  else if t.bc ∈ [6, 7] || t.bcFormat ∈ [0x92, 0x94, 0x96, 0x98, 0x9a] then
+    some s!"block-compressed format {t.bcFormat} (BC6H, BC7, sRGB and signed are not modelled)"
+  else if t.bc != 0 && !t.readNormalized then some "block-compressed texels read as integers"
   else if t.kind == .float && !(t.chans[0]! ∈ [16, 32]) then some "float channels of 16 or 32 bits"
   else if t.filter == .linear && t.kind != .float && !t.readNormalized then
     some "linear filtering of texels read as integers (the guide allows it for floats only)"
@@ -172,16 +194,22 @@ footprint for a share of the result out of 256: nearest-level filtering the leve
 (halves up), all of it; linear filtering the two levels about `l` (the last level twice past it),
 the upper level the LOD's fraction `f` and the lower the rest. -/
 def mipFootprint (t : Texture) (l : Int)
-    (fpAt : Texture → Nat → List (Option UInt64 × Nat)) : List (Option UInt64 × Nat) :=
+    (fpAt : Texture → Nat → List (Option Texel × Nat)) : List (Option Texel × Nat) :=
   let last := t.levels - 1
   if !t.mipLinear then fpAt (t.level (min last ((l + 128) / 256).toNat)) 256 else
   let k := min last (l / 256).toNat
   let f := if k == last then 0 else (l % 256).toNat
   fpAt (t.level k) (256 - f) ++ fpAt (t.level (min last (k + 1))) f
 
-/-- The address of texel `(i, j, k)`, which must be in range. -/
+/-- The address of texel `(i, j, k)`, which must be in range; of a block-compressed object's,
+its 4×4 block's (rows of blocks `pitch` apart). -/
 def texelAddr (t : Texture) (i j k : Nat) : UInt64 :=
-  t.base + (k * t.slice + j * t.pitch + i * t.texelBytes).toUInt64
+  if t.bc == 0 then t.base + (k * t.slice + j * t.pitch + i * t.texelBytes).toUInt64
+  else t.base + (k * t.slice + j / 4 * t.pitch + i / 4 * t.texelBytes).toUInt64
+
+/-- Texel `(i, j, k)` as a fetch reads it (`Texel`). -/
+def texelAt (t : Texture) (i j k : Nat) : Texel :=
+  { addr := t.texelAddr i j k, sub := if t.bc == 0 then 0 else j % 4 * 4 + i % 4 }
 
 end Texture
 
@@ -282,16 +310,16 @@ half up and of `x0` half down. A GH200 and an A100 agree on 4,096 fetches over r
 and texels in each of one, two and three dimensions, with clamped, wrapped and bordered
 addressing, and with linear filtering between mipmap levels in each. -/
 def footprint (t : Texture) (cs : Array Dy) (offs : Array Int := #[]) (share : Nat := 256) :
-    List (Option UInt64 × Nat) :=
+    List (Option Texel × Nat) :=
   let along (d : Nat) : List (Option Nat × Nat) :=
     if d < t.dims then taps t d (cs[d]?.getD ⟨0, 0⟩) (offs[d]?.getD 0) else [(some 0, 256)]
-  let at_ (i j k : Option Nat) : Option UInt64 := do pure (t.texelAddr (← i) (← j) (← k))
+  let at_ (i j k : Option Nat) : Option Texel := do pure (t.texelAt (← i) (← j) (← k))
   match t.dims, t.filter, along 0, along 1, along 2 with
   | 1, .linear, [(i0, _), (i1, a)], _, _ =>
     let x1 := (share * a + 128) / 256
     [(at_ i0 (some 0) (some 0), share - x1), (at_ i1 (some 0) (some 0), x1)]
   | d, .linear, [(i0, _), (i1, a)], [(j0, _), (j1, b)], zs =>
-    let plane (k : Option Nat) (s : Nat) : List (Option UInt64 × Nat) :=
+    let plane (k : Option Nat) (s : Nat) : List (Option Texel × Nat) :=
       let x1 := (s * a + 128) / 256
       let x0 := s - x1
       let q1 := (x1 * b + 128) / 256
@@ -329,6 +357,86 @@ def channelVal (t : Texture) (v : Nat) : Option (Int × Nat × Int) :=
     let s : Int := if v ≥ 2 ^ (w - 1) then (v : Int) - 2 ^ w else v
     some (max s (-(2 ^ (w - 1) - 1 : Int)), 2 ^ (w - 1) - 1, 0)
 
+/-! ## Block-compressed texels
+
+A 4×4 block's 8 or 16 bytes hold its texels as endpoints and per-texel indices into a palette
+between them (BC1 to BC5: Microsoft's "Texture Block Compression in Direct3D 11"), each texel's
+channels read as unsigned normalized; the palette's
+in-between entries are the GPU's own: an A100's over every pair of endpoints, which a GH200's
+agree with on random blocks. -/
+
+/-- A BC4 block's (the alpha half of a BC3 block's and either half of a BC5 block's) value at
+`sub`, as `numerator / denominator`, from its 8 bytes `blk` (bit `8i + b` of byte `i`): two
+endpoint bytes, then a 3-bit index per texel. With the first endpoint above the second, indices
+2 to 7 blend them; otherwise 2 to 5 do, and 6 and 7 are the format's least and greatest values.
+Unsigned, a blend is the 16-bit unsigned normalized `(257 − w)·a0 + w·a1` (`w` by index: 36, 72,
+113, 144, 185, 221; or 48, 96, 161, 209); BC3's alpha (`alpha8`) is 8-bit, `(A·a0 + B·a1 + 1024)
+/ 2048` rounded down (`B` by index: 289, 578, 892, 1156, 1470, 1759; or 385, 770, 1278, 1663;
+`A = 2048 − B`). -/
+def bc4Value (blk : Nat) (sub : Nat) (alpha8 : Bool := false) : Int × Nat :=
+  let a0 := blk % 256
+  let a1 := blk / 256 % 256
+  let idx := blk / 2 ^ (16 + 3 * sub) % 8
+  let eight := a0 > a1
+  if idx == 0 then (if alpha8 then (a0, 255) else (a0 * 257, 65535))
+  else if idx == 1 then (if alpha8 then (a1, 255) else (a1 * 257, 65535))
+  else if !eight && idx ≥ 6 then (if idx == 6 then 0 else 1, 1)
+  else if !alpha8 then
+    let w := (if eight then #[36, 72, 113, 144, 185, 221] else #[48, 96, 161, 209])[idx - 2]!
+    ((257 - w) * a0 + w * a1, 65535)
+  else
+    let b := (if eight then #[289, 578, 892, 1156, 1470, 1759] else #[385, 770, 1278, 1663])[idx - 2]!
+    (((2048 - b) * a0 + b * a1 + 1024) / 2048, 255)
+
+/-- A BC1 colour block's (the colour half of a BC2 or BC3 block's) texel at `sub` from its 8 bytes
+`blk`: two RGB 5:6:5 endpoints, then a 2-bit index per texel; its red, green and blue as 8-bit
+values, and whether it is transparent. With the first endpoint above the second as 16-bit words
+(always, for BC2 and BC3: `fourAlways`), indices 2 and 3 blend them; otherwise index 2 is their
+mean and 3 transparent black. Red and blue blend the 5-bit endpoints exactly and scale by 33/4,
+rounded down (`(2·e0 + e1)·11/4`, `(e0 + e1)·33/8`; an endpoint alone is its bits replicated);
+green blends the replicated 8-bit endpoints `a`, `b`: `(703·a + 321·b + 512) / 1024` and its
+mirror, or `(255·a + 257·b + 256) / 512`, rounded down. -/
+def bcColour (blk sub : Nat) (fourAlways : Bool) : Array Nat × Bool :=
+  let c0 := blk % 65536
+  let c1 := blk / 65536 % 65536
+  let idx := blk / 2 ^ (32 + 2 * sub) % 4
+  let four := fourAlways || c0 > c1
+  let fiveBit (a b : Nat) : Nat :=
+    if idx == 0 then a * 33 / 4 else if idx == 1 then b * 33 / 4
+    else if four then (if idx == 2 then 2 * a + b else a + 2 * b) * 11 / 4
+    else if idx == 2 then (a + b) * 33 / 8 else 0
+  let green (g0 g1 : Nat) : Nat :=
+    let a := g0 * 4 + g0 / 16
+    let b := g1 * 4 + g1 / 16
+    if idx == 0 then a else if idx == 1 then b
+    else if four then (if idx == 2 then 703 * a + 321 * b + 512 else 321 * a + 703 * b + 512) / 1024
+    else if idx == 2 then (255 * a + 257 * b + 256) / 512 else 0
+  (#[fiveBit (c0 / 2048) (c1 / 2048), green (c0 / 32 % 64) (c1 / 32 % 64), fiveBit (c0 % 32) (c1 % 32)],
+   !four && idx == 3)
+
+/-- A block-compressed texel's channels (red, green, blue, alpha) as `numerator / denominator`,
+from its block's words `ws` and its place `sub`: BC1's colour, alpha one or (transparent) zero;
+BC2's colour from its second half and alpha from its first, 4 bits a texel; BC3's colour from its
+second half and alpha (8-bit) from its first; BC4 red (green and blue zero, alpha one), BC5 red
+and green from its two halves (blue zero, alpha one). The colour and BC3's alpha match an A100 and
+a GH200 on every texel of random blocks, the colour on every pair of endpoints per channel. -/
+def bcTexel (t : Texture) (ws : Array UInt32) (sub : Nat) : Array (Int × Nat) :=
+  let half (k : Nat) : Nat := ws[2 * k]!.toNat + ws[2 * k + 1]!.toNat * 2 ^ 32
+  let rgb (c : Array Nat) : List (Int × Nat) := c.toList.map (fun (v : Nat) => (Int.ofNat v, 255))
+  match t.bc with
+  | 1 =>
+    let (c, clear) := bcColour (half 0) sub false
+    (rgb c ++ [(if clear then 0 else 1, 1)]).toArray
+  | 2 =>
+    let (c, _) := bcColour (half 1) sub true
+    (rgb c ++ [(Int.ofNat (half 0 / 2 ^ (4 * sub) % 16), 15)]).toArray
+  | 3 =>
+    let (c, _) := bcColour (half 1) sub true
+    (rgb c ++ [bc4Value (half 0) sub true]).toArray
+  | 4 => #[bc4Value (half 0) sub, (0, 1), (0, 1), (1, 1)]
+  | 5 => #[bc4Value (half 0) sub, bc4Value (half 1) sub, (0, 1), (1, 1)]
+  | _ => #[(0, 1), (0, 1), (0, 1), (1, 1)]
+
 /-- `num / den · 2^e` rounded to nearest binary32, ties away from zero. -/
 def toF32 (num : Int) (den : Nat) (e : Int) : UInt32 :=
   if num == 0 || den == 0 then 0 else
@@ -346,12 +454,12 @@ ties away from zero (a GH200's linear filtering in one and two dimensions and be
 linearly filtered mipmaps, and its and an A100's blends of point-sampled levels). Integers read as
 they are (point sampling only): the texel's channels, sign-extended. A texel's missing
 channels read as zero (inferred). -/
-def combine (t : Texture) (fp : List (Option UInt64 × Nat)) (resp : Array UInt32) : Array UInt32 :=
+def combine (t : Texture) (fp : List (Option Texel × Nat)) (resp : Array UInt32) : Array UInt32 :=
   let wpt := (t.texelBytes + 3) / 4
   let texel (k : Nat) : Array UInt32 := resp.extract (k * wpt) (k * wpt + wpt)
   let w := t.chans[0]!
   (Array.range 4).map fun c =>
-    if c ≥ t.chans.size then 0 else
+    if c ≥ t.chans.size && t.bc == 0 then 0 else
     if t.kind != .float && !t.readNormalized then
       match fp.zipIdx.find? (·.1.1.isSome) with
       | some (_, k) =>
@@ -370,7 +478,14 @@ def combine (t : Texture) (fp : List (Option UInt64 × Nat)) (resp : Array UInt3
       else
         -- Σ weight_k · v_k over a common denominator.
         let terms := fp.zipIdx.filterMap fun ((a, wt), k) =>
-          if a.isNone || wt == 0 then none else channelVal t (channel t (texel k) c) |>.map (wt, ·)
+          match a with
+          | none => none
+          | some x =>
+            if wt == 0 then none
+            else if t.bc != 0 then
+              let (n, d) := (bcTexel t (texel k) x.sub)[c]!
+              some (wt, n, d, (0 : Int))
+            else channelVal t (channel t (texel k) c) |>.map (wt, ·)
         let emin := terms.foldl (fun m (_, _, _, e) => min m e) 0
         let den := terms.foldl (fun d (_, _, dn, _) => Nat.lcm d dn) 1
         let num := terms.foldl (fun s (wt, n, dn, e) =>

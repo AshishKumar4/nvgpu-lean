@@ -1322,7 +1322,7 @@ def texFetch : X (Effect Thread) := do
         pure (tx.mipFootprint (tx.lodOf lod.toUInt32) fun tl s => NV.Tex.footprint (pick tl) coords offs s)
     else pure (NV.Tex.footprint (pick tx) coords offs)
   let bytes := tx.texelBytes
-  let req : Req := { space := .global, op := .ld, bytes, addrs := fp.toArray.map (·.1) }
+  let req : Req := { space := .global, op := .ld, bytes, addrs := fp.toArray.map (·.1.map (·.addr)) }
   let ds ← Thread.elems (arg pi 0) 4
   let comp := if i.has .r then 0 else if i.has .g then 1 else if i.has .b then 2 else 3
   return .mem (fun _ => req) t.advance fun resp s =>

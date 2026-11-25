@@ -864,7 +864,7 @@ static int sideOf(CUmemorytype t, const void *host, CUdeviceptr d, CUarray a, ui
       if (!a) return 0;
       *out = a->base;
       *pitch = a->pitch;
-      *rows = a->height ? a->height : 1;
+      *rows = arrayRows(a);
       return 1;
     default: return 0;
   }
