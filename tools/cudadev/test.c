@@ -256,6 +256,65 @@ static void graphSubmissionChecks(void) {
   CK(cuMemGetInfo(&after, &total));
   check("conditional storage released with last executable", after == before);
 
+  // A while node whose body's kernel counts and sets the condition from the device
+  // (`cudaGraphSetConditional`): it runs while the count is below five.
+  {
+    static const char *condPtx =
+      ".version 8.0\n.target sm_80\n.address_size 64\n"
+      ".extern .func cudaGraphSetConditional (.param .b64 h, .param .b32 v);\n"
+      ".visible .entry step(.param .u64 h_, .param .u64 c_) {\n"
+      "  .reg .b64 h, c; .reg .b32 n, more; .reg .pred p;\n"
+      "  ld.param.u64 h, [h_]; ld.param.u64 c, [c_];\n"
+      "  ld.global.u32 n, [c]; add.u32 n, n, 1; st.global.u32 [c], n;\n"
+      "  setp.lt.u32 p, n, 5; selp.u32 more, 1, 0, p;\n"
+      "  { .param .b64 a0; .param .b32 a1; st.param.b64 [a0], h; st.param.b32 [a1], more;\n"
+      "    call.uni cudaGraphSetConditional, (a0, a1); }\n"
+      "  ret;\n}\n";
+    CUmodule cm;
+    CUfunction step;
+    CUresult lr = cuModuleLoadData(&cm, condPtx);
+    int ok = lr == CUDA_SUCCESS && cuModuleGetFunction(&step, cm, "step") == CUDA_SUCCESS;
+    if (ok) {
+      CUdeviceptr count;
+      CK(cuMemAlloc(&count, 4));
+      CK(cuMemsetD32(count, 0, 1));
+      CK(cuGraphCreate(&g, 0));
+      CUgraphConditionalHandle h;
+      CK(cuGraphConditionalHandleCreate(&h, g, NULL, 1, CU_GRAPH_COND_ASSIGN_DEFAULT));
+      CUgraphNodeParams np;
+      memset(&np, 0, sizeof np);
+      np.type = CU_GRAPH_NODE_TYPE_CONDITIONAL;
+      np.conditional.handle = h;
+      np.conditional.type = CU_GRAPH_COND_TYPE_WHILE;
+      np.conditional.size = 1;
+      CUgraphNode cn;
+      CK(cuGraphAddNode(&cn, g, NULL, NULL, 0, &np));
+      CUgraph body = np.conditional.phGraph_out[0];
+      void *kargs[] = {&h, &count};
+      CUDA_KERNEL_NODE_PARAMS kp;
+      memset(&kp, 0, sizeof kp);
+      kp.func = step;
+      kp.gridDimX = kp.gridDimY = kp.gridDimZ = 1;
+      kp.blockDimX = kp.blockDimY = kp.blockDimZ = 1;
+      kp.kernelParams = kargs;
+      CUgraphNode kn;
+      CK(cuGraphAddKernelNode(&kn, body, NULL, 0, &kp));
+      CK(cuGraphInstantiateWithFlags(&exec, g, 0));
+      CK(cuGraphLaunch(exec, a));
+      CK(cuStreamSynchronize(a));
+      unsigned n = 0;
+      CK(cuMemcpyDtoH(&n, count, 4));
+      ok = n == 5;
+      CK(cuGraphExecDestroy(exec));
+      CK(cuGraphDestroy(g));
+      CK(cuMemFree(count));
+      CK(cuModuleUnload(cm));
+    } else {
+      printf("conditional kernel did not load: %d\n", (int)lr);
+    }
+    check("a while node runs until its body's kernel clears the condition from the device", ok);
+  }
+
   // The pre-12 ABI writes separate outputs, including on a failed topology update.
   CK(cuGraphCreate(&g, 0));
   CK(cuGraphInstantiateWithFlags(&exec, g, 0));

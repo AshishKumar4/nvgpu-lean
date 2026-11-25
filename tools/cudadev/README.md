@@ -71,9 +71,11 @@ libraries and frameworks built on it load them where they would load NVIDIA's, a
   every blocking stream's work. An event wait waits for the recording it saw when enqueued. The
   device runs one piece of work at a time. Copies from host memory the driver does not know
   (pageable) return when done, as the driver's do.
-* `graph.h`: graphs (kernel, copy, set, host, empty, child, event, allocation nodes; the generic
-  `cuGraphAddNode`), instantiation in an order that respects every dependency, updates of an
-  executable graph, and stream capture across streams joined by events.
+* `graph.h`: graphs (kernel, copy, set, host, empty, child, event, allocation, batch
+  memory-operation and conditional nodes, whose handle a kernel sets with the device runtime's
+  `cudaGraphSetConditional`; the generic `cuGraphAddNode`), instantiation in an order that respects
+  every dependency, updates of an executable graph, and stream capture across streams joined by
+  events.
 * `tmap.h`: `cuTensorMapEncodeTiled`/`Im2col` write the model's own descriptor
   (`NV.Async.TensorMap.encode`), checked as the driver documents (`TensorMap.invalid?`).
 * `runtime_tables.h`: the tables the runtime (cudart) asks the driver for before anything else,
@@ -144,8 +146,8 @@ wheels load them, ask the runtime for a table entry the device does not provide
 (`runtime_tables.h` has only ZLUDA's), and stop; PyTorch's own kernels run (the `device-torch`
 row). IPC, layered and cubemap mipmapped arrays, a mipmapped texture's fetches other than by
 explicit LOD (by gradients, `TXD`; of integer coordinates; gathers), texture views of
-block-compressed formats, mipmap levels or some of a cubemap's faces, conditional graph nodes (they need the device runtime's
-`cudaGraphSetConditional`), external memory and semaphores, and kernels dereferencing host memory
-other than mapped page-locked memory (`cuMemHostAlloc` with `CU_MEMHOSTALLOC_DEVICEMAP`,
-`cudaHostAllocMapped`, which kernels reach at its host address as they do managed memory, and
-which takes device memory): each fails with a CUDA error naming it.
+block-compressed formats, mipmap levels or some of a cubemap's faces, external memory and
+semaphores, and kernels dereferencing host memory other than mapped page-locked memory
+(`cuMemHostAlloc` with `CU_MEMHOSTALLOC_DEVICEMAP`, `cudaHostAllocMapped`, which kernels reach at
+its host address as they do managed memory, and which takes device memory): each fails with a
+CUDA error naming it.

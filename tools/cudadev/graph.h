@@ -357,7 +357,8 @@ CUresult CUDAAPI cuGraphConditionalHandleCreate(CUgraphConditionalHandle *h, CUg
   return CUDA_SUCCESS;
 }
 
-// A conditional node: its body graphs made empty, for the program to fill.
+// A conditional node: its body graphs made empty, for the program to fill; `phGraph_out` is set
+// to the node's own array of them (CUDA's contract: valid while the node lives).
 static CUresult addConditional(CUgraphNode *out, CUgraph g, const CUgraphNode *deps, size_t nd,
                                CUDA_CONDITIONAL_NODE_PARAMS *p) {
   unsigned size = p->size ? p->size : 1;
@@ -367,10 +368,8 @@ static CUresult addConditional(CUgraphNode *out, CUgraph g, const CUgraphNode *d
   n->cond = (CUdeviceptr)p->handle;
   n->nbodies = size;
   n->bodies = malloc(sizeof *n->bodies * size);
-  for (unsigned b = 0; b < size; b++) {
-    cuGraphCreate(&n->bodies[b], 0);
-    if (p->phGraph_out) p->phGraph_out[b] = n->bodies[b];
-  }
+  for (unsigned b = 0; b < size; b++) cuGraphCreate(&n->bodies[b], 0);
+  p->phGraph_out = n->bodies;
   *out = n;
   return CUDA_SUCCESS;
 }
