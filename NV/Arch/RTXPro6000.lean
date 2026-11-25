@@ -67,6 +67,7 @@ def rtxPro6000 : Params := {
     l1StoreInvalidates := Hopper.l1StoreInvalidates
     xbarBytesPerCycle := onH200 Hopper.xbarBytesPerCycle
     xbarWriteBytesPerCycle := onPart "GH200" Hopper.xbarWriteBytesPerCycle
+    gpcLinkBytesPerCycle := onPart "GH200" Hopper.gpcLinkBytesPerCycle
     xbarRedBytesPerCycle := onPart "GH200" Hopper.xbarRedBytesPerCycle
     dsmemBytesPerCycle := onPart "H800 PCIe" Hopper.dsmemBytesPerCycle
     l2Partitions := inferred 1 "chipsandcheese-blackwell" "GPU-Wide Memory Subsystem"

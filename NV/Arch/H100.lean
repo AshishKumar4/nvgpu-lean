@@ -38,7 +38,7 @@ def h100 : Params := {
     l2SliceBytesPerCycle, l2SliceWriteBytesPerCycle, dsmemBytesPerCycle, smemCarveoutsKB, l2FarBytesPerCycle,
     smemAtomicInterval, l2FarCopiesNear, l2ClockRefMHz, l2LatencyFixedPermille, l2LatencyRefMHz, dramTurnaroundPs
     xbarBytesPerCycle := onH200 xbarBytesPerCycle
-    xbarWriteBytesPerCycle, xbarRedBytesPerCycle
+    xbarWriteBytesPerCycle, xbarRedBytesPerCycle, gpcLinkBytesPerCycle
     l2NearHitLatency := onH200 l2NearHitLatency
     dramChannels := inferred 80 "hopper-whitepaper" "Table 3, H100 SXM5: 5120-bit HBM3"
       ""

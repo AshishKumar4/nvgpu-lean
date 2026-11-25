@@ -111,7 +111,7 @@ def sections (p : Params) : List (String × List Row) :=
     dsmemLatency, l2Bytes, l2Slices, l2Partitions, l2NearHitLatency, l2FarHitLatency, dramLatency,
     dramBusBits, dramClockMHz, dramBytesPerSec, dramStreamBytesPerSec, dramChannels, mioQueueDepth,
     lsuInterval, addressInterval, storeRegCycles, l1BytesPerCycle, l1TagSectorsPerCycle, l1Ways, l1Mshrs,
-    l1StoreInvalidates, l2Ways, l2SliceBytesPerCycle, l2SliceWriteBytesPerCycle, xbarBytesPerCycle, xbarWriteBytesPerCycle, xbarRedBytesPerCycle, l2RedF32BytesPerSec,
+    l1StoreInvalidates, l2Ways, l2SliceBytesPerCycle, l2SliceWriteBytesPerCycle, xbarBytesPerCycle, gpcLinkBytesPerCycle, xbarWriteBytesPerCycle, xbarRedBytesPerCycle, l2RedF32BytesPerSec,
     dsmemBytesPerCycle, smemCarveoutsKB, l2FarBytesPerCycle, smemAtomicInterval,
     l2FarCopiesNear, l2ClockRefMHz, l2LatencyFixedPermille, l2LatencyRefMHz, dramTurnaroundPs, l2AtomicCycles⟩ := mem
   let ⟨fmaPerCycle16, fmaPerCycle8, fmaPerCycleTF32, fmaPerCycleF64, wgmmaLatency, wgmmaLatencyRS,
@@ -175,7 +175,8 @@ def sections (p : Params) : List (String × List Row) :=
      rowN "mem.l1TagSectorsPerCycle" l1TagSectorsPerCycle, rowN "mem.l1Ways" l1Ways,
      rowN "mem.l1Mshrs" l1Mshrs, row "mem.l1StoreInvalidates" l1StoreInvalidates toString,
      rowN "mem.l2Ways" l2Ways, rowN "mem.l2SliceBytesPerCycle" l2SliceBytesPerCycle, rowN "mem.l2SliceWriteBytesPerCycle" l2SliceWriteBytesPerCycle,
-     rowN "mem.xbarBytesPerCycle" xbarBytesPerCycle, rowN "mem.xbarWriteBytesPerCycle" xbarWriteBytesPerCycle,
+     rowN "mem.xbarBytesPerCycle" xbarBytesPerCycle, rowN "mem.gpcLinkBytesPerCycle" gpcLinkBytesPerCycle,
+     rowN "mem.xbarWriteBytesPerCycle" xbarWriteBytesPerCycle,
      rowN "mem.xbarRedBytesPerCycle" xbarRedBytesPerCycle,
      rowN "mem.l2RedF32BytesPerSec" l2RedF32BytesPerSec,
      rowN "mem.l2AtomicCycles" l2AtomicCycles,

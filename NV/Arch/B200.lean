@@ -114,7 +114,8 @@ def b200 : Params := {
     sectorBytes, lineBytes, smemBanks, smemBankBytes, mioQueueDepth, lsuInterval, addressInterval,
     l1BytesPerCycle, l1TagSectorsPerCycle, l1Ways, l1Mshrs, l1StoreInvalidates, l2Ways,
     l2SliceBytesPerCycle, l2SliceWriteBytesPerCycle, dsmemBytesPerCycle,
-    smemAtomicInterval, l2FarCopiesNear, l2ClockRefMHz, l2LatencyFixedPermille, l2LatencyRefMHz, dramTurnaroundPs, xbarWriteBytesPerCycle, xbarRedBytesPerCycle
+    smemAtomicInterval, l2FarCopiesNear, l2ClockRefMHz, l2LatencyFixedPermille, l2LatencyRefMHz, dramTurnaroundPs, xbarWriteBytesPerCycle, xbarRedBytesPerCycle,
+    gpcLinkBytesPerCycle
     storeRegCycles := onH200 storeRegCycles
     xbarBytesPerCycle := onH200 xbarBytesPerCycle
     l2FarBytesPerCycle := inferred 2900 "meas" ""

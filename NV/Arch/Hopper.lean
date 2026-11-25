@@ -525,6 +525,11 @@ def xbarBytesPerCycle : Fact Nat :=
   inferred 107 "meas-h200" ""
     ""
 
+def gpcLinkBytesPerCycle : Fact Nat :=
+  inferred 690 "meas-gh200" ""
+    ""
+    (some "GH200")
+
 def xbarWriteBytesPerCycle : Fact Nat :=
   inferred 32 "meas-gh200" ""
     ""

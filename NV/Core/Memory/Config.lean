@@ -81,6 +81,9 @@ structure Config where
   channels : Nat
   slice : Rate
   xbar : Rate
+  /-- Per SM, its GPC; and the GPC's link from the L2, which its SMs share. -/
+  gpcOf : Array Nat := #[]
+  gpcLink : Rate := { units := 0 }
   /-- Write bytes a slice takes for every `sliceRead` it returns (`slice`'s rate). -/
   sliceRead : Nat
   sliceWrite : Nat
@@ -187,6 +190,8 @@ def Config.ofParams (p : Params) (smemDemand : Nat) : Config :=
     sliceRead := m.l2SliceBytesPerCycle.value
     sliceWrite := m.l2SliceWriteBytesPerCycle.value
     xbar := Rate.atClock m.xbarBytesPerCycle.value ref clock
+    gpcOf := (p.gpcSMs.value.zipIdx.flatMap fun (n, g) => List.replicate n g).toArray
+    gpcLink := Rate.atClock m.gpcLinkBytesPerCycle.value ref clock
     xbarWrite := Rate.atClock m.xbarWriteBytesPerCycle.value ref clock
     xbarWriteBytes := m.xbarWriteBytesPerCycle.value
     xbarRed := m.xbarRedBytesPerCycle.value

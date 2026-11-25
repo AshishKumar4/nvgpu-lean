@@ -53,6 +53,7 @@ def roles : List (String × Role) := [
   ("mem.dramStreamBytesPerSec", .observed), ("mem.l1TagSectorsPerCycle", .engine),
   ("mem.l1Mshrs", .engine), ("mem.storeRegCycles", .engine),
   ("mem.xbarWriteBytesPerCycle", .engine), ("mem.xbarRedBytesPerCycle", .engine),
+  ("mem.gpcLinkBytesPerCycle", .engine),
   ("mem.l2SliceWriteBytesPerCycle", .engine),
   ("mem.l2ClockRefMHz", .engine), ("mem.l2LatencyFixedPermille", .engine), ("mem.l2LatencyRefMHz", .engine),
   ("mem.dramTurnaroundPs", .engine), ("mem.l2AtomicCycles", .engine),

@@ -59,6 +59,7 @@ def a100_40 : Params := {
     l1StoreInvalidates := Hopper.l1StoreInvalidates
     xbarBytesPerCycle := onH200 Hopper.xbarBytesPerCycle
     xbarWriteBytesPerCycle := onPart "GH200" Hopper.xbarWriteBytesPerCycle
+    gpcLinkBytesPerCycle := onPart "GH200" Hopper.gpcLinkBytesPerCycle
     xbarRedBytesPerCycle := onPart "GH200" Hopper.xbarRedBytesPerCycle
     dsmemBytesPerCycle := doc 0 "cuda-guide" "§5.1 Table 32: no distributed shared memory before 9.0"
     l2Partitions, l2NearHitLatency, l2FarHitLatency, l2SliceBytesPerCycle

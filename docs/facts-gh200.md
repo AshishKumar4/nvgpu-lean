@@ -291,6 +291,7 @@ The role column says who reads a fact (`NV/Core/Roles.lean`): only `engine` fact
 | `mem.l2SliceBytesPerCycle` | 52 | inferred (GH200) | engine | `meas-gh200`  |  |
 | `mem.l2SliceWriteBytesPerCycle` | 21 | inferred (GH200) | engine | `meas-gh200`  |  |
 | `mem.xbarBytesPerCycle` | 107 | inferred | engine | `meas-h200`  |  |
+| `mem.gpcLinkBytesPerCycle` | 690 | inferred (GH200) | engine | `meas-gh200`  |  |
 | `mem.xbarWriteBytesPerCycle` | 32 | inferred (GH200) | engine | `meas-gh200`  |  |
 | `mem.xbarRedBytesPerCycle` | 25 | inferred (GH200) | engine | `meas-gh200`  |  |
 | `mem.l2RedF32BytesPerSec` | 3463500000000 | measured | engine | `meas-h200`  |  |

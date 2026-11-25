@@ -143,6 +143,9 @@ structure MemoryParams where
   l2SliceWriteBytesPerCycle : Fact Nat
   /-- Bytes per cycle (SM clock) from the L2 to one SM through the crossbar. -/
   xbarBytesPerCycle : Fact Nat
+  /-- Bytes per cycle (at `l2ClockRefMHz`) from the L2 to the SMs of one GPC together: the GPC's
+  link, which its SMs' crossbar ports share. -/
+  gpcLinkBytesPerCycle : Fact Nat
   /-- Bytes per cycle (SM clock) one SM writes to the L2 through the crossbar (stores,
   reductions, atomics' operands). -/
   xbarWriteBytesPerCycle : Fact Nat

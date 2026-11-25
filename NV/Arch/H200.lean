@@ -46,7 +46,7 @@ def h200 : Params := {
     sectorBytes, lineBytes, l1SmemBytes, smemBanks, smemBankBytes, smemLatency, l1HitLatency,
     dsmemLatency, l2Partitions, l2NearHitLatency, l2FarHitLatency, mioQueueDepth, lsuInterval,
     addressInterval, storeRegCycles, l1BytesPerCycle, l1TagSectorsPerCycle, l1Ways, l1Mshrs, l1StoreInvalidates,
-    l2Ways, l2SliceBytesPerCycle, l2SliceWriteBytesPerCycle, xbarBytesPerCycle, xbarWriteBytesPerCycle, xbarRedBytesPerCycle, dsmemBytesPerCycle, smemCarveoutsKB,
+    l2Ways, l2SliceBytesPerCycle, l2SliceWriteBytesPerCycle, xbarBytesPerCycle, gpcLinkBytesPerCycle, xbarWriteBytesPerCycle, xbarRedBytesPerCycle, dsmemBytesPerCycle, smemCarveoutsKB,
     l2FarBytesPerCycle, smemAtomicInterval, l2FarCopiesNear, l2ClockRefMHz, l2LatencyFixedPermille, l2LatencyRefMHz, dramTurnaroundPs
     dramChannels := inferred 94 "meas-h200" ""
       ""

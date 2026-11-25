@@ -7,7 +7,9 @@ import NV.Core.Memory.Tags
 # The L2 side of the memory system
 
 The crossbar's far side, the L2 slices and their two partitions, the DRAM channels, the slices'
-atomic units and the SM-to-SM network, and the request machine (`NV.Memory.Flat`) that holds
+atomic units, each GPC's link from the L2 (which its SMs' answers share: a GH200's SMs of one GPC
+copying from L2 together take 690 bytes a cycle, as many spread over the GPCs take each its own
+port's rate) and the SM-to-SM network, and the request machine (`NV.Memory.Flat`) that holds
 every byte of global and shared memory. It runs sequentially (phase B of a quantum): first it
 replays what the SMs did to the request machine in the quantum (`Log`), checking that the machine
 gives every lane the bytes the SM gave it; then it takes the SMs' messages, in stamp order, and
@@ -33,6 +35,8 @@ inductive L2Res where
   | chan (c : Nat)
   /-- The link between the L2 partitions, each way. -/
   | farOut | farIn
+  /-- A GPC's link from the L2, its SMs' answers' way. -/
+  | gpc (g : Nat)
   deriving Repr, Inhabited, DecidableEq
 
 def L2Res.index (c : Config) : L2Res → Nat
@@ -41,8 +45,9 @@ def L2Res.index (c : Config) : L2Res → Nat
   | .chan ch => 2 * c.slices + ch
   | .farOut => 2 * c.slices + c.channels
   | .farIn => 2 * c.slices + c.channels + 1
+  | .gpc g => 2 * c.slices + c.channels + 2 + g
 
-def L2Res.count (c : Config) : Nat := 2 * c.slices + c.channels + 2
+def L2Res.count (c : Config) : Nat := 2 * c.slices + c.channels + 2 + (c.gpcOf.foldl max 0 + 1)
 
 /-- What a resource serves per cycle: bytes, and for the atomic unit operations. -/
 def L2Res.rate (c : Config) : L2Res → Rate
@@ -50,6 +55,7 @@ def L2Res.rate (c : Config) : L2Res → Rate
   | .atom _ => c.atom
   | .chan _ => c.channel
   | .farOut | .farIn => c.far
+  | .gpc _ => c.gpcLink
 
 /-- A line request on the L2 side. -/
 structure L2Txn where
@@ -129,7 +135,8 @@ def busyUntil (m : L2Mem) : Nat := Id.run do
   let mut last := 0
   for i in [0:m.ports.size] do
     let r : Rate := if i < c.slices then c.slice else if i < 2 * c.slices then c.atom
-      else if i < 2 * c.slices + c.channels then c.channel else c.far
+      else if i < 2 * c.slices + c.channels then c.channel
+      else if i < 2 * c.slices + c.channels + 2 then c.far else c.gpcLink
     let f := m.ports[i]!.free
     if f > 0 then last := max last ((f + r.units - 1) / max r.units 1 - 1)
   return last
@@ -373,6 +380,12 @@ private def retStage (m : L2Mem) (t id : Nat) : L2Mem := Id.run do
     let (_, l, m') := m.take .farIn t bytes
     m := m'
     last := l
+  -- Data back to an SM passes its GPC's link, which the GPC's SMs share.
+  if bytes > 0 && c.gpcLink.units > 0 then
+    if let some g := c.gpcOf[y.sm]? then
+      let (_, l, m') := m.take (.gpc g) last bytes
+      m := m'
+      last := l
   let answer := last + c.back[if y.crosses then 1 else 0]!
   -- A read forwarded from its copy slice leaves the line there on its way back, and the reads
   -- waiting there look again: answered as it is, not before.
