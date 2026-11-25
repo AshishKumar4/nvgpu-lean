@@ -49,7 +49,8 @@ libraries and frameworks built on it load them where they would load NVIDIA's, a
   mapping holds its bytes between device work, a launch takes the pages the host changed and
   gives back the pages it changed (the host must not touch memory a running kernel writes: no
   concurrent managed access); mapped page-locked memory (`CU_MEMHOSTALLOC_DEVICEMAP`) is kept the
-  same way.
+  same way, and so is registered host memory (`cuMemHostRegister`), at a device address of its own
+  (`cuMemHostGetDevicePointer`'s; `CAN_USE_HOST_POINTER_FOR_REGISTERED_MEM` is 0).
 * `tex.h`: CUDA arrays (pitch-linear device memory, which a texture or surface instruction cannot
   tell from the hardware's block-linear layout), mipmapped arrays (their levels one after another in
   one allocation, a layered or cubemap level's layers or faces together) and texture and surface
@@ -153,4 +154,5 @@ texture's fetches by gradients (`TXD`), textures over BC6H, BC7, sRGB or signed 
 block-compressed formats or some of a cubemap's faces, external memory and semaphores, and kernels
 dereferencing host memory other than mapped page-locked memory (`cuMemHostAlloc` with
 `CU_MEMHOSTALLOC_DEVICEMAP`, `cudaHostAllocMapped`, which kernels reach at its host address as they
-do managed memory, and which takes device memory): each fails with a CUDA error naming it.
+do managed memory, and which takes device memory) or registered memory (at its device pointer): each
+fails with a CUDA error naming it.

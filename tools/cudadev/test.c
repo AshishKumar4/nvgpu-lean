@@ -1202,6 +1202,31 @@ static void managedChecks(void) {
   check("a kernel updates mapped page-locked memory, which the host reads", ok);
   CK(cuMemFreeHost(px));
   CK(cuMemFreeHost(py));
+  // Registered host memory, not page-aligned: the kernel reads and writes it at its device
+  // pointer, the host sees the result at its own address, and the bytes about it are untouched.
+  static float rbuf[4096];
+  float *rx = rbuf + 3, *ry = rbuf + 1029;
+  for (int i = 0; i < 4096; i++) rbuf[i] = -1.0f;
+  for (int i = 0; i < 1026; i++) rx[i] = (float)i;
+  for (int i = 0; i < 1025; i++) ry[i] = 3.0f;
+  CK(cuMemHostRegister(rx, 1024 * sizeof(float), 0));
+  CK(cuMemHostRegister(ry, 1024 * sizeof(float), CU_MEMHOSTREGISTER_DEVICEMAP));
+  CUdeviceptr rdx, rdy;
+  CK(cuMemHostGetDevicePointer(&rdx, rx, 0));
+  CK(cuMemHostGetDevicePointer(&rdy, ry, 0));
+  int nr = 1024, usable = 1;
+  CK(cuDeviceGetAttribute(&usable, CU_DEVICE_ATTRIBUTE_CAN_USE_HOST_POINTER_FOR_REGISTERED_MEM, 0));
+  void *rargs[] = {&rdx, &rdy, &a, &nr};
+  CK(cuLaunchKernel(axpy, 8, 1, 1, 128, 1, 1, 0, NULL, rargs, NULL));
+  CK(cuCtxSynchronize());
+  void *back = NULL;
+  CK(cuPointerGetAttribute(&back, CU_POINTER_ATTRIBUTE_HOST_POINTER, rdy));
+  ok = usable == 0 && back == (void *)ry && rbuf[2] == -1.0f && rbuf[1028] == 1025.0f;
+  for (int i = 0; i < 1024; i++) ok = ok && ry[i] == 2.0f * (float)i + 3.0f;
+  ok = ok && rbuf[1029 + 1024] == 3.0f;
+  check("a kernel updates registered host memory through its device pointer, which the host reads", ok);
+  CK(cuMemHostUnregister(rx));
+  CK(cuMemHostUnregister(ry));
   CK(cuModuleUnload(m));
 }
 
