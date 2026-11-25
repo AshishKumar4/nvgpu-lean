@@ -1303,7 +1303,7 @@ def texFetch : X (Effect Thread) := do
       unless i.has .level && !gather && cty == .f32 do
         throw "a fetch from a mipmapped texture other than tex.level of float coordinates (not modelled)"
       let lod ← t.read e (match arg pi 2 with | .vec cs => cs[0]?.getD .sink | c => c) .f32
-      pure (tx.mipFootprint (tx.lodOf lod.toUInt32) fun tl => NV.Tex.footprint tl coords offs)
+      pure (tx.mipFootprint (tx.lodOf lod.toUInt32) fun tl s => NV.Tex.footprint tl coords offs s)
     else pure (NV.Tex.footprint tx coords offs)
   let bytes := tx.texelBytes
   let req : Req := { space := .global, op := .ld, bytes, addrs := fp.toArray.map (·.1) }

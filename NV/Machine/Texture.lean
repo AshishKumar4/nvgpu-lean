@@ -165,16 +165,16 @@ def lodOf (t : Texture) (lod : UInt32) : Int :=
   max 0 (max (fixed8 t.lodMin) (min l hi))
 
 /-- The footprint of a fetch at LOD `l` (`lodOf`) over the levels it reads, `fpAt` a level's own
-footprint: nearest-level filtering the level nearest `l` (halves up); linear filtering the two
-levels about `l` (the last level twice past it), each footprint's weights scaled by its share
-out of 256, so that every fetch of the object reads as many texels. -/
+footprint for a share of the result out of 256: nearest-level filtering the level nearest `l`
+(halves up), all of it; linear filtering the two levels about `l` (the last level twice past it),
+the upper level the LOD's fraction `f` and the lower the rest. -/
 def mipFootprint (t : Texture) (l : Int)
-    (fpAt : Texture → List (Option UInt64 × Nat)) : List (Option UInt64 × Nat) :=
+    (fpAt : Texture → Nat → List (Option UInt64 × Nat)) : List (Option UInt64 × Nat) :=
   let last := t.levels - 1
-  if !t.mipLinear then fpAt (t.level (min last ((l + 128) / 256).toNat)) else
+  if !t.mipLinear then fpAt (t.level (min last ((l + 128) / 256).toNat)) 256 else
   let k := min last (l / 256).toNat
   let f := if k == last then 0 else (l % 256).toNat
-  (fpAt (t.level k)).map (fun (a, w) => (a, w * (256 - f))) ++ (fpAt (t.level (min last (k + 1)))).map (fun (a, w) => (a, w * f))
+  fpAt (t.level k) (256 - f) ++ fpAt (t.level (min last (k + 1))) f
 
 /-- The address of texel `(i, j, k)`, which must be in range. -/
 def texelAddr (t : Texture) (i j k : Nat) : UInt64 :=
@@ -249,7 +249,8 @@ def texelCoord (t : Texture) (d : Nat) (c : Dy) : Dy :=
 
 /-- The texel indices (with their 8-bit-fraction weights out of 256) a fetch combines along one
 dimension: one with weight 256 for nearest-point sampling, two for linear filtering. A weight is
-`frac(x − 1/2)` rounded to the nearest 1/256 (inferred). -/
+`frac(x − 1/2)` rounded to the nearest 1/256, half up; clamped addressing clamps `x − 1/2` to the
+texels first, so that past either edge the first texel weighs all (a GH200 agrees: `footprint`). -/
 def taps (t : Texture) (d : Nat) (c : Dy) (off : Int := 0) : List (Option Nat × Nat) :=
   let x := texelCoord t d c
   let x : Dy := if off == 0 then x
@@ -263,28 +264,44 @@ def taps (t : Texture) (d : Nat) (c : Dy) (off : Int := 0) : List (Option Nat ×
     let xb := x.subHalf
     let i := xb.floor
     -- Rounded to nearest, half up, from 2^-9 units.
-    let a := ((xb.fracUnits 9) + 1) / 2
+    let a := if mode == .clamp && (i < 0 || i ≥ n - 1) then 0 else ((xb.fracUnits 9) + 1) / 2
     [(resolve mode n i, (256 - a).toNat), (resolve mode n (i + 1), a.toNat)]
 
 /-- The footprint of a fetch at coordinates `cs` (one per dimension), each moved by `offs` texels
 (PTX's offset operand, §9.7.12.3: "applied to coordinates before doing texture lookup", from -8
 to 7; taken in texel units, after normalized coordinates are scaled and wrapped: inferred): each
-texel's address (`none`: a border texel, zero) and its weight, out of `256^dims` or, linearly
-filtering two dimensions, out of 256: the far corner's weight `p`, the product of the two axes'
-weights `a`, `b` in 1/256 rounded half up, and the others `a - p`, `b - p` and `256 - a - b + p`
-(a GH200 agrees on 4,096 fetches; three dimensions take the product, inferred). -/
-def footprint (t : Texture) (cs : Array Dy) (offs : Array Int := #[]) : List (Option UInt64 × Nat) :=
+texel's address (`none`: a border texel, zero) and its weight, for a fetch whose share of the result
+is `share` out of 256 (a mipmap level's, `Texture.mipFootprint`). Linear filtering splits the share
+along each dimension in turn by its weight (`taps`), each part rounded to 1/256: in three
+dimensions first along the third, the upper part rounded half down; then along the first, the
+upper part `x1` rounded half up; then each part along the second, the upper part of `x1` rounded
+half up and of `x0` half down. A GH200 and an A100 agree on 4,096 fetches over random coordinates
+and texels in each of one, two and three dimensions, with clamped, wrapped and bordered
+addressing, and with linear filtering between mipmap levels in each. -/
+def footprint (t : Texture) (cs : Array Dy) (offs : Array Int := #[]) (share : Nat := 256) :
+    List (Option UInt64 × Nat) :=
   let along (d : Nat) : List (Option Nat × Nat) :=
     if d < t.dims then taps t d (cs[d]?.getD ⟨0, 0⟩) (offs[d]?.getD 0) else [(some 0, 256)]
-  match t.dims, t.filter, along 0, along 1 with
-  | 2, .linear, [(i0, _), (i1, a)], [(j0, _), (j1, b)] =>
-    let p := (a * b + 128) / 256
-    let at_ (i j : Option Nat) : Option UInt64 := do pure (t.texelAddr (← i) (← j) 0)
-    [(at_ i0 j0, 256 + p - a - b), (at_ i1 j0, a - p), (at_ i0 j1, b - p), (at_ i1 j1, p)]
-  | _, _, _, _ =>
+  let at_ (i j k : Option Nat) : Option UInt64 := do pure (t.texelAddr (← i) (← j) (← k))
+  match t.dims, t.filter, along 0, along 1, along 2 with
+  | 1, .linear, [(i0, _), (i1, a)], _, _ =>
+    let x1 := (share * a + 128) / 256
+    [(at_ i0 (some 0) (some 0), share - x1), (at_ i1 (some 0) (some 0), x1)]
+  | d, .linear, [(i0, _), (i1, a)], [(j0, _), (j1, b)], zs =>
+    let plane (k : Option Nat) (s : Nat) : List (Option UInt64 × Nat) :=
+      let x1 := (s * a + 128) / 256
+      let x0 := s - x1
+      let q1 := (x1 * b + 128) / 256
+      let q0 := (x0 * b + 127) / 256
+      [(at_ i0 j0 k, x0 - q0), (at_ i1 j0 k, x1 - q1), (at_ i0 j1 k, q0), (at_ i1 j1 k, q1)]
+    match d, zs with
+    | 3, [(k0, _), (k1, c)] =>
+      let z1 := (share * c + 127) / 256
+      plane k0 (share - z1) ++ plane k1 z1
+    | _, _ => plane (some 0) share
+  | _, _, _, _, _ =>
   (along 2).flatMap fun (k, wk) => (along 1).flatMap fun (j, wj) => (along 0).map fun (i, wi) =>
-    let a := do let i ← i; let j ← j; let k ← k; pure (t.texelAddr i j k)
-    (a, wi * wj * wk)
+    (at_ i j k, wi * wj * wk * share)
 
 /-- Channel `c` of a texel's little-endian bytes (as words). -/
 def channel (t : Texture) (ws : Array UInt32) (c : Nat) : Nat :=
@@ -322,9 +339,9 @@ def toF32 (num : Int) (den : Nat) (e : Int) : UInt32 :=
 /-- The four result words of a fetch from the texels of its footprint (`resp`: each texel's
 words, `texelBytes` rounded up to words, in footprint order) and their weights. Floats and
 normalized integers: each channel the weighted sum computed exactly and rounded once to binary32,
-ties away from zero (a GH200's linear filtering in one and two dimensions, and its and an A100's
-blends of point-sampled mipmap levels). Integers
-read as they are (point sampling only): the texel's channels, sign-extended. A texel's missing
+ties away from zero (a GH200's linear filtering in one and two dimensions and between levels of
+linearly filtered mipmaps, and its and an A100's blends of point-sampled levels). Integers read as
+they are (point sampling only): the texel's channels, sign-extended. A texel's missing
 channels read as zero (inferred). -/
 def combine (t : Texture) (fp : List (Option UInt64 × Nat)) (resp : Array UInt32) : Array UInt32 :=
   let wpt := (t.texelBytes + 3) / 4

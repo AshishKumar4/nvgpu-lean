@@ -1393,7 +1393,7 @@ def decodeTex (d : Dec) : Option Run :=
                   let v := ((x.v.getR r l).toNat >>> (4 * k)) % 16
                   if v ≥ 8 then (v : Int) - 16 else v
               | none => #[]
-            return tx.mipFootprint (tx.lodOf (x.v.getR lr l)) fun t => NV.Tex.footprint t cs offs
+            return tx.mipFootprint (tx.lodOf (x.v.getR lr l)) fun t s => NV.Tex.footprint t cs offs s
           if cube then
             let (face, u, v) := NV.Tex.Texture.cubeFace (x.v.getR coordRegs[0]! l)
               (x.v.getR coordRegs[1]! l) (x.v.getR coordRegs[2]! l)

@@ -121,7 +121,7 @@ retargeted (`Tests.ptxFor`) and those a target cannot compile are reported as sk
 - Texture and surface opcodes beyond the SASS forms of PTX `tex.{1d,2d,3d,a1d,a2d,cube,acube}`,
   `tld4`, `txq` (dimensions), `suld.b`/`sust.b`/`sured.b` with layered forms (`decodeTex`: `TEX`,
   `TLD`, `TLD4`, `TXQ TEX_HEADER_DIMENSION`, `SULD`/`SUST`/`SURED .D.BA`, `ARRAY_1D`/`ARRAY_2D`,
-  `1D_ARRAY`/`2D_ARRAY`, `CUBE`/`ARRAY_CUBE`): samplers, mipmaps of more than one level, formatted
+  `1D_ARRAY`/`2D_ARRAY`, `CUBE`/`ARRAY_CUBE`): samplers, fetches from a mipmapped texture other than `TEX.LL`, formatted
   surface accesses, and sampler queries;
   `HSET2` (a compare with a register result); `F2F` and `F2I` from packed sources.
 - Local memory is executed (`LDL`/`STL`) but its per-lane stores are the engine's to allocate

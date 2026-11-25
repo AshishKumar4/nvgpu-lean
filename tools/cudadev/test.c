@@ -543,6 +543,69 @@ static void textureChecks(void) {
     check("linear filtering of a float array weighs texels as a GH200 does", lok);
     CK(cuTexObjectDestroy(ltex));
     CK(cuModuleUnload(lm));
+
+    // In three dimensions (16 by 16 by 16 texels, zero but for four fetches' eight each, from a
+    // GH200's run over random texels): along z, then x, then y, each part rounded to 1/256.
+    static const char *lin3Ptx =
+      ".version 8.0\n.target sm_80\n.address_size 64\n"
+      ".visible .entry lin3(.param .u64 tex_, .param .u64 xyz_, .param .u64 out_) {\n"
+      "  .reg .b64 t, p, o, a; .reg .b32 i; .reg .f32 x, y, z, r0, r1, r2, r3;\n"
+      "  ld.param.u64 t, [tex_]; ld.param.u64 p, [xyz_]; ld.param.u64 o, [out_];\n"
+      "  mov.u32 i, %tid.x; mul.wide.u32 a, i, 12; add.s64 p, p, a; mul.wide.u32 a, i, 4; add.s64 o, o, a;\n"
+      "  ld.global.f32 x, [p]; ld.global.f32 y, [p+4]; ld.global.f32 z, [p+8];\n"
+      "  tex.3d.v4.f32.f32 {r0, r1, r2, r3}, [t, {x, y, z, z}];\n"
+      "  st.global.f32 [o], r0;\n"
+      "  ret;\n}\n";
+    static const uint32_t at3[4][4] = {
+      {0x403ec51a, 0x40c98719, 0x415961c3, 0x4010581d}, {0x411c401b, 0x416c5f82, 0x416ddc7e, 0x3feaa946},
+      {0x401f0700, 0x4105a833, 0x4007ba7a, 0x402169f6}, {0x40ba8ef2, 0x40997772, 0x413fc75d, 0x3fe2ef23}};
+    static const uint32_t texels3[32][4] = {
+      {2, 5, 13, 0x4047aa90}, {3, 5, 13, 0x3fa8cdce}, {2, 6, 13, 0x402acfc3}, {3, 6, 13, 0x3fe44d94},
+      {2, 5, 14, 0x3f812659}, {3, 5, 14, 0x3f55ad72}, {2, 6, 14, 0x3feba520}, {3, 6, 14, 0x405d9fb0},
+      {9, 14, 14, 0x3fb0872c}, {10, 14, 14, 0x40019528}, {9, 15, 14, 0x3fd759ec}, {10, 15, 14, 0x4019c970},
+      {9, 14, 15, 0x3ffd0b3c}, {10, 14, 15, 0x4043c60d}, {9, 15, 15, 0x3fcc1fdb}, {10, 15, 15, 0x40314685},
+      {1, 7, 1, 0x3fe6300e}, {2, 7, 1, 0x3fb1ca40}, {1, 8, 1, 0x3ff37f7e}, {2, 8, 1, 0x3fdb41b3},
+      {1, 7, 2, 0x3fac210e}, {2, 7, 2, 0x401c2a1d}, {1, 8, 2, 0x3f215cbb}, {2, 8, 2, 0x404b9806},
+      {5, 4, 11, 0x3fc40518}, {6, 4, 11, 0x3f0afa40}, {5, 5, 11, 0x3f635202}, {6, 5, 11, 0x3f9927be},
+      {5, 4, 12, 0x402ae558}, {6, 4, 12, 0x3fb262d2}, {5, 5, 12, 0x4049193c}, {6, 5, 12, 0x40189fe8}};
+    static uint32_t vol[16 * 16 * 16];
+    for (int e = 0; e < 32; e++) vol[texels3[e][0] + 16 * texels3[e][1] + 256 * texels3[e][2]] = texels3[e][3];
+    CUDA_ARRAY3D_DESCRIPTOR vd = {16, 16, 16, CU_AD_FORMAT_FLOAT, 1, 0};
+    CUarray va;
+    CK(cuArray3DCreate(&va, &vd));
+    CUDA_MEMCPY3D vc;
+    memset(&vc, 0, sizeof vc);
+    vc.srcMemoryType = CU_MEMORYTYPE_HOST; vc.srcHost = vol; vc.srcPitch = 64; vc.srcHeight = 16;
+    vc.dstMemoryType = CU_MEMORYTYPE_ARRAY; vc.dstArray = va;
+    vc.WidthInBytes = 64; vc.Height = 16; vc.Depth = 16;
+    CK(cuMemcpy3D(&vc));
+    lr.res.array.hArray = va;
+    ltd.addressMode[2] = CU_TR_ADDRESS_MODE_CLAMP;
+    CUtexObject vtex;
+    CK(cuTexObjectCreate(&vtex, &lr, &ltd, NULL));
+    uint32_t xyz[12], vout[4];
+    for (int c = 0; c < 4; c++) for (int e = 0; e < 3; e++) xyz[3 * c + e] = at3[c][e];
+    CUdeviceptr dxyz, dvo;
+    CK(cuMemAlloc(&dxyz, sizeof xyz));
+    CK(cuMemAlloc(&dvo, sizeof vout));
+    CK(cuMemcpyHtoD(dxyz, xyz, sizeof xyz));
+    CK(cuModuleLoadData(&lm, lin3Ptx));
+    CK(cuModuleGetFunction(&lk, lm, "lin3"));
+    void *vargs[] = {&vtex, &dxyz, &dvo};
+    CK(cuLaunchKernel(lk, 1, 1, 1, 4, 1, 1, 0, NULL, vargs, NULL));
+    CK(cuCtxSynchronize());
+    CK(cuMemcpyDtoH(vout, dvo, sizeof vout));
+    int vok = 1;
+    for (int c = 0; c < 4; c++) {
+      vok = vok && vout[c] == at3[c][3];
+      if (vout[c] != at3[c][3]) printf("3d linear case %d: %08x, a GH200 %08x\n", c, vout[c], at3[c][3]);
+    }
+    check("linear filtering of a 3D float array weighs texels as a GH200 does", vok);
+    CK(cuTexObjectDestroy(vtex));
+    CK(cuModuleUnload(lm));
+    CK(cuMemFree(dxyz));
+    CK(cuMemFree(dvo));
+    CK(cuArrayDestroy(va));
     CK(cuMemFree(dxy));
     CK(cuMemFree(dlo));
     CK(cuArrayDestroy(la));
@@ -701,6 +764,71 @@ static void textureChecks(void) {
     CK(cuMemFree(dl));
     CK(cuMemFree(dv));
     CK(cuMipmappedArrayDestroy(mip));
+
+    // Linear texels between linearly filtered levels: two levels of 64 by 64 and 32 by 32 values
+    // from a generator, fetched at (u, v, LOD) where a GH200 returns `want` (the first two clamped
+    // past the left edge of level 1).
+    static const char *triPtx =
+      ".version 8.0\n.target sm_80\n.address_size 64\n"
+      ".visible .entry trik(.param .u64 tex_, .param .u64 out_, .param .u64 in_) {\n"
+      "  .reg .b64 t, o, p, a; .reg .b32 i; .reg .f32 u, v, lod, r0, r1, r2, r3;\n"
+      "  ld.param.u64 t, [tex_]; ld.param.u64 o, [out_]; ld.param.u64 p, [in_];\n"
+      "  mov.u32 i, %tid.x; mul.wide.u32 a, i, 12; add.s64 p, p, a; mul.wide.u32 a, i, 4; add.s64 o, o, a;\n"
+      "  ld.global.f32 u, [p]; ld.global.f32 v, [p+4]; ld.global.f32 lod, [p+8];\n"
+      "  tex.level.2d.v4.f32.f32 {r0, r1, r2, r3}, [t, {u, v}], lod;\n"
+      "  st.global.f32 [o], r0;\n"
+      "  ret;\n}\n";
+    static const uint32_t tri[6][4] = {
+      {0x3c54fdf4, 0x3f7851ec, 0x3c800000, 0x4047afb4}, {0x3c54fdf4, 0x3f7851ec, 0x3d000000, 0x4045bddd},
+      {0x3f3902de, 0x3ea6f695, 0x3e100000, 0x40064974}, {0x3d6ecbfc, 0x3f6dcc64, 0x3f180000, 0x400a9954},
+      {0x3e18793e, 0x3f58c155, 0x3f600000, 0x400301e2}, {0x3e5652be, 0x3f4ab9f6, 0x3f540000, 0x3fc4b089}};
+    CUmipmappedArray mip3;
+    CK(cuMipmappedArrayCreate(&mip3, &td2, 2));
+    uint32_t rng = 12345;
+    for (unsigned k = 0; k < 2; k++) {
+      CUarray lv;
+      CK(cuMipmappedArrayGetLevel(&lv, mip3, k));
+      unsigned w = 64 >> k;
+      float lvl[64 * 64];
+      for (unsigned e = 0; e <= w * w; e++) {
+        rng = rng * 1664525u + 1013904223u;
+        if (e) lvl[e - 1] = 0.5f + (rng >> 8) / 16777216.0f * 3.0f;
+      }
+      CUDA_MEMCPY2D cp;
+      memset(&cp, 0, sizeof cp);
+      cp.srcMemoryType = CU_MEMORYTYPE_HOST; cp.srcHost = lvl; cp.srcPitch = w * 4;
+      cp.dstMemoryType = CU_MEMORYTYPE_ARRAY; cp.dstArray = lv;
+      cp.WidthInBytes = w * 4; cp.Height = w;
+      CK(cuMemcpy2D(&cp));
+    }
+    mr.res.mipmap.hMipmappedArray = mip3;
+    mt.filterMode = CU_TR_FILTER_MODE_LINEAR;
+    CK(cuTexObjectCreate(&ttex, &mr, &mt, NULL));
+    uint32_t tin[18], tout[6];
+    for (int c = 0; c < 6; c++) for (int e = 0; e < 3; e++) tin[3 * c + e] = tri[c][e];
+    CUdeviceptr din, dout;
+    CK(cuMemAlloc(&din, sizeof tin));
+    CK(cuMemAlloc(&dout, sizeof tout));
+    CK(cuMemcpyHtoD(din, tin, sizeof tin));
+    CUmodule tm;
+    CK(cuModuleLoadData(&tm, triPtx));
+    CUfunction tk;
+    CK(cuModuleGetFunction(&tk, tm, "trik"));
+    void *triArgs[] = {&ttex, &dout, &din};
+    CK(cuLaunchKernel(tk, 1, 1, 1, 6, 1, 1, 0, NULL, triArgs, NULL));
+    CK(cuCtxSynchronize());
+    CK(cuMemcpyDtoH(tout, dout, sizeof tout));
+    int tok = 1;
+    for (int c = 0; c < 6; c++) {
+      tok = tok && tout[c] == tri[c][3];
+      if (tout[c] != tri[c][3]) printf("trilinear case %d: %08x, a GH200 %08x\n", c, tout[c], tri[c][3]);
+    }
+    check("linear filtering between linearly filtered mipmap levels weighs texels as a GH200 does", tok);
+    CK(cuTexObjectDestroy(ttex));
+    CK(cuModuleUnload(tm));
+    CK(cuMemFree(din));
+    CK(cuMemFree(dout));
+    CK(cuMipmappedArrayDestroy(mip3));
   }
   CK(cuTexObjectDestroy(tex));
   CK(cuSurfObjectDestroy(surf));
