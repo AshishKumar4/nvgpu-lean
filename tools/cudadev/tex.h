@@ -45,6 +45,16 @@ static unsigned bcOf(unsigned format, unsigned *blockBytes) {
   return n;
 }
 
+// A block-compressed format's texels (`NV.Tex.Texture.bc`): 8-bit channels of the format's kind
+// (signed for BC4 and BC5 SNORM), BC6H's binary16 halves (three, read as four); the format goes
+// in word 27.
+static void bcTexels(unsigned format, unsigned bc, unsigned *bits, unsigned *kind, unsigned *chans) {
+  static const unsigned bcChannels[] = {0, 4, 4, 4, 1, 2, 4, 4};
+  *bits = bc == 6 ? 16 : 8;
+  *kind = bc == 6 ? 2 : format == CU_AD_FORMAT_BC4_SNORM || format == CU_AD_FORMAT_BC5_SNORM;
+  *chans = bcChannels[bc];
+}
+
 // An array's row pitch: its texels' bytes rounded up to 128; a block-compressed array's rows are
 // of blocks.
 static size_t arrayPitch(size_t w, unsigned format, unsigned channels) {
@@ -198,8 +208,8 @@ CUresult CUDAAPI cuMipmappedArrayDestroy(CUmipmappedArray m) {
   return r;
 }
 
-// The objects: 28 words each (`Device.setTextures`), per device; a destroyed one's words zero.
-#define TEX_WORDS 35
+// The objects: 36 words each (`Device.setTextures`), per device; a destroyed one's words zero.
+#define TEX_WORDS 36
 static uint64_t *texTable[MAX_GPUS];
 static size_t texCount[MAX_GPUS];
 
@@ -258,15 +268,9 @@ static int texResource(const CUDA_RESOURCE_DESC *rd, uint64_t *w) {
       if (!a) return 0;
       bits = formatBits(a->format, &kind);
       chans = a->channels;
-      // A block-compressed array: its format in word 27, its texels 8-bit channels (BC6H's
-      // halves, three of four) of the format's kind (`NV.Tex.Texture.bc`).
       unsigned bb, bc = bcOf(a->format, &bb);
       if (bc) {
-        int sgn = a->format == CU_AD_FORMAT_BC4_SNORM || a->format == CU_AD_FORMAT_BC5_SNORM ||
-                  a->format == CU_AD_FORMAT_BC6H_SF16;
-        bits = bc == 6 ? 16 : 8;
-        kind = bc == 6 ? 2 : sgn;
-        if (bc == 6) chans = 4;
+        bcTexels(a->format, bc, &bits, &kind, &chans);
         w[27] = a->format;
       }
       int layered = (a->flags & CUDA_ARRAY3D_LAYERED) != 0, cube = (a->flags & CUDA_ARRAY3D_CUBEMAP) != 0;
@@ -315,6 +319,23 @@ static int texResource(const CUDA_RESOURCE_DESC *rd, uint64_t *w) {
   return 1;
 }
 
+// A block-compressed view's format as an array format (CU_AD_FORMAT_BC*); 0 for the others.
+static unsigned viewBc(CUresourceViewFormat f) {
+  switch (f) {
+    case CU_RES_VIEW_FORMAT_UNSIGNED_BC1: return CU_AD_FORMAT_BC1_UNORM;
+    case CU_RES_VIEW_FORMAT_UNSIGNED_BC2: return CU_AD_FORMAT_BC2_UNORM;
+    case CU_RES_VIEW_FORMAT_UNSIGNED_BC3: return CU_AD_FORMAT_BC3_UNORM;
+    case CU_RES_VIEW_FORMAT_UNSIGNED_BC4: return CU_AD_FORMAT_BC4_UNORM;
+    case CU_RES_VIEW_FORMAT_SIGNED_BC4: return CU_AD_FORMAT_BC4_SNORM;
+    case CU_RES_VIEW_FORMAT_UNSIGNED_BC5: return CU_AD_FORMAT_BC5_UNORM;
+    case CU_RES_VIEW_FORMAT_SIGNED_BC5: return CU_AD_FORMAT_BC5_SNORM;
+    case CU_RES_VIEW_FORMAT_UNSIGNED_BC6H: return CU_AD_FORMAT_BC6H_UF16;
+    case CU_RES_VIEW_FORMAT_SIGNED_BC6H: return CU_AD_FORMAT_BC6H_SF16;
+    case CU_RES_VIEW_FORMAT_UNSIGNED_BC7: return CU_AD_FORMAT_BC7_UNORM;
+    default: return 0;
+  }
+}
+
 // A resource view's texel format as an array format and its channels; 0 for the
 // block-compressed formats.
 static unsigned viewFormat(CUresourceViewFormat f, unsigned *chans) {
@@ -342,12 +363,43 @@ static unsigned viewFormat(CUresourceViewFormat f, unsigned *chans) {
 // the view's level 0 (a GH200 and an A100: LOD 0 reads it, and LODs past the last read the last).
 // The view's extent is the array's, its level 0's for a mipmapped array (an array's view may give
 // 0 to take it; a GH200 and an A100 refuse a mipmapped array's view of another extent, 0 included);
-// some of a cubemap's faces and block-compressed formats are not modelled.
+// a block-compressed view's is four times a uint32 array's. A view of a cubemap is refused.
 static CUresult texView(const CUDA_RESOURCE_DESC *rd, const CUDA_RESOURCE_VIEW_DESC *v, uint64_t *w) {
   CUmipmappedArray mip = rd->resType == CU_RESOURCE_TYPE_MIPMAPPED_ARRAY ? rd->res.mipmap.hMipmappedArray : NULL;
   if (rd->resType != CU_RESOURCE_TYPE_ARRAY && !mip) return CUDA_ERROR_INVALID_VALUE;
   CUarray a = mip ? &mip->levels[0] : rd->res.array.hArray;
   const int layered = w[20] != 0;
+  // A GH200 and an A100 refuse every view of a cubemap array, of all its faces and with no format
+  // too; of a layered or mipmapped cubemap, unmeasured.
+  if (w[21]) {
+    if (!mip && !(a->flags & CUDA_ARRAY3D_LAYERED)) return CUDA_ERROR_INVALID_VALUE;
+    note("texture views of layered and mipmapped cubemaps are not modelled");
+    return CUDA_ERROR_NOT_SUPPORTED;
+  }
+  unsigned bcFormat = viewBc(v->format);
+  if (bcFormat) {
+    // A block-compressed view: of a 2D array of two uint32 channels (BC1, BC4) or four (the
+    // others), each element one block, four times its width and height.
+    unsigned kind, bb, bits, chans, bc = bcOf(bcFormat, &bb);
+    if (mip || layered || a->depth) {
+      note("block-compressed views of mipmapped, layered and 3D arrays are not modelled");
+      return CUDA_ERROR_NOT_SUPPORTED;
+    }
+    if (w[27] || formatBits(a->format, &kind) != 32 || kind != 0 || a->channels * 4 != bb ||
+        v->width != 4 * a->width || v->height != 4 * (a->height ? a->height : 1) || v->depth ||
+        v->firstLayer || v->lastLayer || v->firstMipmapLevel || v->lastMipmapLevel)
+      return CUDA_ERROR_INVALID_VALUE;
+    bcTexels(bcFormat, bc, &bits, &kind, &chans);
+    w[1] = 2;
+    w[2] = v->width;
+    w[3] = v->height;
+    w[7] = chans;
+    for (unsigned c = 0; c < 4; c++) w[8 + c] = c < chans ? bits : 0;
+    w[12] = kind;
+    w[27] = bcFormat;
+    w[35] = 1;
+    return CUDA_SUCCESS;
+  }
   if (mip ? v->width != a->width || v->height != (a->height ? a->height : 0) ||
               v->depth != (a->depth ? a->depth : 0)
           : (v->width && v->width != a->width) || (v->height && v->height != (a->height ? a->height : 1)) ||
@@ -367,10 +419,7 @@ static CUresult texView(const CUDA_RESOURCE_DESC *rd, const CUDA_RESOURCE_VIEW_D
   }
   if (v->format != CU_RES_VIEW_FORMAT_NONE) {
     unsigned chans, kind, format = viewFormat(v->format, &chans);
-    if (!format) {
-      note("block-compressed texture views are not modelled");
-      return CUDA_ERROR_NOT_SUPPORTED;
-    }
+    if (!format) return CUDA_ERROR_INVALID_VALUE;
     unsigned bits = formatBits(format, &kind);
     if (bits * chans != w[8] * w[7]) return CUDA_ERROR_INVALID_VALUE;
     w[7] = chans;
@@ -378,10 +427,6 @@ static CUresult texView(const CUDA_RESOURCE_DESC *rd, const CUDA_RESOURCE_VIEW_D
     w[12] = kind;
   }
   if (!layered) return v->firstLayer || v->lastLayer ? CUDA_ERROR_INVALID_VALUE : CUDA_SUCCESS;
-  if (w[21] && (v->firstLayer || v->lastLayer + 1 != w[20])) {
-    note("texture views of some of a cubemap's faces are not modelled");
-    return CUDA_ERROR_NOT_SUPPORTED;
-  }
   if (v->firstLayer > v->lastLayer || v->lastLayer >= w[20]) return CUDA_ERROR_INVALID_VALUE;
   // The layers each level holds and the view's first (`NV.Tex.Texture.levelLayers`, `firstLayer`):
   // a mipmapped array's levels lie apart by all its layers.

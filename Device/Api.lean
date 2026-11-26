@@ -352,14 +352,14 @@ the filter (0 point, 1 linear), the three coordinates' addressing modes (0 wrap,
 2 mirror, 3 border), a surface, the layers, a cubemap, a mipmapped array's levels (1 for any
 other object), linear filtering between levels, the level bias and clamps (binary32), and a
 block-compressed array's format (0 for any other object), sRGB texels, and the border colour
-(binary32, four words), and a view's layers a level holds and its first layer; 35 words an object, a
-freed object's all zero. -/
+(binary32, four words), a view's layers a level holds and its first layer, and a block-compressed
+view; 36 words an object, a freed object's all zero. -/
 @[export nvgpu_set_textures]
 def setTextures (d : Device) (table : ByteArray) : Device := Id.run do
   let word (i : Nat) : Nat := (List.range 8).foldl (fun a b => a + (table.get! (8 * i + b)).toNat * 256 ^ b) 0
   let mut ts := #[]
-  for o in [0:table.size / 280] do
-    let w (k : Nat) := word (35 * o + k)
+  for o in [0:table.size / 288] do
+    let w (k : Nat) := word (36 * o + k)
     let n := w 7
     let addr (m : Nat) : NV.Tex.Address := match m with | 0 => .wrap | 2 => .mirror | 3 => .border | _ => .clamp
     ts := ts.push {
@@ -372,7 +372,7 @@ def setTextures (d : Device) (table : ByteArray) : Device := Id.run do
       mipLinear := w 23 != 0, lodBias := (w 24).toUInt32, lodMin := (w 25).toUInt32,
       lodMax := (w 26).toUInt32, bcFormat := w 27, srgb := w 28 != 0,
       border := #[(w 29).toUInt32, (w 30).toUInt32, (w 31).toUInt32, (w 32).toUInt32],
-      levelLayers := w 33, firstLayer := w 34 }
+      levelLayers := w 33, firstLayer := w 34, bcView := w 35 != 0 }
   return { d with textures := ts }
 
 @[export nvgpu_error_string]

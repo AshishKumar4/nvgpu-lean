@@ -59,7 +59,9 @@ libraries and frameworks built on it load them where they would load NVIDIA's, a
   `NV/Machine/Texture.lean`), and views of arrays and mipmapped arrays in another texel format or of
   some of their layers or mipmap levels; 2D and 3D copies reach arrays. Block-compressed 2D arrays
   (BC1 to BC7) are rows of 4x4 blocks; textures over them decode BC1 to BC5 (unsigned), BC6H and
-  BC7 as an A100 and a GH200 do. sRGB textures (8-bit or BC1 to BC3 sRGB) read their colour through the GPU's own
+  BC7 as an A100 and a GH200 do, and so do block-compressed views of a 2D array of two or four
+  32-bit words a block (alpha zero for BC4, BC5 and BC6H, as through the GPUs' views); views of a
+  cubemap array are refused, as the GPUs refuse them. sRGB textures (8-bit or BC1 to BC3 sRGB) read their colour through the GPU's own
   table, point-sampled; texels past the edge under border addressing read the border colour.
 * `module.h`: modules and libraries. An image is a cubin, a fat binary (or cudart's wrapper of
   one, as `__cudaRegisterFatBinary` hands it over), or PTX. The driver's choice from a fat binary:
@@ -152,8 +154,8 @@ load them, ask the runtime for a table entry the device does not provide (`runti
 only ZLUDA's), and stop; PyTorch's own kernels run (the `device-torch` row). IPC, a mipmapped
 texture's fetches by gradients (`TXD`), textures over signed BC4 and BC5 arrays (their palettes'
 in-between entries are the GPU's own and not yet pinned down), linear filtering of sRGB texels,
-seamless cubemap filtering, texture views of block-compressed formats or some of a cubemap's faces,
-external memory and semaphores, and kernels dereferencing host memory other than mapped page-locked
+seamless cubemap filtering, block-compressed views of other than 2D arrays, views of layered or
+mipmapped cubemaps, external memory and semaphores, and kernels dereferencing host memory other than mapped page-locked
 memory (`cuMemHostAlloc` with `CU_MEMHOSTALLOC_DEVICEMAP`, `cudaHostAllocMapped`, which kernels
 reach at its host address as they do managed memory, and which takes device memory) or registered
 memory (at its device pointer): each fails with a CUDA error naming it.

@@ -97,6 +97,9 @@ structure Texture where
   the object holds (0: `layers`), which a mipmapped object's levels lie apart by. -/
   firstLayer : Nat := 0
   levelLayers : Nat := 0
+  /-- A block-compressed view of an array of 32-bit words (`CU_RES_VIEW_FORMAT_*_BC*`): the alpha
+  BC4, BC5 and BC6H blocks lack reads zero, not one (an A100 and a GH200). -/
+  bcView : Bool := false
   deriving Repr, Inhabited
 
 namespace Texture
@@ -710,11 +713,13 @@ its block's words `ws` and its place `sub`: BC1's colour, alpha one or (transpar
 colour from its second half and alpha from its first, 4 bits a texel; BC3's colour from its second
 half and alpha (8-bit) from its first; BC6H's binary16 as `bc6hTexel` (alpha one); BC7's as
 `bc7Texel`; BC4 red (green and blue zero, alpha one), BC5 red and green from its two halves (blue
-zero, alpha one). The colour and BC3's alpha match an A100 and a GH200 on every texel of random
-blocks, the colour on every pair of endpoints per channel. -/
+zero, alpha one); through a view (`bcView`), BC4's, BC5's and BC6H's alpha zero. The colour and
+BC3's alpha match an A100 and a GH200 on every texel of random blocks, the colour on every pair of
+endpoints per channel. -/
 def bcTexel (t : Texture) (ws : Array UInt32) (sub : Nat) : Array (Int × Nat) :=
   let half (k : Nat) : Nat := ws[2 * k]!.toNat + ws[2 * k + 1]!.toNat * 2 ^ 32
   let rgb (c : Array Nat) : List (Int × Nat) := c.toList.map (fun (v : Nat) => (Int.ofNat v, 255))
+  let one : Int × Nat := if t.bcView then (0, 1) else (1, 1)
   match t.bc with
   | 1 =>
     let (c, clear) := bcColour (half 0) sub false
@@ -726,9 +731,9 @@ def bcTexel (t : Texture) (ws : Array UInt32) (sub : Nat) : Array (Int × Nat) :
     let (c, _) := bcColour (half 1) sub true
     (rgb c ++ [bc4Value (half 0) sub true]).toArray
   | 7 => (rgb (bc7Texel (half 0 + half 1 * 2 ^ 64) sub)).toArray
-  | 6 => (bc6hTexel (half 0 + half 1 * 2 ^ 64) sub (t.bcFormat == 0x9c)).map halfValue |>.push (1, 1)
-  | 4 => #[bc4Value (half 0) sub, (0, 1), (0, 1), (1, 1)]
-  | 5 => #[bc4Value (half 0) sub, bc4Value (half 1) sub, (0, 1), (1, 1)]
+  | 6 => (bc6hTexel (half 0 + half 1 * 2 ^ 64) sub (t.bcFormat == 0x9c)).map halfValue |>.push one
+  | 4 => #[bc4Value (half 0) sub, (0, 1), (0, 1), one]
+  | 5 => #[bc4Value (half 0) sub, bc4Value (half 1) sub, (0, 1), one]
   | _ => #[(0, 1), (0, 1), (0, 1), (1, 1)]
 
 /-- An sRGB texel's 8-bit colour value read as linear (binary32's upper 16 bits): an A100's and a

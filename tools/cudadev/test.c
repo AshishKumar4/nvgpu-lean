@@ -855,8 +855,34 @@ static void textureChecks(void) {
           }
         CK(cuTexObjectDestroy(htex));
         CK(cuArrayDestroy(ha));
+        // The same blocks in a 2 by 1 array of four 32-bit words, read through a BC6H view of 8 by 4
+        // texels: the same texels, alpha zero (an A100 and a GH200).
+        CUDA_ARRAY3D_DESCRIPTOR ud = {2, 1, 0, CU_AD_FORMAT_UNSIGNED_INT32, 4, 0};
+        CK(cuArray3DCreate(&ha, &ud));
+        hcp.dstArray = ha;
+        CK(cuMemcpy2D(&hcp));
+        br.res.array.hArray = ha;
+        CUDA_RESOURCE_VIEW_DESC hv;
+        memset(&hv, 0, sizeof hv);
+        hv.format = f ? CU_RES_VIEW_FORMAT_SIGNED_BC6H : CU_RES_VIEW_FORMAT_UNSIGNED_BC6H;
+        hv.width = 8; hv.height = 4;
+        CK(cuTexObjectCreate(&htex, &br, &btd, &hv));
+        CK(cuLaunchKernel(bk6, 1, 1, 1, 32, 1, 1, 0, NULL, hargs, NULL));
+        CK(cuCtxSynchronize());
+        CK(cuMemcpyDtoH(hgot, b7out, sizeof hgot));
+        for (int e = 0; e < 128; e++)
+          if (hgot[e] != (e % 4 == 3 ? 0 : bc6Want[f][e])) {
+            b7ok = 0;
+            printf("BC6H %s view texel %d channel %d: %08x\n", f ? "signed" : "unsigned", e / 4, e % 4, hgot[e]);
+          }
+        CK(cuTexObjectDestroy(htex));
+        // A view of other than four times the array's extent is refused.
+        hv.width = 2; hv.height = 1;
+        b7ok = b7ok && cuTexObjectCreate(&htex, &br, &btd, &hv) == CUDA_ERROR_INVALID_VALUE;
+        CK(cuArrayDestroy(ha));
       }
-      check("BC6H arrays' texels, unsigned and signed, decode as an A100 decodes them", b7ok);
+      check("BC6H arrays' texels, unsigned and signed, decode as an A100 decodes them, and through a "
+            "BC6H view of 32-bit words", b7ok);
       CK(cuTexObjectDestroy(btex));
       CK(cuModuleUnload(b6m));
       CK(cuModuleUnload(b7m));
@@ -1513,6 +1539,27 @@ static void textureChecks(void) {
         if (got[e] != layWant[c][e]) printf("%s case %d: %g, a GH200 %g\n", c ? "cubemap" : "layered", e, got[e], layWant[c][e]);
       }
       CK(cuTexObjectDestroy(lyt));
+      if (c) {
+        // A view of a cubemap array, of all its faces, is refused, as a GH200 and an A100 refuse it.
+        CUDA_ARRAY3D_DESCRIPTOR cd = {4, 4, 6, CU_AD_FORMAT_FLOAT, 1, CUDA_ARRAY3D_CUBEMAP};
+        CUarray ca;
+        CK(cuArray3DCreate(&ca, &cd));
+        CUDA_RESOURCE_DESC cr;
+        memset(&cr, 0, sizeof cr);
+        cr.resType = CU_RESOURCE_TYPE_ARRAY;
+        cr.res.array.hArray = ca;
+        CUDA_RESOURCE_VIEW_DESC cv;
+        memset(&cv, 0, sizeof cv);
+        cv.format = CU_RES_VIEW_FORMAT_FLOAT_1X32;
+        cv.width = cv.height = 4;
+        cv.depth = 6;
+        cv.lastLayer = 5;
+        mt.mipmapFilterMode = CU_TR_FILTER_MODE_POINT;
+        mt.maxMipmapLevelClamp = 0.0f;
+        CUtexObject ct;
+        check("a view of a cubemap array is refused", cuTexObjectCreate(&ct, &cr, &mt, &cv) == CUDA_ERROR_INVALID_VALUE);
+        CK(cuArrayDestroy(ca));
+      }
       if (!c) {
         // A view of layers 1 and 2: its layer 0 at level 1 is the array's layer 1 there, its
         // layer 1 at level 2 the array's layer 2 (each level holds all three layers).
