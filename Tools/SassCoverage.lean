@@ -48,7 +48,7 @@ def corpus (dir : System.FilePath) : IO (Array (Instr × Bool)) := do
 
 def targets : List (String × Nat × String × String) :=
   [("sm_80", 80, "a100-40", "tests/sass/sm_80"), ("sm_90a", 90, "h200", "tests/sass"),
-   ("sm_120a", 120, "rtxpro6000", "tests/sass/sm_120a")]
+   ("sm_100a", 100, "b200", "tests/sass/sm_100a"), ("sm_120a", 120, "rtxpro6000", "tests/sass/sm_120a")]
 
 /-- How an opcode stands on a target: every form of it in the listings is defined (`some true`),
 one is not (`some false`), or no listing has it (`none`). -/

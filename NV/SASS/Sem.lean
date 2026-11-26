@@ -219,7 +219,15 @@ def decodeInt (d : Dec) : Option Run :=
       let ws ← wr (x.o 0) l (t % 2 ^ 32).toUInt32
       let ws ← if n ≥ 1 then (wrP (x.o 1) l (t / 2 ^ 32 ≥ 1)).map (ws ++ ·) else some ws
       if n ≥ 2 then (wrP (x.o 2) l (t / 2 ^ 32 ≥ 2)).map (ws ++ ·) else some ws)
-  | "VIADD" => some (res fun x l => do wr (x.o 0) l ((← x.s l 1) + (← x.s l 2)))
+  | "VIADD" =>
+    -- `VIADD.S32.ISAT` (`add.sat.s32`, and integer MMA's `.satfinite` accumulation on sm_120a):
+    -- the signed sum clamped to the 32-bit range.
+    if i.hasMod "ISAT" then
+      if !i.hasMod "S32" then none else
+      some (res fun x l => do
+        let t := (← x.s l 1).toInt32.toInt + (← x.s l 2).toInt32.toInt
+        wr (x.o 0) l (Int.toInt32 (max (-2 ^ 31) (min (2 ^ 31 - 1) t))).toUInt32)
+    else some (res fun x l => do wr (x.o 0) l ((← x.s l 1) + (← x.s l 2)))
   | "IADD" =>
     -- `IADD.64 Rd, a, b` (sm_100 on): the 64-bit sum of register pairs or a pair and a
     -- sign-extended immediate; `-b` negates the pair.
@@ -337,25 +345,6 @@ def decodeInt (d : Dec) : Option Run :=
         let lt := if s64 then a.toInt64 < b.toInt64 else a < b
         wr64 (x.o 2) l (if (← x.p l 5) == lt then a else b))
     else
-    -- Packed forms (`VIMNMX.U8x4`, sm_120a on): lane by lane, `w` bits each.
-    let packed : Option (Nat × Bool) :=
-      if i.hasMod "U8x4" then some (8, false) else if i.hasMod "S8x4" then some (8, true)
-      else if i.hasMod "U16x2" then some (16, false) else if i.hasMod "S16x2" then some (16, true)
-      else none
-    if let some (w, sgn) := packed then
-      if three then none else
-      some (res fun x l => do
-        let a ← x.s l 1; let b ← x.s l 2
-        let isMin ← x.p l 3
-        let lane (v : UInt32) (k : Nat) : Int :=
-          let u := ((v >>> (w * k).toUInt32).toNat) % 2 ^ w
-          if sgn && u ≥ 2 ^ (w - 1) then (u : Int) - 2 ^ w else u
-        let r := (List.range (32 / w)).foldl (fun acc k =>
-          let x := lane a k; let y := lane b k
-          let m := if isMin then min x y else max x y
-          acc ||| (((m % 2 ^ w).toNat).toUInt32 <<< (w * k).toUInt32)) (0 : UInt32)
-        wr (x.o 0) l r)
-    else
     -- `VIMNMX[.U32] Rd, PT, PT, a, b, P` (sm_100a): two predicate operands before
     -- the sources, PT in every listing seen; what they mean otherwise is unknown, so other forms
     -- fault.
@@ -365,11 +354,34 @@ def decodeInt (d : Dec) : Option Run :=
       | .reg ⟨.p, 7⟩ m => !m.not | _ => false
     if preds && !(sinkPT 1 && sinkPT 2) then some d.fault else
     let k := if preds then 2 else 0
+    -- Packed forms (`VIMNMX.U16x2`, `.U8x4` from sm_120a): lane by lane, `w` bits each; `.RELU`
+    -- (PTX `min.relu`/`max.relu`) clamps each lane's result at zero.
+    let packed : Option (Nat × Bool) :=
+      if i.hasMod "U8x4" then some (8, false) else if i.hasMod "S8x4" then some (8, true)
+      else if i.hasMod "U16x2" then some (16, false) else if i.hasMod "S16x2" then some (16, true)
+      else none
+    let relu := i.hasMod "RELU"
+    if let some (w, sgn) := packed then
+      if three then none else
+      some (res fun x l => do
+        let a ← x.s l (1 + k); let b ← x.s l (2 + k)
+        let isMin ← x.p l (3 + k)
+        let lane (v : UInt32) (j : Nat) : Int :=
+          let u := ((v >>> (w * j).toUInt32).toNat) % 2 ^ w
+          if sgn && u ≥ 2 ^ (w - 1) then (u : Int) - 2 ^ w else u
+        let r := (List.range (32 / w)).foldl (fun acc j =>
+          let x := lane a j; let y := lane b j
+          let m := if isMin then min x y else max x y
+          let m := if relu then max 0 m else m
+          acc ||| (((m % 2 ^ w).toNat).toUInt32 <<< (w * j).toUInt32)) (0 : UInt32)
+        wr (x.o 0) l r)
+    else
     some (res fun x l => do
       let (a, b, pi) ← if three then (do pure ((← x.s l 1) + (← x.s l 2), ← x.s l 3, 4))
         else (do pure (← x.s l (1 + k), ← x.s l (2 + k), 3 + k))
       let lt ← cmp signed "LT" a b
-      wr (x.o 0) l (if (← x.p l pi) == lt then a else b))
+      let m := if (← x.p l pi) == lt then a else b
+      wr (x.o 0) l (if relu && m.toInt32 < 0 then 0 else m))
   | "SGXT" =>
     -- `SGXT[.U32] Rd, a, n`: the low n bits of a, sign- (or zero-) extended; n ≥ 32 keeps a.
     let signed := !i.hasMod "U32"

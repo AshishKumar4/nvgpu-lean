@@ -6,7 +6,7 @@ set -eu
 tmp=$(mktemp -d)
 sh tools/ptx/corpus.sh "$tmp/c" samples > /dev/null 2>&1
 args=""
-for arch in sm_80 sm_90a sm_120a; do
+for arch in sm_80 sm_90a sm_100a sm_120a; do
   mkdir -p "$tmp/$arch"
   for f in tests/diff/*.ptx "$tmp"/c/samples/*.sm_90a.ptx; do
     n=$(basename "$f" .ptx)

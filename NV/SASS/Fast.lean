@@ -134,7 +134,9 @@ def int? (f : Form) : Option Run := do
     else
       let a ← v 1; let b ← v 2; let c ← v 3
       f.out32 u fun env w l => a env w l * b env w l + c env w l
-  | "VIADD" => let a ← v 1; let b ← v 2; f.out32 u fun env w l => a env w l + b env w l
+  | "VIADD" =>
+    if i.hasMod "ISAT" then none
+    let a ← v 1; let b ← v 2; f.out32 u fun env w l => a env w l + b env w l
   | "IADD3" =>
     if i.hasMod "64" then none
     let n := nPreds i 1
