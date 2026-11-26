@@ -364,6 +364,14 @@ static uint64_t devCycles(void) {
   return c;
 }
 
+// The current device's clock in MHz, as its runs take it (`NVGPU_LEAN_CLOCK` or the part's).
+static uint64_t devMhz(void) {
+  pthread_mutex_lock(&lock);
+  uint64_t m = initialized ? nvgpu_device_info(lend(), 1) : 0;
+  pthread_mutex_unlock(&lock);
+  return m;
+}
+
 // With NVGPU_LEAN_VERBOSE, at exit: each device's simulated time, the cycles its kernels ran and
 // the waits its collectives added (a mesh's step time is the largest).
 static void reportClocks(void) {

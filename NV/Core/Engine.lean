@@ -178,7 +178,21 @@ structure Counters where
   /-- The busiest sub-partition's warp instructions issued (one a cycle at most). -/
   issueMax : Nat := 0
   memory : Memory.Counters := {}
+  /-- What the launch's timing is not qualified for (`unqualified`): reasons a schedule ranked by
+  its cycles would be ranked on time the model does not stand behind. -/
+  unqualified : List String := []
   deriving Repr, Inhabited
+
+/-- What a kernel's timing is not qualified for: instructions whose effect or time the model does
+not measure. A cluster-launch-control cancel (`UGETNEXTWORKID`) always fails, prefetches
+(`UTMAPF`, `UBLKPF`, `UTMACCTL`) do nothing, and a paired tcgen05 MMA (`.2CTA`) is timed as
+`cta_group::1`'s, which alone was measured (a B200's paired m256n128 runs 23% longer). -/
+def unqualified (k : NV.SASS.Kernel) : List String :=
+  let has (f : NV.SASS.Instr → Bool) : Bool := k.code.any f
+  (if has (·.opcode == "UGETNEXTWORKID") then ["cluster launch control (UGETNEXTWORKID): every cancel fails"] else []) ++
+  (if has (fun i => i.opcode ∈ ["UTMAPF", "UBLKPF", "UTMACCTL"]) then ["prefetches (UTMAPF, UBLKPF, UTMACCTL): not modelled"] else []) ++
+  (if has (fun i => i.opcode.startsWith "UTC" && i.hasMod "2CTA" && (i.opcode.splitOn "MMA").length > 1) then
+    ["paired tcgen05 MMA (cta_group::2): timed as cta_group::1"] else [])
 
 /-- Two SMs' counters as one: sums, and the later end. -/
 private def Counters.merge (a b : Counters) : Counters :=
@@ -2333,7 +2347,8 @@ private def runOnWith {m : Type → Type} {σ : Type} [Monad m] (pool : Pool m �
                 pipeBusyMax := sms.foldl (fun acc sm =>
                   (List.range sm.pipeWork.size).foldl (fun acc i =>
                     acc.modify (i % Pipe.count) (max · sm.pipeWork[i]!)) acc) (Array.replicate Pipe.count 0)
-                issueMax := sms.foldl (fun m sm => sm.issued.foldl max m) 0 }
+                issueMax := sms.foldl (fun m sm => sm.issued.foldl max m) 0
+                unqualified := unqualified k }
   let machine := { machine with code := sms.map (·.code.map ({ · with fill := {} })), l2 := mem.l2Tags,
                                 clock := machine.clock + c.startCycles + c.cycles + c.endCycles,
                                 modules := if firstLoad then k.module :: machine.modules else machine.modules }

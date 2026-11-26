@@ -199,7 +199,7 @@ CUresult CUDAAPI cuMipmappedArrayDestroy(CUmipmappedArray m) {
 }
 
 // The objects: 28 words each (`Device.setTextures`), per device; a destroyed one's words zero.
-#define TEX_WORDS 33
+#define TEX_WORDS 35
 static uint64_t *texTable[MAX_GPUS];
 static size_t texCount[MAX_GPUS];
 
@@ -383,8 +383,10 @@ static CUresult texView(const CUDA_RESOURCE_DESC *rd, const CUDA_RESOURCE_VIEW_D
     return CUDA_ERROR_NOT_SUPPORTED;
   }
   if (v->firstLayer > v->lastLayer || v->lastLayer >= w[20]) return CUDA_ERROR_INVALID_VALUE;
-  // A 1D layered array's layers are a row apart, a 2D one's a slice.
-  w[0] += v->firstLayer * (a->height ? a->slice : a->pitch);
+  // The layers each level holds and the view's first (`NV.Tex.Texture.levelLayers`, `firstLayer`):
+  // a mipmapped array's levels lie apart by all its layers.
+  w[33] = w[20];
+  w[34] = v->firstLayer;
   w[20] = v->lastLayer - v->firstLayer + 1;
   return CUDA_SUCCESS;
 }

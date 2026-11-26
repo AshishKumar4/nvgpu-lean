@@ -93,6 +93,10 @@ structure Texture where
   /-- The border colour (`cudaTextureDesc::borderColor`, binary32 bits), which texels past the edge
   read under border addressing. -/
   border : Array UInt32 := #[0, 0, 0, 0]
+  /-- A view of some layers of a layered object: the first of them, and the layers each level of
+  the object holds (0: `layers`), which a mipmapped object's levels lie apart by. -/
+  firstLayer : Nat := 0
+  levelLayers : Nat := 0
   deriving Repr, Inhabited
 
 namespace Texture
@@ -162,7 +166,8 @@ def cubeFace (x y z : UInt32) : Nat × UInt32 × UInt32 :=
 
 /-- Layer `k` of a layered object, which must be one of its layers (`layer`). -/
 def layerAt (t : Texture) (k : Nat) : Texture :=
-  { t with base := t.base + (k * (if t.dims == 1 then t.pitch else t.slice)).toUInt64, layers := 0 }
+  { t with base := t.base + ((t.firstLayer + k) * (if t.dims == 1 then t.pitch else t.slice)).toUInt64,
+           layers := 0, firstLayer := 0 }
 
 /-- Layer `k` of a layered object, as an object of its own (filtering stays within a layer, CUDA
 Programming Guide, layered textures). A layer index past the last is left undefined by the
@@ -178,14 +183,17 @@ a layered level's layers (a cubemap's faces) together (the driver's layout, `too
 def level (t : Texture) (k : Nat) : Texture := Id.run do
   let mut base := t.base
   let mut lv := { t with levels := 1 }
+  let held := if t.levelLayers > 0 then t.levelLayers else max 1 t.layers
   for j in [0:k + 1] do
     let w := max 1 (t.width >>> j)
     let h := if t.dims ≥ 2 then max 1 (t.height >>> j) else 1
     let d := if t.dims ≥ 3 then max 1 (t.depth >>> j) else 1
     let pitch := (w * t.texelBytes + 127) / 128 * 128
     lv := { lv with base, width := w, height := h, depth := d, pitch, slice := pitch * h }
-    base := base + (pitch * h * d * max 1 t.layers).toUInt64
-  return lv
+    base := base + (pitch * h * d * held).toUInt64
+  -- A view of some layers: its first layer's place in the level.
+  return { lv with base := lv.base + (t.firstLayer * (if t.dims == 1 then lv.pitch else lv.slice)).toUInt64,
+                   firstLayer := 0, levelLayers := 0 }
 
 /-- A binary32 value in 1/256 units, truncated toward zero (non-finite values read as 0). -/
 def fixed8 (bits : UInt32) : Int :=
@@ -660,8 +668,9 @@ def combine (t : Texture) (fp : List (Option Texel × Nat)) (resp : Array UInt32
         | [(some _, _)] =>
           let v := channel t (texel 0) c
           if w == 16 then (cvt Format.f16 Format.f32 .rn {} v).toUInt32 else v.toUInt32
-        -- A border texel reads the border colour as given.
-        | _ => t.border[c]?.getD 0
+        -- A border texel reads the border colour as given; no texel (weight 0) reads zero.
+        | [(none, w)] => if w == 0 then 0 else t.border[c]?.getD 0
+        | _ => 0
       else
         -- Σ weight_k · v_k over a common denominator.
         let terms := fp.zipIdx.filterMap fun ((a, wt), k) =>

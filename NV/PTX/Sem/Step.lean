@@ -1315,7 +1315,7 @@ def texFetch : X (Effect Thread) := do
       if cty == .s32 then do
         let k := toInt true 32 (← t.read e lodArg .s32)
         if k < 0 then throw "an integer fetch from a negative mipmap level (not modelled)"
-        if k ≥ tx.levels then pure [(none, 256)]
+        if k ≥ tx.levels then pure [(none, 0)]
         else pure (NV.Tex.footprint (pick (tx.level k.toNat)) coords offs)
       else do
         let lod ← t.read e lodArg .f32

@@ -380,6 +380,8 @@ private def retStage (m : L2Mem) (t id : Nat) : L2Mem := Id.run do
     let (_, l, m') := m.take .farIn t bytes
     m := m'
     last := l
+  -- When the line reaches its copy slice: before the GPC link, which is the reader's own.
+  let atCopy := last + c.back[if y.crosses then 1 else 0]! - c.back[0]!
   -- Data back to an SM passes its GPC's link, which the GPC's SMs share.
   if bytes > 0 && c.gpcLink.units > 0 then
     if let some g := c.gpcOf[y.sm]? then
@@ -395,7 +397,7 @@ private def retStage (m : L2Mem) (t id : Nat) : L2Mem := Id.run do
       if let some (coming, leaders, waiting) := m.copyFill.get? (cs, x.line) then
         m := { m with copyFill := if leaders ≤ 1 then m.copyFill.erase (cs, x.line)
                                   else m.copyFill.insert (cs, x.line) (coming, leaders - 1, #[]) }
-        for w in waiting do m := m.push (answer - c.back[0]!) (.slice w)
+        for w in waiting do m := m.push atCopy (.slice w)
   return m.send answer y.sm (.answer x.txn y.resp)
 
 private def step (m : L2Mem) (t : Nat) : L2Ev → Except String L2Mem

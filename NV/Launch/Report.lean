@@ -32,7 +32,8 @@ def report (i : Nat) (name : String) (c : Counters) : String := Id.run do
     s!"  DRAM          {m.dramReadBytes} bytes read, {m.dramWriteBytes} written, {m.dramTurns} turns\n" ++
     s!"  shared        {m.sharedWavefronts} wavefronts, {m.sharedBankConflicts} bank conflicts\n" ++
     s!"  stalls        " ++ (if stalls == 0 then "none" else
-      ", ".intercalate (named.map fun (n, v) => s!"{n} {pct v stalls}").toList) ++ "\n"
+      ", ".intercalate (named.map fun (n, v) => s!"{n} {pct v stalls}").toList) ++ "\n" ++
+    String.join (c.unqualified.map fun why => s!"  unqualified   {why}\n")
 
 /-- The busiest sub-partition pipe, named, and its cycles. -/
 def pipeRow (c : Counters) : String × Nat :=

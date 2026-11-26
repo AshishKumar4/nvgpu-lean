@@ -93,8 +93,8 @@ struct CUevent_st {
   uint64_t recorded, done;
   uint64_t *ahead;
   size_t nahead, aheadCap;
-  uint64_t cycles;          // the device's cycles when recording `cyclesOf` ran
-  uint64_t cyclesOf;
+  uint64_t cycles;          // the device's cycles when recording `cyclesOf` ran, and its clock
+  uint64_t cyclesOf, mhz;
   unsigned flags;
   int refs;                 // the handle and every pending recording or wait (atomic)
   // Recorded in a stream capture: the capture's graph and the nodes the recording followed.
@@ -145,11 +145,12 @@ static int eventDone(CUevent e, uint64_t seq) {
     if (e->ahead[i] == seq) return 1;
   return 0;
 }
-static void eventMark(CUevent e, uint64_t seq, uint64_t cycles) {
+static void eventMark(CUevent e, uint64_t seq, uint64_t cycles, uint64_t mhz) {
   if (eventDone(e, seq)) return;
   if (seq >= e->cyclesOf) {
     e->cycles = cycles;
     e->cyclesOf = seq;
+    e->mhz = mhz;
   }
   if (e->nahead == e->aheadCap)
     e->ahead = realloc(e->ahead, sizeof *e->ahead * (e->aheadCap = e->aheadCap ? 2 * e->aheadCap : 4));
@@ -363,8 +364,10 @@ static int valueMet(uint64_t v, uint64_t want, unsigned flags, int is64) {
 }
 
 // One stream memory operation: a write, or a wait until the word meets the condition (re-read
-// whenever work finishes); flushes and barriers have nothing to do, every write being visible at
-// once.
+// whenever work finishes, and of memory the host maps, managed or mapped page-locked, every
+// millisecond too: a host thread's store meets it without any work, and the host's bytes are the
+// word's newest between launches); flushes and barriers have nothing to do, every write being
+// visible at once.
 static CUresult runMemOp(const CUstreamBatchMemOpParams *p) {
   switch (p->operation) {
     case CU_STREAM_MEM_OP_WRITE_VALUE_32:
@@ -377,16 +380,32 @@ static CUresult runMemOp(const CUstreamBatchMemOpParams *p) {
     case CU_STREAM_MEM_OP_WAIT_VALUE_64: {
       const int is64 = p->operation == CU_STREAM_MEM_OP_WAIT_VALUE_64;
       const uint64_t want = is64 ? p->waitValue.value64 : p->waitValue.value;
+      const size_t n = is64 ? 8 : 4;
+      pthread_mutex_lock(&lock);
+      const uint8_t *host = managedHost(p->waitValue.address, n);
+      pthread_mutex_unlock(&lock);
       for (;;) {
         pthread_mutex_lock(&workLock);
         uint64_t seen = epoch;
         pthread_mutex_unlock(&workLock);
         uint64_t v = 0;
-        CUresult r = anyRead(&v, p->waitValue.address, is64 ? 8 : 4);
-        if (r != CUDA_SUCCESS) return r;
+        if (host) {
+          __atomic_thread_fence(__ATOMIC_ACQUIRE);
+          memcpy(&v, host, n);
+        } else {
+          CUresult r = anyRead(&v, p->waitValue.address, n);
+          if (r != CUDA_SUCCESS) return r;
+        }
         if (valueMet(v, want, p->waitValue.flags, is64)) return CUDA_SUCCESS;
         pthread_mutex_lock(&workLock);
-        while (epoch == seen && !sticky) pthread_cond_wait(&workCv, &workLock);
+        if (host) {
+          struct timespec until;
+          clock_gettime(CLOCK_REALTIME, &until);
+          until.tv_nsec += 1000000;
+          if (until.tv_nsec >= 1000000000) { until.tv_sec++; until.tv_nsec -= 1000000000; }
+          if (epoch == seen && !sticky) pthread_cond_timedwait(&workCv, &workLock, &until);
+        } else
+          while (epoch == seen && !sticky) pthread_cond_wait(&workCv, &workLock);
         CUresult failed = sticky;
         pthread_mutex_unlock(&workLock);
         if (failed) return failed;
@@ -404,9 +423,9 @@ static CUresult runOp(Op *o) {
     case OP_HOST: o->fn(o->user); return CUDA_SUCCESS;
     case OP_CALLBACK: o->cb(o->stream, sticky, o->user); return CUDA_SUCCESS;
     case OP_RECORD: {
-      uint64_t c = devCycles();
+      uint64_t c = devCycles(), mhz = devMhz();
       pthread_mutex_lock(&workLock);
-      eventMark(o->ev, o->seq, c);
+      eventMark(o->ev, o->seq, c, mhz);
       pthread_mutex_unlock(&workLock);
       return CUDA_SUCCESS;
     }
@@ -771,17 +790,18 @@ CUresult CUDAAPI cuEventQuery(CUevent e) {
   pthread_mutex_unlock(&workLock);
   return r;
 }
-// Simulated time between the events: cycles at the part's clock (timed runs; functional runs
-// count issue steps, not time).
+// Simulated time between the events: cycles at the clock the recording device ran at (timed runs;
+// functional runs count issue steps, not time).
 CUresult CUDAAPI cuEventElapsedTime(float *ms, CUevent a, CUevent b) {
   if ((a->flags | b->flags) & CU_EVENT_DISABLE_TIMING) return CUDA_ERROR_INVALID_HANDLE;
   pthread_mutex_lock(&workLock);
   int ready = a->recorded && b->recorded && eventDone(a, a->recorded) && eventDone(b, b->recorded) &&
               a->cyclesOf == a->recorded && b->cyclesOf == b->recorded;
-  uint64_t ca = a->cycles, cb = b->cycles;
+  uint64_t ca = a->cycles, cb = b->cycles, mhz = b->mhz;
   pthread_mutex_unlock(&workLock);
   if (!ready) return CUDA_ERROR_NOT_READY;
-  *ms = (float)(((double)cb - (double)ca) / (G.part->clockMHz * 1000.0));
+  if (!mhz) return CUDA_ERROR_INVALID_VALUE;
+  *ms = (float)(((double)cb - (double)ca) / (mhz * 1000.0));
   return CUDA_SUCCESS;
 }
 

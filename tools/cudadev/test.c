@@ -40,6 +40,14 @@ static void check(const char *what, int ok) {
 }
 
 static unsigned hostCalls;
+
+// After 20 ms, a store of 5 to the word `p` points at (a host thread meeting a stream's wait).
+static void *storeLater(void *p) {
+  usleep(20000);
+  __atomic_store_n((uint32_t *)p, 5u, __ATOMIC_RELEASE);
+  return NULL;
+}
+
 static void CUDA_CB onHost(void *p) { (void)p; __atomic_add_fetch(&hostCalls, 1, __ATOMIC_SEQ_CST); }
 
 static unsigned readCounter(CUdeviceptr c) {
@@ -1259,6 +1267,8 @@ static void textureChecks(void) {
     mt.mipmapFilterMode = CU_TR_FILTER_MODE_LINEAR;
     mt.mipmapLevelBias = 0.0f;
     mt.maxMipmapLevelClamp = 6.0f;
+    // A border colour, which clamped addressing never reads: the level past the last reads zero.
+    mt.borderColor[0] = 7.0f;
     CUtexObject itex;
     CK(cuTexObjectCreate(&itex, &mr, &mt, NULL));
     CUmodule im;
@@ -1277,6 +1287,7 @@ static void textureChecks(void) {
         if (iout[c][e] != iwant[c][e]) printf("mip int/gather case %d.%d: %g, a GH200 %g\n", c, e, iout[c][e], iwant[c][e]);
       }
     check("a mipmapped array's integer fetch reads the level it names, and a gather level 0", iok);
+    mt.borderColor[0] = 0.0f;
     CK(cuTexObjectDestroy(itex));
     CK(cuModuleUnload(im));
     CK(cuMemFree(iinD));
@@ -1431,6 +1442,36 @@ static void textureChecks(void) {
         if (got[e] != layWant[c][e]) printf("%s case %d: %g, a GH200 %g\n", c ? "cubemap" : "layered", e, got[e], layWant[c][e]);
       }
       CK(cuTexObjectDestroy(lyt));
+      if (!c) {
+        // A view of layers 1 and 2: its layer 0 at level 1 is the array's layer 1 there, its
+        // layer 1 at level 2 the array's layer 2 (each level holds all three layers).
+        CUDA_RESOURCE_VIEW_DESC lv;
+        memset(&lv, 0, sizeof lv);
+        lv.format = CU_RES_VIEW_FORMAT_FLOAT_1X32;
+        lv.width = lv.height = 32;
+        lv.depth = 3;
+        lv.lastMipmapLevel = 5;
+        lv.firstLayer = 1;
+        lv.lastLayer = 2;
+        mt.mipmapFilterMode = CU_TR_FILTER_MODE_POINT;
+        CK(cuTexObjectCreate(&lyt, &mr, &mt, &lv));
+        uint32_t vin[2][4];
+        float vx[2] = {0.1f, 0.8f}, vlod[2] = {1.0f, 2.0f};
+        for (int e = 0; e < 2; e++) {
+          vin[e][0] = e;
+          memcpy(&vin[e][1], &vx[e], 4);
+          float y = 0.9f;
+          memcpy(&vin[e][2], &y, 4);
+          memcpy(&vin[e][3], &vlod[e], 4);
+        }
+        CK(cuMemcpyHtoD(lyin, vin, sizeof vin));
+        CK(cuLaunchKernel(lyk, 1, 1, 1, 2, 1, 1, 0, NULL, lyargs, NULL));
+        CK(cuCtxSynchronize());
+        CK(cuMemcpyDtoH(got, lyout, 8));
+        lyok = lyok && got[0] == 1157.0f && got[1] == 2234.0f;
+        if (got[0] != 1157.0f || got[1] != 2234.0f) printf("layer view: %g %g, 1157 2234\n", got[0], got[1]);
+        CK(cuTexObjectDestroy(lyt));
+      }
       CK(cuMipmappedArrayDestroy(lay));
     }
     check("layered and cubemap mipmapped arrays read the level and layer or face a fetch names", lyok);
@@ -1872,6 +1913,23 @@ int main(int argc, char **argv) {
     CK(cuStreamWriteValue32(w, flag, 2, 0));
     CK(cuCtxSynchronize());
     check("a destroyed stream's work is synchronized", hostCalls == calls + 1);
+    // A wait on mapped page-locked memory (after a small allocation, so the mapping does not start
+    // on a page of its own), which only a host thread's store meets.
+    CUdeviceptr pad;
+    CK(cuMemAlloc(&pad, 4));
+    volatile uint32_t *hflag;
+    CK(cuMemHostAlloc((void **)&hflag, 4, CU_MEMHOSTALLOC_DEVICEMAP));
+    *hflag = 0;
+    CUdeviceptr dflag;
+    CK(cuMemHostGetDevicePointer(&dflag, (void *)hflag, 0));
+    CK(cuStreamWaitValue32(c, dflag, 5, CU_STREAM_WAIT_VALUE_EQ));
+    pthread_t storer;
+    pthread_create(&storer, NULL, storeLater, (void *)hflag);
+    CK(cuStreamSynchronize(c));
+    pthread_join(storer, NULL);
+    check("a wait on host-mapped memory passes on a host thread's store", *hflag == 5);
+    CK(cuMemFreeHost((void *)hflag));
+    CK(cuMemFree(pad));
     CK(cuStreamDestroy(b));
     CK(cuStreamDestroy(c));
     CK(cuStreamDestroy(w));

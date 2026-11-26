@@ -1416,7 +1416,7 @@ def decodeTex (d : Dec) : Option Run :=
             if ints && op == "TLD" then
               let k := (x.v.getR lr l).toInt32.toInt
               if k < 0 then throw "an integer fetch from a negative mipmap level (not modelled)"
-              if k ≥ tx.levels then return [(none, 256)]
+              if k ≥ tx.levels then return [(none, 0)]
               return NV.Tex.footprint (pick (tx.level k.toNat)) cs offs
             if op != "TEX" then throw s!"{op} from a mipmapped texture (not modelled)"
             return tx.mipFootprint (tx.lodOf (x.v.getR lr l)) fun t s => NV.Tex.footprint (pick t) cs offs s

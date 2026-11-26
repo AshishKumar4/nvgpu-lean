@@ -31,10 +31,11 @@ static Managed *managedAt(CUdeviceptr a, size_t n) {
   return NULL;
 }
 
-// Memory both sides map at one address, `bytes` of it at *p (`host`: page-locked host memory).
+// Memory both sides map at one address, `bytes` of it at *p (`host`: page-locked host memory),
+// page-aligned as the host's mapping must be.
 static CUresult mapShared(CUdeviceptr *p, size_t bytes, int host) {
   size_t size = (bytes + MANAGED_PAGE - 1) / MANAGED_PAGE * MANAGED_PAGE;
-  CUresult r = allocRange(p, size, ALLOC_ALIGN, 0);
+  CUresult r = allocRange(p, size, MANAGED_PAGE, 0);
   if (r != CUDA_SUCCESS) return r;
   void *h = mmap((void *)*p, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
   Managed *m = h == (void *)*p ? calloc(1, sizeof *m) : NULL;
@@ -43,7 +44,7 @@ static CUresult mapShared(CUdeviceptr *p, size_t bytes, int host) {
     if (h != MAP_FAILED) munmap(h, size);
     free(m);
     freeRange(*p, 0);
-    note("the host cannot map managed memory at %#llx", (unsigned long long)*p);
+    note("the host cannot map managed memory at %#llx (%s)", (unsigned long long)*p, strerror(errno));
     return CUDA_ERROR_OUT_OF_MEMORY;
   }
   // Both sides start zero: the device's memory is set, the mapping and shadow are fresh.
