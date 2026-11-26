@@ -704,11 +704,15 @@ private def readiness (k : Kernel) (timings : Array (Option OpTiming))
       if pend.size > n.toNat && pend[pend.size - 1 - n.toNat]! > wait then
         wait := pend[pend.size - 1 - n.toNat]!; why := counterWhy b
     | _, _ => pure ()
-  -- `WARPGROUP.DEPBAR.LE gsb0, n`: wait until at most n of the warp's wgmma groups are pending.
+  -- `WARPGROUP.DEPBAR.LE gsb0, n`: wait until at most n of the warp's wgmma groups are pending;
+  -- waiting for all of them, the last group's completion reaches the wait
+  -- `TensorParams.wgmmaWaitCycles` after its last result.
   if ins.opcode == "WARPGROUP" && ins.hasMod "DEPBAR" then
     if let some (Operand.imm n) := ins.operands[1]? then
       -- A group whose completion is not known yet holds the warp until the async unit wakes it.
-      let pend := (AsyncUnit.wgmmaPending au si i t).map (·.getD pendingAt) |>.qsort (· < ·)
+      let drain := if n.toNat == 0 then p.tensor.wgmmaWaitCycles.value else 0
+      let pend := (AsyncUnit.wgmmaPending au si i (t - drain)).map (fun d => (d.map (· + drain)).getD pendingAt)
+        |>.qsort (· < ·)
       if pend.size > n.toNat && pend[pend.size - 1 - n.toNat]! > wait then
         wait := pend[pend.size - 1 - n.toNat]!; why := .shortScoreboard
   -- A barrier orders the warp's earlier memory accesses before the accesses other warps make after

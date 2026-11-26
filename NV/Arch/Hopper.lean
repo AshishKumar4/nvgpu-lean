@@ -663,6 +663,10 @@ def wgmmaQueueCycles : Fact Nat :=
   inferred 420 "meas-gh200" ""
     "" (some "GH200")
 
+def wgmmaWaitCycles : Fact Nat :=
+  inferred 38 "meas-gh200" ""
+    "" (some "GH200")
+
 def wgmmaPipeSharePermille : Fact Nat :=
   inferred 200 "meas-gh200" ""
     "" (some "GH200")

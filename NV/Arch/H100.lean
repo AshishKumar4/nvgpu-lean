@@ -64,7 +64,7 @@ def h100 : Params := {
       "" (some "H200") }
   tensor := {
     fmaPerCycle16, fmaPerCycle8, fmaPerCycleTF32, fmaPerCycleF64, wgmmaLatency, wgmmaLatencyRS, wgmmaOperandDataPermille, wgmmaIssueSharePermille, wgmmaPipeSharePermille, wgmmaQueueCycles,
-    mmaSyncLatency := onH200 mmaSyncLatency }
+    wgmmaWaitCycles, mmaSyncLatency := onH200 mmaSyncLatency }
   sync := {
     mbarrierLatency := onH200 mbarrierLatency
     clusterMbarrierLatency := onH200 clusterMbarrierLatency
