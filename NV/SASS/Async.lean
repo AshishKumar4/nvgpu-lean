@@ -290,10 +290,10 @@ def utma (k : Kernel) (env : Env) (w : View) (i : Instr) : Except String Op := d
     | "ADD" => some .add | "MIN" => some .min | "MAX" => some .max | "INC" => some .inc
     | "DEC" => some .dec | "AND" => some .and | "OR" => some .or | "XOR" => some .xor | _ => none
   if i.opcode == "UTMAREDG" && red.isNone then throw "no reduction operator"
-  -- `UTMALDG.nD.IM2COL [URa], [URb], URc`: the im2col offsets in `URc`, `W` first, in fields of
-  -- 16, 8 or 5 bits for rank 3, 4 or 5 (the widths of their ranges, PTX ISA §5.5.4).
+  -- `UTMALDG.nD.IM2COL [URa], [URb], URc`: the im2col offsets in `URc`'s low half, `W` first, in
+  -- fields of 16, 8 or 5 bits for rank 3, 4 or 5 (the widths of their ranges, PTX ISA §5.5.4); a
+  -- multicast copy's CTA mask in its high half, as without im2col (tests/diff/im2col.ptx).
   let im2col := i.hasMod "IM2COL"
-  if im2col && i.hasMod "MULTICAST" then throw "multicast im2col copies are not modelled yet"
   let offsets : Array Nat := if !im2col then #[] else
     match i.operands[2]?.bind urIdx with
     | some r =>

@@ -2,30 +2,38 @@
 64-bit ELF: type=ET_EXEC, ABI=8, sm=100a, toolkit=13.0, flags=0x6006402
 Sections:
 Index Offset   Size ES Align                      Type    Flags Link     Info Name
-    1     40    1de  0  1                       STRTAB        0    0        0 .shstrtab
-    2    242    17c  0  1                       STRTAB        0    0        0 .strtab
-    3    3c0    120 18  8                       SYMTAB        0    2        c .symtab
-    4    4e0     68  0  1                     PROGBITS        0    0        0 .debug_frame
-    5    548     a8  0  4                         NOTE  2000000    0        0 .note.nv.tkinfo
-    6    5f0     20  0  4                         NOTE  1000040    5        8 .note.nv.cuinfo
-    7    610     24  0  4                    CUDA_INFO        0    3        0 .nv.info
-    8    634     24  0  4             CUDA_COMPAT_INFO        0    0        0 .nv.compat
-    9    658     c8  0  4                    CUDA_INFO       40    3        d .nv.info.im2col
-    a    720     20  8  4               CUDA_CALLGRAPH        0    3        0 .nv.callgraph
-    b    740      0 18  8                         RELA       40    3        d .rela.text.im2col
-    c    740     18 18  8                         RELA       40    3        4 .rela.debug_frame
-    d    780    600  0 80                     PROGBITS        6    3        a .text.im2col
-    e    d80    608  0 80                       NOBITS       43    0        d .nv.shared.im2col
-    f    d80     40  0  1                       NOBITS        3    0        0 .nv.shared.reserved.0
-   10    d80    4c0  0  4                     PROGBITS       42    0        d .nv.constant0.im2col
-   11   1240    272  0 10                 CUDA_CAPMERC 10000000   18        a .nv.capmerc.text.im2col
-   12   14b2     70  0  1                     PROGBITS 10000000    0        0 .nv.merc.debug_frame
-   13   1524     24  0  4                    CUDA_INFO 10000000   18        0 .nv.merc.nv.info
-   14   1548     e8  0  4                    CUDA_INFO 10000040   18       11 .nv.merc.nv.info.im2col
-   15   1630     18 18  8                         RELA 10000040   18       11 .nv.merc.rela.text.im2col
-   16   1648     18 18  8                         RELA 10000040   18       12 .nv.merc.rela.debug_frame
-   17   1660      0  0  1         CUDA_RESERVED_SHARED 10000003    0        0 .nv.merc.nv.shared.reserved.0
-   18   1660    108 18  8                       SYMTAB 10000000    2        a .nv.merc.symtab
+    1     40    2a1  0  1                       STRTAB        0    0        0 .shstrtab
+    2    305    1f8  0  1                       STRTAB        0    0        0 .strtab
+    3    500    180 18  8                       SYMTAB        0    2       10 .symtab
+    4    680     d0  0  1                     PROGBITS        0    0        0 .debug_frame
+    5    750     a8  0  4                         NOTE  2000000    0        0 .note.nv.tkinfo
+    6    7f8     20  0  4                         NOTE  1000040    5        8 .note.nv.cuinfo
+    7    818     48  0  4                    CUDA_INFO        0    3        0 .nv.info
+    8    860     24  0  4             CUDA_COMPAT_INFO        0    0        0 .nv.compat
+    9    884     d8  0  4                    CUDA_INFO       40    3        f .nv.info.im2colmc
+    a    95c     c8  0  4                    CUDA_INFO       40    3       10 .nv.info.im2col
+    b    a24     20  8  4               CUDA_CALLGRAPH        0    3        0 .nv.callgraph
+    c    a48      0 18  8                         RELA       40    3        f .rela.text.im2colmc
+    d    a48      0 18  8                         RELA       40    3       10 .rela.text.im2col
+    e    a48     30 18  8                         RELA       40    3        4 .rela.debug_frame
+    f    a80    700  0 80                     PROGBITS        6    3        c .text.im2colmc
+   10   1180    600  0 80                     PROGBITS        6    3        d .text.im2col
+   11   1780    608  0 80                       NOBITS       43    0        f .nv.shared.im2colmc
+   12   1780     40  0  1                       NOBITS        3    0        0 .nv.shared.reserved.0
+   13   1780    608  0 80                       NOBITS       43    0       10 .nv.shared.im2col
+   14   1780    4c0  0  4                     PROGBITS       42    0        f .nv.constant0.im2colmc
+   15   1c40    4c0  0  4                     PROGBITS       42    0       10 .nv.constant0.im2col
+   16   2100    272  0 10                 CUDA_CAPMERC 10000000   20        c .nv.capmerc.text.im2colmc
+   17   2380    272  0 10                 CUDA_CAPMERC 10000000   20        d .nv.capmerc.text.im2col
+   18   25f2     e0  0  1                     PROGBITS 10000000    0        0 .nv.merc.debug_frame
+   19   26d4     48  0  4                    CUDA_INFO 10000000   20        0 .nv.merc.nv.info
+   1a   271c     f8  0  4                    CUDA_INFO 10000040   20       16 .nv.merc.nv.info.im2colmc
+   1b   2814     e8  0  4                    CUDA_INFO 10000040   20       17 .nv.merc.nv.info.im2col
+   1c   2900     18 18  8                         RELA 10000040   20       16 .nv.merc.rela.text.im2colmc
+   1d   2918     18 18  8                         RELA 10000040   20       17 .nv.merc.rela.text.im2col
+   1e   2930     30 18  8                         RELA 10000040   20       18 .nv.merc.rela.debug_frame
+   1f   2960      0  0  1         CUDA_RESERVED_SHARED 10000003    0        0 .nv.merc.nv.shared.reserved.0
+   20   2960    150 18  8                       SYMTAB 10000000    2        c .nv.merc.symtab
 
 .section .strtab
 
@@ -36,23 +44,111 @@ Index Offset   Size ES Align                      Type    Flags Link     Info Na
    0               0               0        0        0      0     (null)
  0x1               0               0      0x3        0    0x5     .note.nv.tkinfo
  0x2               0               0      0x3        0    0x6     .note.nv.cuinfo
- 0x3               0               0      0x3        0    0xd     .text.im2col
- 0x4               0               0      0x3        0    0xe     .nv.shared.im2col
+ 0x3               0               0      0x3        0    0xf     .text.im2colmc
+ 0x4               0               0      0x3        0   0x11     .nv.shared.im2colmc
  0x5            0x40             0x4     0x21        0      0     .nv.reservedSmem.offset0
- 0x6            0x40               0     0x20     0xa0    0xf     __nv_reservedSMEM_offset_0_alias
+ 0x6            0x40               0     0x20     0xa0   0x12     __nv_reservedSMEM_offset_0_alias
  0x7           0x400             0x4     0x21        0      0     .nv.reservedSmem.cap
- 0x8               0               0      0x3        0    0x4     .debug_frame
- 0x9               0               0      0x3        0    0xa     .nv.callgraph
- 0xa               0           0x600     0x12     0x10    0xd     im2col
- 0xb               0               0      0x3        0   0x10     .nv.constant0.im2col
+ 0x8               0               0      0x3        0   0x10     .text.im2col
+ 0x9               0               0      0x3        0   0x13     .nv.shared.im2col
+ 0xa               0               0      0x3        0    0x4     .debug_frame
+ 0xb               0               0      0x3        0    0xb     .nv.callgraph
+ 0xc               0           0x700     0x12     0x10    0xf     im2colmc
+ 0xd               0           0x600     0x12     0x10   0x10     im2col
+ 0xe               0               0      0x3        0   0x14     .nv.constant0.im2colmc
+ 0xf               0               0      0x3        0   0x15     .nv.constant0.im2col
+
+
+.nv.shared.im2colmc
+   No data to be dumped. 
+
+
+.nv.shared.reserved.0
+   No data to be dumped. 
 
 
 .nv.shared.im2col
    No data to be dumped. 
 
 
-.nv.shared.reserved.0
-   No data to be dumped. 
+.nv.constant0.im2colmc
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+0x00000000 0x00000000 0x00000000 0x00000000
+
 
 
 .nv.constant0.im2col
@@ -159,15 +255,27 @@ Entry: 1
 	<0x1>
 	Attribute:	EIATTR_REGCOUNT
 	Format:	EIFMT_SVAL
-	Value:	function: im2col(0xa)	register count: 22
+	Value:	function: im2col(0xd)	register count: 22
 	<0x2>
 	Attribute:	EIATTR_FRAME_SIZE
 	Format:	EIFMT_SVAL
-	Value:	function: im2col(0xa)	frame size: 0x0
+	Value:	function: im2col(0xd)	frame size: 0x0
 	<0x3>
+	Attribute:	EIATTR_REGCOUNT
+	Format:	EIFMT_SVAL
+	Value:	function: im2colmc(0xc)	register count: 14
+	<0x4>
+	Attribute:	EIATTR_FRAME_SIZE
+	Format:	EIFMT_SVAL
+	Value:	function: im2colmc(0xc)	frame size: 0x0
+	<0x5>
 	Attribute:	EIATTR_MIN_STACK_SIZE
 	Format:	EIFMT_SVAL
-	Value:	function: im2col(0xa)	min stack size: 0x0
+	Value:	function: im2colmc(0xc)	min stack size: 0x0
+	<0x6>
+	Attribute:	EIATTR_MIN_STACK_SIZE
+	Format:	EIFMT_SVAL
+	Value:	function: im2col(0xd)	min stack size: 0x0
 
 
 .nv.compat
@@ -199,6 +307,92 @@ Entry: 1
 	Attribute:	EICOMPAT_ATTR_CAN_FASTPATH_FINALIZE
 	Format:	EIFMT_SVAL
 	Value:	0x9 0x0 
+
+
+.nv.info.im2colmc
+	<0x1>
+	Attribute:	EIATTR_CUDA_API_VERSION
+	Format:	EIFMT_SVAL
+	Value:	0x82 
+	<0x2>
+	Attribute:	EIATTR_KPARAM_INFO
+	Format:	EIFMT_SVAL
+	Value:	Index : 0x0	Ordinal : 0x3	Offset  : 0xc0	Size    : 0x80
+		Pointee's logAlignment : 0x0	Space : 0x0	cbank : 0x1f	Parameter Space : CBANK	
+	<0x3>
+	Attribute:	EIATTR_KPARAM_INFO
+	Format:	EIFMT_SVAL
+	Value:	Index : 0x0	Ordinal : 0x2	Offset  : 0x40	Size    : 0x80
+		Pointee's logAlignment : 0x0	Space : 0x0	cbank : 0x1f	Parameter Space : CBANK	
+	<0x4>
+	Attribute:	EIATTR_KPARAM_INFO
+	Format:	EIFMT_SVAL
+	Value:	Index : 0x0	Ordinal : 0x1	Offset  : 0x8	Size    : 0x8
+		Pointee's logAlignment : 0x0	Space : 0x0	cbank : 0x1f	Parameter Space : CBANK	
+	<0x5>
+	Attribute:	EIATTR_KPARAM_INFO
+	Format:	EIFMT_SVAL
+	Value:	Index : 0x0	Ordinal : 0x0	Offset  : 0x0	Size    : 0x8
+		Pointee's logAlignment : 0x0	Space : 0x0	cbank : 0x1f	Parameter Space : CBANK	
+	<0x6>
+	Attribute:	EIATTR_SPARSE_MMA_MASK
+	Format:	EIFMT_HVAL
+	Value:	0x0
+	<0x7>
+	Attribute:	EIATTR_MAXREG_COUNT
+	Format:	EIFMT_HVAL
+	Value:	0xff
+	<0x8>
+	Attribute:	EIATTR_NUM_BARRIERS
+	Format:	EIFMT_BVAL
+	Value:	0x1
+	<0x9>
+	Attribute:	EIATTR_MERCURY_ISA_VERSION
+	Format:	EIFMT_HVAL
+	Value:	1.1
+	<0x10>
+	Attribute:	EIATTR_COOP_GROUP_MASK_REGIDS
+	Format:	EIFMT_SVAL
+	Value:	0xffffffff 0xffffffff 
+	<0x11>
+	Attribute:	EIATTR_COOP_GROUP_INSTR_OFFSETS
+	Format:	EIFMT_SVAL
+	Value:	0x1d0 0x550 
+	<0x12>
+	Attribute:	EIATTR_VRC_CTA_INIT_COUNT
+	Format:	EIFMT_BVAL
+	Value:	0x0
+	<0x13>
+	Attribute:	EIATTR_MBARRIER_INSTR_OFFSETS
+	Format:	EIFMT_SVAL
+	Value:	
+	0xf0	:	Instruction Kind : MBARRIER_INIT	(R255 + UR9)	Stride : MBARRIER_STRIDE_X4
+	0x3e0	:	Instruction Kind : MBARRIER_TRY_WAIT_PARITY	(R255 + UR9)	Stride : MBARRIER_STRIDE_X4
+	0x5c0	:	Instruction Kind : MBARRIER_TRY_WAIT_PARITY	(R255 + UR9)	Stride : MBARRIER_STRIDE_X4
+	<0x14>
+	Attribute:	EIATTR_NUM_MBARRIERS
+	Format:	EIFMT_HVAL
+	Value:	0x1
+	<0x15>
+	Attribute:	EIATTR_EXIT_INSTR_OFFSETS
+	Format:	EIFMT_SVAL
+	Value:	0x590 0x5b0 
+	<0x16>
+	Attribute:	EIATTR_CRS_STACK_SIZE
+	Format:	EIFMT_SVAL
+	Value:	0x0 
+	<0x17>
+	Attribute:	EIATTR_CBANK_PARAM_SIZE
+	Format:	EIFMT_HVAL
+	Value:	0x140
+	<0x18>
+	Attribute:	EIATTR_PARAM_CBANK
+	Format:	EIFMT_SVAL
+	Value:	0xe 0x1400380 
+	<0x19>
+	Attribute:	EIATTR_SW_WAR
+	Format:	EIFMT_SVAL
+	Value:	0x8 
 
 
 .nv.info.im2col
@@ -276,7 +470,7 @@ Entry: 1
 	<0x17>
 	Attribute:	EIATTR_PARAM_CBANK
 	Format:	EIFMT_SVAL
-	Value:	0xb 0x1400380 
+	Value:	0xf 0x1400380 
 	<0x18>
 	Attribute:	EIATTR_SW_WAR
 	Format:	EIFMT_SVAL
@@ -288,6 +482,125 @@ Entry: 1
  <0,-2>
  <0,-3>
  <0,-4>
+
+
+.text.im2colmc
+lmem=0	smem=1544
+0xff017b82 0x0000df00 0x00000800 0x000fe200
+0x00047919 0x00000000 0x00002100 0x000e2e00
+0x000679c3 0x00000000 0x00008800 0x000e6200
+0x00087882 0x00000400 0x00000000 0x000fe200
+0x00007945 0x000000e0 0x03800200 0x000fe200
+0x08097890 0x00000200 0x0fffe0ff 0x000fc800
+0x06097291 0x00000009 0x0f8ec0ff 0x002fe200
+0x0400720c 0x000000ff 0x03f05070 0x001fda00
+0x00240947 0x00000000 0x03800000 0x000fea00
+0x00047882 0x00000001 0x00000000 0x000fe200
+0xff007424 0x00000100 0x078e00ff 0x000fe200
+0x04047890 0x00100000 0x0fffe1ff 0x000fc800
+0x04057899 0x0000000b 0x080006ff 0x000fe400
+0x04047899 0x00000001 0x080006ff 0x000fe200
+0x000073c6 0x00000000 0x00000000 0x000e3600
+0x09ff75b2 0x00000004 0x08000100 0x00106400
+0xffff79a7 0x00000000 0x08000009 0x0021e200
+0x00007918 0x00000000 0x00000000 0x000fe200
+0x00007941 0x00000000 0x03800200 0x001fea00
+0xff0477ac 0x00006d80 0x08000800 0x000e2200
+0x00007918 0x00000000 0x00000000 0x000fe200
+0x0400788c 0x00000001 0x0bf02070 0x001fd200
+0x08187547 0x00000001 0x0b800000 0x000fea00
+0x00007992 0x00000000 0x00008000 0x000fc000
+0x00007992 0x00000000 0x0000a000 0x000fec00
+0x000079ab 0x00000000 0x00000000 0x000fc000
+0x000075ab 0x00000000 0x00000000 0x000ff000
+0x000079c7 0x00000000 0x08000000 0x000fe200
+0x00047947 0x00000000 0x03800000 0x000fea00
+0x00007918 0x00000000 0x00000000 0x000fe200
+0x080c7547 0x00000001 0x0b800000 0x000fea00
+0x00007dc7 0x00000000 0x08000000 0x000fe200
+0xff00798f 0x00000000 0x02000000 0x000fe200
+0x00047947 0x00000000 0x03800000 0x000fea00
+0x00007b1d 0x00000000 0x00010000 0x000fec00
+0xff007c0c 0x00000006 0x0c702070 0x000fe200
+0x06087291 0x00000008 0x0f8ec0ff 0x000fe200
+0x00007945 0x00000180 0x03800200 0x000fe200
+0xff027819 0x0000001f 0x000006ff 0x000fd400
+0x00548947 0x00000000 0x03800000 0x000fea00
+0xff007424 0x00000001 0x078e00ff 0x000fe200
+0xff0677ac 0x00006900 0x08000a00 0x000e2200
+0xff037424 0x00000002 0x078e00ff 0x000fe200
+0x0008781c 0x00000000 0x03f0f070 0x000fe200
+0xff057424 0x00000003 0x078e00ff 0x000fe200
+0x000a7c82 0x000000ff 0x08000000 0x000fe200
+0x000b7882 0x00000002 0x00000000 0x000fe200
+0x00007816 0x00000040 0x00000003 0x100fe200
+0x000c7882 0x00000001 0x00000000 0x000fe200
+0x05037816 0x00007610 0x00000003 0x000fe200
+0x000d7c82 0x000000ff 0x08000000 0x000fe200
+0x000472ca 0x00000000 0x000e0000 0x000fc400
+0x030572ca 0x00000000 0x000e0000 0x000fe200
+0x06067890 0x00000040 0x0ff3e0ff 0x001fc800
+0xff077290 0x00000007 0x08ffe4ff 0x000fd000
+0x04047896 0x00005410 0x08000005 0x000fd800
+0x00ff082f 0x00000000 0x03820000 0x000fe200
+0x060073b4 0x00000008 0x08058804 0x0001d800
+0x0080181c 0x00000000 0x00f0e170 0x000fe400
+0x0080781c 0x00000000 0x03f2e170 0x000fd600
+0x00ec0947 0xfffffffd 0x0393ffff 0x001fea00
+0x00007941 0x00000000 0x03800200 0x000fea00
+0xff0075a7 0x00000002 0x08001109 0x000e2400
+0xff00098f 0x00000000 0x02000000 0x001fe200
+0x00057919 0x00000000 0x00008800 0x000e2200
+0x04007c11 0x00000008 0x0f8e10ff 0x000fe200
+0x00648947 0x00000000 0x03800000 0x000fec00
+0x000b7984 0x00000000 0x00000800 0x000e6200
+0xff027b82 0x0000e000 0x00000a00 0x000ea200
+0xff0477ac 0x00006b00 0x08000a00 0x000e6200
+0x05057824 0x00000020 0x078e0204 0x001fe200
+0x00077984 0x00008000 0x00000800 0x000e2600
+0x05057824 0x00000002 0x078e00ff 0x000fc800
+0x05097836 0x00000001 0x00000000 0x040fe400
+0x05047825 0x00000004 0x078e0002 0x004fc800
+0x09027825 0x00000004 0x078e0002 0x000fe200
+0x04007986 0x0000000b 0x0c101904 0x0023e800
+0x02007986 0x00000007 0x0c101904 0x0013e200
+0x08187547 0x00000001 0x0b800000 0x000fea00
+0x00007992 0x00000000 0x00008000 0x000fc000
+0x00007992 0x00000000 0x0000a000 0x000fec00
+0x000079ab 0x00000000 0x00000000 0x000fc000
+0x000075ab 0x00000000 0x00000000 0x000ff000
+0x000079c7 0x00000000 0x08000000 0x000fe200
+0x00047947 0x00000000 0x03800000 0x000fea00
+0x00007918 0x00000000 0x00000000 0x000fe200
+0x080c7547 0x00000001 0x0b800000 0x000fea00
+0x00007dc7 0x00000000 0x08000000 0x000fe200
+0xff00798f 0x00000000 0x02000000 0x000fe200
+0x0000794d 0x00000000 0x03800000 0x000fea00
+0x00007b1d 0x00000000 0x00010000 0x000fec00
+0x0000794d 0x00000000 0x03800000 0x000fea00
+0xff0075a7 0x00000002 0x08001109 0x000e6400
+0xff00098f 0x00000000 0x02000000 0x002fe200
+0x00f48947 0xfffffffc 0x0383ffff 0x000fea00
+0x008c7947 0xfffffffc 0x0383ffff 0x000fea00
+0x00fc7947 0xfffffffc 0x0383ffff 0x000fc000
+0x00007918 0x00000000 0x00000000 0x000fc000
+0x00007918 0x00000000 0x00000000 0x000fc000
+0x00007918 0x00000000 0x00000000 0x000fc000
+0x00007918 0x00000000 0x00000000 0x000fc000
+0x00007918 0x00000000 0x00000000 0x000fc000
+0x00007918 0x00000000 0x00000000 0x000fc000
+0x00007918 0x00000000 0x00000000 0x000fc000
+0x00007918 0x00000000 0x00000000 0x000fc000
+0x00007918 0x00000000 0x00000000 0x000fc000
+0x00007918 0x00000000 0x00000000 0x000fc000
+0x00007918 0x00000000 0x00000000 0x000fc000
+0x00007918 0x00000000 0x00000000 0x000fc000
+0x00007918 0x00000000 0x00000000 0x000fc000
+0x00007918 0x00000000 0x00000000 0x000fc000
+0x00007918 0x00000000 0x00000000 0x000fc000
+
+
+.section .rela.text.im2colmc	RELA
 
 
 .text.im2col
@@ -393,7 +706,7 @@ lmem=0	smem=1544
 .section .rela.text.im2col	RELA
 
 .section .debug_frame
-decodeDebugFrame, frameBuf 0xffffffff, total_length 104
+decodeDebugFrame, frameBuf 0xffffffff, total_length 208
 CIE length 36, cie_id -1
 version 3
 augmentation slen 1
@@ -419,6 +732,41 @@ data_align_factor slen 1
   length:                 44
   CIE_pointer:            0
   initial_location:       0x0
+  address_range:          0x700
+  function:               im2colmc
+  instructions: 20 bytes
+  DW_CFA_advance_loc4 delta 36
+  DW_CFA_def_cfa register R1, offset 0
+  DW_CFA_advance_loc4 delta 336
+  DW_CFA_nop
+  DW_CFA_nop
+  DW_CFA_nop
+  DW_CFA_nop
+CIE length 36, cie_id -1
+version 3
+augmentation slen 1
+augmentation 
+code_align_factor slen 1
+data_align_factor slen 1
+ Debug Frame Common Information Entry
+  length:                 36
+  CIE_id :                -1
+  version:                3
+  augmentation:           
+  code align factor:      4
+  data align factor:      -4
+  return address register 0xffffffff
+  initial instructions: 19 bytes, ptr = 0x8080810c, frameBuf = 0xffffffff
+  DW_CFA_def_cfa register R1, offset 0
+  DW_CFA_same_value R255
+  DW_CFA_same_value R1
+  DW_CFA_nop
+  DW_CFA_nop
+  DW_CFA_nop
+ Debug Frame Description Entry
+  length:                 44
+  CIE_pointer:            104
+  initial_location:       0x0
   address_range:          0x600
   function:               im2col
   instructions: 20 bytes
@@ -431,4 +779,5 @@ data_align_factor slen 1
   DW_CFA_nop
 
 .section .rela.debug_frame	RELA
-0x44    im2col    R_CUDA_64    0x0
+0xac    im2col    R_CUDA_64    0x0
+0x44    im2colmc    R_CUDA_64    0x0

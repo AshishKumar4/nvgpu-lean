@@ -176,6 +176,23 @@ def cases : List Case := [
     forms := ["UTMALDG.4D.IM2COL", "UTMALDG.3D.IM2COL"], formTargets := ["sm_90a"],
     skipOn := [("sm_80", "no TMA before sm_90")] },
   -- The tensor is buffer 0 (1 KB) at the base; buffer 1 the box's values.
+  { file := "tests/diff/im2col.ptx", kernel := "im2colmc", grid := 2, cluster := 2, threads := 32, per := 2,
+    bufs := [Array.replicate 128 0, words 29 416],
+    extra := [(NV.Async.TensorMap.encode
+        { dtype := .f32, rank := 4, globalAddress := Tests.base + 512,
+          globalDim := #v[4, 6, 5, 2, 1], globalStrides := #v[16, 96, 480, 0],
+          boxDim := #v[1, 1, 1, 1, 1], elementStrides := #v[1, 1, 1, 1, 1],
+          im2col := some { lower := #v[-1, -1, 0], upper := #v[-1, -1, 0],
+                           channelsPerPixel := 4, pixelsPerColumn := 16 } }).data.toList,
+      (NV.Async.TensorMap.encode
+        { dtype := .f32, rank := 3, globalAddress := Tests.base + 512 + 1024,
+          globalDim := #v[4, 20, 2, 1, 1], globalStrides := #v[16, 320, 0, 0],
+          boxDim := #v[1, 1, 1, 1, 1], elementStrides := #v[1, 2, 1, 1, 1],
+          im2col := some { lower := #v[-2, 0, 0], upper := #v[1, 0, 0],
+                           channelsPerPixel := 4, pixelsPerColumn := 16 } }).data.toList],
+    forms := ["UTMALDG.4D.IM2COL.MULTICAST"], formTargets := ["sm_90a"],
+    skipOn := [("sm_80", "no TMA before sm_90"), ("sm_120a", "no multicast TMA load in sm_120a SASS")] },
+  -- The tensor is buffer 0 (1 KB) at the base; buffer 1 the box's values.
   { file := "tests/diff/tmared.ptx", kernel := "tmared", threads := 32, per := 8,
     bufs := [smallFloats 256, smallFloats 128],
     extra := [(NV.Async.TensorMap.encode
