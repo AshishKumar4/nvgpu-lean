@@ -6,7 +6,8 @@ import NV.Arch.H200
 every thread stores `3 * tid + ctaid` at `out[ctaid * ntid + tid]`. Two CTAs of 100 threads, so
 the last warp of each is partial. Checks every output word and that the run takes time. Then the instruction caches across
 launches: a kernel run again after itself on the same machine (`runOn`) finds its code warm,
-after another kernel's code filled the caches.
+after another kernel's code filled the caches. Then the warp slots (`SR_VIRTID`) of four CTAs
+sharing one SM, as a GH200 places them.
 -/
 
 open NV NV.SASS NV.Core
@@ -30,6 +31,31 @@ def code : Array Instr := #[
 ]
 
 def base : UInt64 := 0x7f0000000000
+
+/-- Every thread stores its `SR_VIRTID` at `out[ctaid * ntid + tid]`. -/
+def slotCode : Array Instr := #[
+  { pc := 0x00, opcode := "S2R", operands := #[r 0, .name "SR_TID.X"], ctrl := ctrl 1 (some 0) },
+  { pc := 0x10, opcode := "S2R", operands := #[r 3, .name "SR_CTAID.X"], ctrl := ctrl 1 (some 1) },
+  { pc := 0x20, opcode := "S2R", operands := #[r 6, .name "SR_VIRTID"], ctrl := ctrl 1 (some 3) },
+  { pc := 0x30, opcode := "LDC", mods := #["64"], operands := #[r 4, .cbank 0 none 0x210],
+    ctrl := ctrl 1 (some 2) },
+  { pc := 0x40, opcode := "IMAD", operands := #[r 2, r 3, .cbank 0 none 0x0, r 0], ctrl := ctrl 1 none 0b11 },
+  { pc := 0x50, opcode := "IMAD", mods := #["WIDE"], operands := #[r 4, r 2, .imm 4, r 4],
+    ctrl := ctrl 4 none 0b100 },
+  { pc := 0x60, opcode := "STG", mods := #["E"],
+    operands := #[.mem (some ⟨.r, 4⟩) true none (some ⟨.ur, 4⟩) 0, r 6], ctrl := ctrl 1 none 0b1000 },
+  { pc := 0x70, opcode := "EXIT", ctrl := ctrl 5 }
+]
+
+/-- The slots of the warps of four CTAs of `w` warps on a one-SM H200, CTA by CTA. -/
+def slots (params : ByteArray) (w : Nat) : Except String (List (List Nat)) := do
+  let p := { NV.Arch.h200 with sms := { NV.Arch.h200.sms with value := 1 },
+                               gpcSMs := { NV.Arch.h200.gpcSMs with value := [1] } }
+  let res ← run p { kernel := { name := "slots", code := slotCode, regs := 8, paramBytes := 8 },
+                    grid := (4, 1, 1), block := (32 * w, 1, 1), params,
+                    global := Store.empty base (4 * 128 * w) }
+  let out := res.global.read base (4 * 128 * w)
+  return (List.range 4).map fun c => (List.range w).map fun i => (out[(c * w + i) * 32]! >>> 8).toNat
 
 /-- `kb` KB of straight-line independent IMADs, then EXIT, in module `module`. -/
 def straight (module : UInt64) (kb : Nat) : Kernel :=
@@ -86,4 +112,18 @@ def main : IO UInt32 := do
     IO.println s!"engine-smoke: 96 KB kernel after 256 KB of other code: {first} cycles, again {second}"
     if second > 3 * 6144 then
       IO.eprintln "engine-smoke: the kernel run again did not find its code warm"; return 1
-    return 0
+  -- Four CTAs on one SM, as a GH200 places them (%warpid): each after the slots of those before
+  -- it, rotated within each row of four (one slot per sub-partition) by the CTA's place when its
+  -- warps fill whole rows.
+  let want : List (Nat × List (List Nat)) := [
+    (4, [[0, 1, 2, 3], [5, 6, 7, 4], [10, 11, 8, 9], [15, 12, 13, 14]]),
+    (6, [[0, 1, 2, 3, 4, 5], [6, 7, 8, 9, 10, 11], [12, 13, 14, 15, 16, 17], [18, 19, 20, 21, 22, 23]]),
+    (8, [[0, 1, 2, 3, 4, 5, 6, 7], [9, 10, 11, 8, 13, 14, 15, 12], [18, 19, 16, 17, 22, 23, 20, 21],
+         [27, 24, 25, 26, 31, 28, 29, 30]])]
+  for (w, cs) in want do
+    match slots params w with
+    | .error e => IO.eprintln s!"engine-smoke: {e}"; return 1
+    | .ok got =>
+      if got != cs then
+        IO.eprintln s!"engine-smoke: CTAs of {w} warps took slots {got}, expected {cs}"; return 1
+  return 0
