@@ -352,7 +352,8 @@ def utma (k : Kernel) (env : Env) (w : View) (i : Instr) : Except String Op := d
                      build := fun r => (do mk (← mapOfResp r)).mapError (s!"{·} {at_}"),
                      group := if load then none else some .bulk }
 
-/-- `UBLKCP.S.G` (global to shared, mbarrier) and `UBLKCP.G.S` (shared to global, bulk group);
+/-- `UBLKCP.S.G` (global to shared, mbarrier; `.MULTICAST` to the cluster CTAs a mask names) and
+`UBLKCP.G.S` (shared to global, bulk group);
 `UBLKCP.G.S.DST_G_BYTE_MASK` (`.cp_mask`) packs the size in `URc`'s low half and the byte mask
 in its high half. -/
 def ublkcp (env : Env) (w : View) (i : Instr) : Except String Op := do
@@ -361,8 +362,11 @@ def ublkcp (env : Env) (w : View) (i : Instr) : Except String Op := do
   let some c := (i.operands[2]?.bind urIdx) | throw "operand 2"
   -- The size register counts 16-byte units (a 4096-byte copy is 0x100).
   let masked := i.hasMod "DST_G_BYTE_MASK"
+  -- `UBLKCP.S.G.MULTICAST` (`.multicast::cluster`): the CTA mask in `URc`'s high half, as with
+  -- `.DST_G_BYTE_MASK`'s byte mask.
+  let multicast := i.hasMod "MULTICAST"
   let units := (w.getUR c).toNat
-  let size := 16 * (if masked then units % 65536 else units)
+  let size := 16 * (if masked || multicast then units % 65536 else units)
   -- `UBLKCP.S.S [URa], [URb], URc` (`cp.async.bulk.shared::cluster.shared::cta`): into the cluster CTA's shared memory at `URa`, its mbarrier at `URa+1`.
   if i.mods.toList == ["S", "S"] then
     let dst := (w.getUR a).toUInt64
@@ -371,6 +375,10 @@ def ublkcp (env : Env) (w : View) (i : Instr) : Except String Op := do
   if i.mods[0]? == some "S" then
     let smem := (w.getUR a).toUInt64
     let ps ← bulkPieces (ur64 w b) (smem % (1 <<< 24)).toNat size
+    if multicast then
+      let m := units / 65536
+      return .copy (loadMulticast env ps smem (w.getUR (a + 1)).toUInt64 size
+        ((Array.range 16).filter fun k => (m >>> k) % 2 == 1))
     return .copy (loadOp env ps smem (w.getUR (a + 1)).toUInt64 size)
   else
     let smem := (w.getUR b).toUInt64

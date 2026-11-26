@@ -237,6 +237,10 @@ def cases : List Case := [
     forms := ["UTMASTG.2D.SCATTER4"], formTargets := ["sm_100a"],
     skipOn := [("sm_80", "no TMA before sm_90"), ("sm_90a", ".tile::scatter4 requires sm_100a"),
                ("sm_120a", ".tile::scatter4 requires sm_100a")] },
+  { file := "tests/diff/bulkmc.ptx", kernel := "bulkmc", grid := 2, cluster := 2, threads := 32, per := 16,
+    bufs := [Array.replicate 1024 0, words 19 512], forms := ["UBLKCP.S.G.MULTICAST"],
+    formTargets := ["sm_90a", "sm_100a"],
+    skipOn := [("sm_80", "no bulk copies before sm_90"), ("sm_120a", "no multicast bulk copy in sm_120a SASS")] },
   { file := "tests/diff/tmamc.ptx", kernel := "tmamc", grid := 2, cluster := 2, threads := 32,
     bufs := [Array.replicate 512 0, words 11 256],
     extra := [(NV.Async.TensorMap.encode

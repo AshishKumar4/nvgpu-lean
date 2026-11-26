@@ -1,0 +1,5 @@
+{ "code": "bulk_multicast.cu", "function": "bulk_multicast", "grid": [4], "block": [128], "cluster": [2, 1, 1],
+  "buffers": [
+    { "name": "in", "bytes": 8192, "init": { "gen": "iota", "dtype": "u32", "start": 1, "step": 1 } },
+    { "name": "out", "bytes": 16384 } ],
+  "params": [ { "ordinal": 0, "ptr": "in" }, { "ordinal": 1, "ptr": "out" } ] }

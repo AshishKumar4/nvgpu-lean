@@ -1,0 +1,62 @@
+// A bulk copy multicast to both CTAs of a cluster of two (cp.async.bulk .multicast::cluster, SASS
+// UBLKCP.S.G.MULTICAST), compared between the PTX interpreter and the SASS simulator
+// (Tests/SassDiff.lean). CTA c copies in[256c .. 256c+255] (1 KB) into both CTAs' buffers at offset
+// 1024c, each CTA's mbarrier expecting both halves; then thread t of CTA c writes its buffer's
+// words t, t + 32, ..., to out[512c + ...].
+.version 8.7
+.target sm_90a
+.address_size 64
+
+.visible .entry bulkmc(.param .u64 out, .param .u64 in)
+{
+  .shared .align 8 .b64 bar;
+  .shared .align 128 .b32 buf[512];
+  .reg .pred p, q;
+  .reg .b16 mask;
+  .reg .b32 t, c, ma, ba, o, x, k;
+  .reg .b64 rd, ob, ib, st;
+  ld.param.u64 ob, [out];
+  cvta.to.global.u64 ob, ob;
+  ld.param.u64 ib, [in];
+  cvta.to.global.u64 ib, ib;
+  mov.u32 t, %tid.x;
+  mov.u32 c, %cluster_ctarank;
+  mov.u32 ma, bar;
+  setp.eq.u32 p, t, 0;
+  @p mbarrier.init.shared::cta.b64 [ma], 1;
+  @p mbarrier.arrive.expect_tx.shared::cta.b64 st, [ma], 2048;
+  fence.mbarrier_init.release.cluster;
+  barrier.cluster.arrive;
+  barrier.cluster.wait;
+  mov.u32 ba, buf;
+  shl.b32 o, c, 10;
+  add.u32 ba, ba, o;
+  cvt.u64.u32 rd, o;
+  add.s64 rd, ib, rd;
+  mov.u16 mask, 3;
+  @p cp.async.bulk.shared::cluster.global.mbarrier::complete_tx::bytes.multicast::cluster [ba], [rd], 1024, [ma], mask;
+wait:
+  mbarrier.try_wait.parity.acquire.cluster.shared::cta.b64 q, [ma], 0;
+  @!q bra wait;
+  mov.u32 k, 0;
+copy:
+  shl.b32 o, k, 5;
+  add.u32 o, o, t;
+  shl.b32 o, o, 2;
+  mov.u32 ba, buf;
+  add.u32 ba, ba, o;
+  ld.shared.u32 x, [ba];
+  shl.b32 o, c, 9;
+  shl.b32 ba, k, 5;
+  add.u32 o, o, ba;
+  add.u32 o, o, t;
+  mul.wide.u32 rd, o, 4;
+  add.s64 rd, ob, rd;
+  st.global.u32 [rd], x;
+  add.u32 k, k, 1;
+  setp.lt.u32 q, k, 16;
+  @q bra copy;
+  barrier.cluster.arrive;
+  barrier.cluster.wait;
+  ret;
+}

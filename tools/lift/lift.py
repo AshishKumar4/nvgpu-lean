@@ -304,10 +304,23 @@ def f_ublkcp(i):
     size = f"16u * UR({c})"
     if mods == ["S", "S"]:
         call = f"bulkCopy(ctx, sharedAt(ctx, UR({a})), sharedAt(ctx, UR({b})), {size}, UR({a + 1}), lane, warp)"
-    elif mods[:1] == ["S"]:
+    elif mods == ["S", "G"]:
         call = f"bulkCopy(ctx, sharedAt(ctx, UR({a})), gptr(ctx, U64(UR({b}), UR({b + 1}))), {size}, UR({a + 1}), lane, warp)"
-    elif mods[:2] == ["G", "S"]:
+    elif mods == ["S", "G", "MULTICAST"]:
+        # The CTA mask in `URc`'s high half (the size in its low half): the bytes into each named
+        # CTA at the same shared offset, and its mbarrier at the same offset the complete-tx.
+        call = (f"const uint32_t _n = 16u * (UR({c}) & 0xffffu), _m = UR({c}) >> 16; "
+                f"for (uint32_t _k = 0; _k < 16; ++_k) if ((_m >> _k) & 1u) "
+                f"bulkCopy(ctx, sharedAt(ctx, (_k << 24) | (UR({a}) & 0xffffffu)), gptr(ctx, U64(UR({b}), UR({b + 1}))), _n, "
+                f"(_k << 24) | (UR({a + 1}) & 0xffffffu), lane, warp)")
+    elif mods == ["G", "S"]:
         call = f"bulkCopy(ctx, gptr(ctx, U64(UR({a}), UR({a + 1}))), sharedAt(ctx, UR({b})), {size}, NONE, lane, warp)"
+    elif mods == ["G", "S", "DST_G_BYTE_MASK"]:
+        # The size in `URc`'s low half, the byte mask in its high half: only the bytes of each 16
+        # whose bits are set, complete when issued (as `bulkCopy`).
+        call = (f"uint8_t* _d = gptr(ctx, U64(UR({a}), UR({a + 1}))); const uint8_t* _s = sharedAt(ctx, UR({b})); "
+                f"const uint32_t _n = 16u * (UR({c}) & 0xffffu), _m = UR({c}) >> 16; "
+                f"for (uint32_t _i = 0; _i < _n; ++_i) if ((_m >> (_i % 16u)) & 1u) _d[_i] = _s[_i]; __threadfence()")
     else:
         raise Lift(f"UBLKCP {mods}")
     return f"if (lane == __ffs(__EXEC__) - 1) {{ {call}; }}"
