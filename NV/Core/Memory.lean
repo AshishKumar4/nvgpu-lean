@@ -102,8 +102,8 @@ def l2Tags (m : MemSys) : Array Tags := m.l2.l2
 /-- The last cycle the L2 side is busy with work already taken (`L2Mem.busyUntil`). -/
 def l2BusyUntil (m : MemSys) : Nat := m.l2.busyUntil
 
-/-- A module's code image written to device memory: lines `lines` pass through their L2 slices on
-the way, so they are there (clean) until evicted. -/
+/-- Bytes the launch writes to device memory (a module's code image, the parameter block): lines
+`lines` pass through their L2 slices on the way, so they are there (clean) until evicted. -/
 def loadCode (m : MemSys) (lines : List Nat) : MemSys :=
   let c := m.l2.cfg
   let all := (1 <<< (c.lineBytes / c.sectorBytes)) - 1

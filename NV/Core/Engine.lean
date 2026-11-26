@@ -2063,6 +2063,10 @@ private def runOnWith {m : Type → Type} {σ : Type} [Monad m] (pool : Pool m �
   let firstLoad := !machine.modules.contains k.module
   if firstLoad then
     mem := mem.loadCode (List.range' (l.codeBase / lineBytes) (codeLines - l.codeBase / lineBytes))
+  -- The parameter block, which the launch writes, is in the L2 when the kernel starts: a tensor
+  -- map passed as a parameter is fetched from there.
+  let paramLine := paramAddr.toNat / lineBytes
+  mem := mem.loadCode (List.range' paramLine ((paramAddr.toNat + l.params.size + lineBytes - 1) / lineBytes - paramLine))
   let sm0 : Sm :=
     { bySmsp := Array.replicate smsps #[], pipes := Array.replicate (smsps * Pipe.count) {},
       pipeWork := Array.replicate (smsps * Pipe.count) 0, issued := Array.replicate smsps 0,
