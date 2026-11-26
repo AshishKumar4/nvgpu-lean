@@ -116,9 +116,9 @@ def invalid? (t : Texture) : Option String :=
   else if !(t.texelBytes ∈ [1, 2, 4, 8, 16]) then some s!"{t.texelBytes}-byte texels"
   else if t.bc != 0 && (t.dims != 2 || t.layers != 0 || t.levels != 1 || t.surface) then
     some "a block-compressed object other than a 2D array"
-  else if t.bc ∈ [6, 7] || t.bcFormat ∈ [0x98, 0x9a] then
-    some s!"block-compressed format {t.bcFormat} (BC6H, BC7 and signed are not modelled)"
-  else if (t.bcFormat ∈ [0x92, 0x94, 0x96]) != t.srgb && t.bc != 0 then
+  else if t.bc == 6 || t.bcFormat ∈ [0x98, 0x9a] then
+    some s!"block-compressed format {t.bcFormat} (BC6H and signed BC4 and BC5 are not modelled)"
+  else if (t.bcFormat ∈ [0x92, 0x94, 0x96, 0x9e]) != t.srgb && t.bc != 0 then
     some "an sRGB block-compressed format read without sRGB, or the reverse"
   else if t.srgb && t.bc == 0 && (t.kind != .unsigned || t.chans[0]! != 8 || !t.readNormalized) then
     some "sRGB texels other than 8-bit unsigned read normalized"
@@ -447,12 +447,134 @@ def bcColour (blk sub : Nat) (fourAlways : Bool) : Array Nat × Bool :=
   (#[fiveBit (c0 / 2048) (c1 / 2048), green (c0 / 32 % 64) (c1 / 32 % 64), fiveBit (c0 % 32) (c1 % 32)],
    !four && idx == 3)
 
+/-- BC7's partitions (Direct3D 11's BC7 format: "Partition patterns"): per partition of two
+subsets, each texel's subset as a bit (texel `i`, bit `i`); of three, as two bits; and the anchor
+texel of subset 1 of two, and of subsets 1 and 2 of three, whose index has one bit fewer. -/
+def bc7Two : Array Nat := #[
+  0xcccc, 0x8888, 0xeeee, 0xecc8, 0xc880, 0xfeec, 0xfec8, 0xec80,
+  0xc800, 0xffec, 0xfe80, 0xe800, 0xffe8, 0xff00, 0xfff0, 0xf000,
+  0xf710, 0x8e, 0x7100, 0x8ce, 0x8c, 0x7310, 0x3100, 0x8cce,
+  0x88c, 0x3110, 0x6666, 0x366c, 0x17e8, 0xff0, 0x718e, 0x399c,
+  0xaaaa, 0xf0f0, 0x5a5a, 0x33cc, 0x3c3c, 0x55aa, 0x9696, 0xa55a,
+  0x73ce, 0x13c8, 0x324c, 0x3bdc, 0x6996, 0xc33c, 0x9966, 0x660,
+  0x272, 0x4e4, 0x4e40, 0x2720, 0xc936, 0x936c, 0x39c6, 0x639c,
+  0x9336, 0x9cc6, 0x817e, 0xe718, 0xccf0, 0xfcc, 0x7744, 0xee22]
+def bc7TwoAnchor : Array Nat := #[
+  15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
+  15, 2, 8, 2, 2, 8, 8, 15, 2, 8, 2, 2, 8, 8, 2, 2,
+  15, 15, 6, 8, 2, 8, 15, 15, 2, 8, 2, 2, 2, 15, 15, 6,
+  6, 2, 6, 8, 15, 15, 2, 2, 15, 15, 15, 15, 15, 2, 2, 15]
+def bc7Three : Array Nat := #[
+  0xaa685050, 0x6a5a5040, 0x5a5a4200, 0x5450a0a8, 0xa5a50000, 0xa0a05050, 0x5555a0a0, 0x5a5a5050,
+  0xaa550000, 0xaa555500, 0xaaaa5500, 0x90909090, 0x94949494, 0xa4a4a4a4, 0xa9a59450, 0x2a0a4250,
+  0xa5945040, 0xa425054, 0xa5a5a500, 0x55a0a0a0, 0xa8a85454, 0x6a6a4040, 0xa4a45000, 0x1a1a0500,
+  0x50a4a4, 0xaaa59090, 0x14696914, 0x69691400, 0xa08585a0, 0xaa821414, 0x50a4a450, 0x6a5a0200,
+  0xa9a58000, 0x5090a0a8, 0xa8a09050, 0x24242424, 0xaa5500, 0x24924924, 0x24499224, 0x50a50a50,
+  0x500aa550, 0xaaaa4444, 0x66660000, 0xa5a0a5a0, 0x50a050a0, 0x69286928, 0x44aaaa44, 0x66666600,
+  0xaa444444, 0x54a854a8, 0x95809580, 0x96969600, 0xa85454a8, 0x80959580, 0xaa141414, 0x96960000,
+  0xaaaa1414, 0xa05050a0, 0xa0a5a5a0, 0x96000000, 0x40804080, 0xa9a8a9a8, 0xaaaaaa44, 0x2a4a5254]
+def bc7ThreeAnchor : Array (Array Nat) := #[#[
+  3, 3, 15, 15, 8, 3, 15, 15, 8, 8, 6, 6, 6, 5, 3, 3,
+  3, 3, 8, 15, 3, 3, 6, 10, 5, 8, 8, 6, 8, 5, 15, 15,
+  8, 15, 3, 5, 6, 10, 8, 15, 15, 3, 15, 5, 15, 15, 15, 15,
+  3, 15, 5, 5, 5, 8, 5, 10, 5, 10, 8, 13, 15, 12, 3, 3], #[
+  15, 8, 8, 3, 15, 15, 3, 8, 15, 15, 15, 15, 15, 15, 15, 8,
+  15, 8, 15, 3, 15, 8, 15, 8, 3, 15, 6, 10, 15, 15, 10, 8,
+  15, 3, 15, 10, 10, 8, 9, 10, 6, 15, 8, 15, 3, 6, 6, 8,
+  15, 3, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 3, 15, 15, 8]]
+
+/-- A BC7 mode (Direct3D 11's BC7 format, "BC7 Format Mode Reference"): its subsets, partition,
+rotation and index-selection bits, colour and alpha bits per endpoint, per-endpoint and shared
+P-bits, and its two index sets' bits (0: none). -/
+structure Bc7Mode where
+  subsets : Nat
+  partBits : Nat
+  rotBits : Nat
+  selBits : Nat
+  colorBits : Nat
+  alphaBits : Nat
+  endpointP : Nat
+  sharedP : Nat
+  index0 : Nat
+  index1 : Nat
+  deriving Inhabited
+
+def bc7Modes : Array Bc7Mode := #[
+  ⟨3, 4, 0, 0, 4, 0, 1, 0, 3, 0⟩, ⟨2, 6, 0, 0, 6, 0, 0, 1, 3, 0⟩, ⟨3, 6, 0, 0, 5, 0, 0, 0, 2, 0⟩,
+  ⟨2, 6, 0, 0, 7, 0, 1, 0, 2, 0⟩, ⟨1, 0, 2, 1, 5, 6, 0, 0, 2, 3⟩, ⟨1, 0, 2, 0, 7, 8, 0, 0, 2, 2⟩,
+  ⟨1, 0, 0, 0, 7, 7, 1, 0, 4, 0⟩, ⟨2, 6, 0, 0, 5, 5, 1, 0, 2, 0⟩]
+
+/-- The interpolation weights out of 64 for indices of 2, 3 and 4 bits. -/
+def bc7Weights : Array (Array Nat) := #[#[0, 21, 43, 64], #[0, 9, 18, 27, 37, 46, 55, 64],
+  #[0, 4, 9, 13, 17, 21, 26, 30, 34, 38, 43, 47, 51, 55, 60, 64]]
+
+/-- A BC7 block's (`blk`, its 128 bits) texel at `sub` as 8-bit red, green, blue and alpha, as the
+format defines it, which an A100 and a GH200 match on every texel of random blocks: the mode
+(the first set bit), its partition, rotation and index selection, the endpoints (with their
+P-bits, widened by replicating their top bits), then each texel's index or indices weighting its
+subset's endpoints, `((64 − w)·e0 + w·e1 + 32) / 64` rounded down; a block with no mode reads
+zero. -/
+def bc7Texel (blk sub : Nat) : Array Nat := Id.run do
+  let bit (pos n : Nat) : Nat := blk / 2 ^ pos % 2 ^ n
+  let some m := (List.range 8).find? (bit · 1 == 1) | return #[0, 0, 0, 0]
+  let mi := bc7Modes[m]!
+  let mut pos := m + 1
+  let part := bit pos mi.partBits
+  pos := pos + mi.partBits
+  let rot := bit pos mi.rotBits
+  pos := pos + mi.rotBits
+  let sel := bit pos mi.selBits
+  pos := pos + mi.selBits
+  let pb := if mi.endpointP > 0 then mi.endpointP else mi.sharedP
+  -- Endpoints per channel: subset s's two at 2s and 2s + 1.
+  let mut ep : Array (Array Nat) := #[#[], #[], #[], #[]]
+  for c in [0:4] do
+    let bits := if c < 3 then mi.colorBits else mi.alphaBits
+    for _ in [0:2 * mi.subsets] do
+      ep := ep.modify c (·.push (if bits == 0 then 255 else bit pos bits * 2 ^ pb))
+      pos := pos + bits
+  if pb > 0 then
+    for s in [0:mi.subsets] do
+      let pa := bit pos pb
+      pos := pos + pb
+      let pbit := if mi.sharedP == 0 then bit pos pb else pa
+      if mi.sharedP == 0 then pos := pos + pb
+      ep := ep.map fun e => (e.modify (2 * s) (· ||| pa)).modify (2 * s + 1) (· ||| pbit)
+  let widen (v bits : Nat) : Nat := let x := v * 2 ^ (8 - bits) % 256; x ||| x / 2 ^ bits
+  ep := ep.mapIdx fun c e =>
+    let bits := if c < 3 then mi.colorBits else mi.alphaBits
+    if bits == 0 then e else e.map (widen · (bits + pb))
+  -- The texel's subset, and the texels before it in each index set (anchors one bit fewer).
+  let subsetOf (i : Nat) : Nat := match mi.subsets with
+    | 2 => bc7Two[part]! / 2 ^ i % 2
+    | 3 => bc7Three[part]! / 2 ^ (2 * i) % 4
+    | _ => 0
+  let anchor (i : Nat) : Bool := match mi.subsets, subsetOf i with
+    | _, 0 => i == 0
+    | 2, _ => i == bc7TwoAnchor[part]!
+    | _, s => i == bc7ThreeAnchor[s - 1]![part]!
+  let width (n i : Nat) : Nat := if anchor i then n - 1 else n
+  let at_ (start n : Nat) : Nat :=
+    let off := (List.range sub).foldl (fun o i => o + width n i) 0
+    bit (start + off) (width n sub)
+  let i0 := at_ pos mi.index0
+  let i1 := if mi.index1 > 0 then at_ (pos + mi.subsets * (16 * mi.index0 - 1)) mi.index1 else i0
+  let w0 := bc7Weights[mi.index0 - 2]!
+  let w1 := if mi.index1 > 0 then bc7Weights[mi.index1 - 2]! else w0
+  let (fc, fa) := if sel == 0 then (w0[i0]!, w1[i1]!) else (w1[i1]!, w0[i0]!)
+  let s := subsetOf sub
+  let blend (c f : Nat) : Nat := ((64 - f) * ep[c]![2 * s]! + f * ep[c]![2 * s + 1]! + 32) / 64
+  let mut rgba := #[blend 0 fc, blend 1 fc, blend 2 fc, blend 3 fa]
+  if rot > 0 then rgba := (rgba.set! 3 rgba[rot - 1]!).set! (rot - 1) rgba[3]!
+  return rgba
+
 /-- A block-compressed texel's channels (red, green, blue, alpha) as `numerator / denominator`,
 from its block's words `ws` and its place `sub`: BC1's colour, alpha one or (transparent) zero;
 BC2's colour from its second half and alpha from its first, 4 bits a texel; BC3's colour from its
-second half and alpha (8-bit) from its first; BC4 red (green and blue zero, alpha one), BC5 red
-and green from its two halves (blue zero, alpha one). The colour and BC3's alpha match an A100 and
-a GH200 on every texel of random blocks, the colour on every pair of endpoints per channel. -/
+second half and alpha (8-bit) from its first; BC7's as `bc7Texel`; BC4 red (green and blue zero,
+alpha one), BC5 red and green from its two halves (blue zero, alpha one). The colour and BC3's
+alpha match an A100 and a GH200 on every texel of random blocks, the colour on every pair of
+endpoints per channel. -/
 def bcTexel (t : Texture) (ws : Array UInt32) (sub : Nat) : Array (Int × Nat) :=
   let half (k : Nat) : Nat := ws[2 * k]!.toNat + ws[2 * k + 1]!.toNat * 2 ^ 32
   let rgb (c : Array Nat) : List (Int × Nat) := c.toList.map (fun (v : Nat) => (Int.ofNat v, 255))
@@ -466,6 +588,7 @@ def bcTexel (t : Texture) (ws : Array UInt32) (sub : Nat) : Array (Int × Nat) :
   | 3 =>
     let (c, _) := bcColour (half 1) sub true
     (rgb c ++ [bc4Value (half 0) sub true]).toArray
+  | 7 => (rgb (bc7Texel (half 0 + half 1 * 2 ^ 64) sub)).toArray
   | 4 => #[bc4Value (half 0) sub, (0, 1), (0, 1), (1, 1)]
   | 5 => #[bc4Value (half 0) sub, bc4Value (half 1) sub, (0, 1), (1, 1)]
   | _ => #[(0, 1), (0, 1), (0, 1), (1, 1)]
