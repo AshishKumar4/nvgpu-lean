@@ -120,8 +120,8 @@ def invalid? (t : Texture) : Option String :=
   else if !(t.texelBytes ∈ [1, 2, 4, 8, 16]) then some s!"{t.texelBytes}-byte texels"
   else if t.bc != 0 && (t.dims != 2 || t.layers != 0 || t.levels != 1 || t.surface) then
     some "a block-compressed object other than a 2D array"
-  else if t.bc == 6 || t.bcFormat ∈ [0x98, 0x9a] then
-    some s!"block-compressed format {t.bcFormat} (BC6H and signed BC4 and BC5 are not modelled)"
+  else if t.bcFormat ∈ [0x98, 0x9a] then
+    some s!"block-compressed format {t.bcFormat} (signed BC4 and BC5 are not modelled)"
   else if (t.bcFormat ∈ [0x92, 0x94, 0x96, 0x9e]) != t.srgb && t.bc != 0 then
     some "an sRGB block-compressed format read without sRGB, or the reverse"
   else if t.srgb && t.bc == 0 && (t.kind != .unsigned || t.chans[0]! != 8 || !t.readNormalized) then
@@ -132,7 +132,7 @@ def invalid? (t : Texture) : Option String :=
     some "linear filtering of signed normalized texels (its rounding is the GPU's own, not modelled)"
   else if t.border.any (· != 0) && (t.srgb || t.bc != 0 || (t.kind != .float && !t.readNormalized)) then
     some "a border colour for sRGB, block-compressed or integer-read texels"
-  else if t.bc != 0 && !t.readNormalized then some "block-compressed texels read as integers"
+  else if t.bc != 0 && t.bc != 6 && !t.readNormalized then some "block-compressed texels read as integers"
   else if t.kind == .float && !(t.chans[0]! ∈ [16, 32]) then some "float channels of 16 or 32 bits"
   else if t.filter == .linear && t.kind != .float && !t.readNormalized then
     some "linear filtering of texels read as integers (the guide allows it for floats only)"
@@ -576,13 +576,142 @@ def bc7Texel (blk sub : Nat) : Array Nat := Id.run do
   if rot > 0 then rgba := (rgba.set! 3 rgba[rot - 1]!).set! (rot - 1) rgba[3]!
   return rgba
 
-/-- A block-compressed texel's channels (red, green, blue, alpha) as `numerator / denominator`,
-from its block's words `ws` and its place `sub`: BC1's colour, alpha one or (transparent) zero;
-BC2's colour from its second half and alpha from its first, 4 bits a texel; BC3's colour from its
-second half and alpha (8-bit) from its first; BC7's as `bc7Texel`; BC4 red (green and blue zero,
-alpha one), BC5 red and green from its two halves (blue zero, alpha one). The colour and BC3's
-alpha match an A100 and a GH200 on every texel of random blocks, the colour on every pair of
-endpoints per channel. -/
+/-- BC6H's modes (Direct3D 11's BC6H format, "BC6H Implementation"): per mode number (its 2 or 5
+leading bits), whether its endpoints after the first are deltas, its partition bits, its first
+endpoint's bits and each channel's delta bits, and how its header's bits fill the endpoints in
+order: a run of `n` bits into endpoint `i` of channel `c` (red, green, blue) from its bit `s`. -/
+def bc6hModes : List (Nat × (Bool × Nat × Nat × Array Nat) × List (Nat × Nat × Nat × Nat)) := [
+  (0, (true, 5, 10, #[5, 5, 5]),
+    [(1, 2, 1, 4), (2, 2, 1, 4), (2, 3, 1, 4), (0, 0, 10, 0), (1, 0, 10, 0), (2, 0, 10, 0),
+     (0, 1, 5, 0), (1, 3, 1, 4), (1, 2, 4, 0), (1, 1, 5, 0), (2, 3, 1, 0), (1, 3, 4, 0),
+     (2, 1, 5, 0), (2, 3, 1, 1), (2, 2, 4, 0), (0, 2, 5, 0), (2, 3, 1, 2), (0, 3, 5, 0),
+     (2, 3, 1, 3)]),
+  (1, (true, 5, 7, #[6, 6, 6]),
+    [(1, 2, 1, 5), (1, 3, 1, 4), (1, 3, 1, 5), (0, 0, 7, 0), (2, 3, 1, 0), (2, 3, 1, 1),
+     (2, 2, 1, 4), (1, 0, 7, 0), (2, 2, 1, 5), (2, 3, 1, 2), (1, 2, 1, 4), (2, 0, 7, 0),
+     (2, 3, 1, 3), (2, 3, 1, 5), (2, 3, 1, 4), (0, 1, 6, 0), (1, 2, 4, 0), (1, 1, 6, 0),
+     (1, 3, 4, 0), (2, 1, 6, 0), (2, 2, 4, 0), (0, 2, 6, 0), (0, 3, 6, 0)]),
+  (2, (true, 5, 11, #[5, 4, 4]),
+    [(0, 0, 10, 0), (1, 0, 10, 0), (2, 0, 10, 0), (0, 1, 5, 0), (0, 0, 1, 10), (1, 2, 4, 0),
+     (1, 1, 4, 0), (1, 0, 1, 10), (2, 3, 1, 0), (1, 3, 4, 0), (2, 1, 4, 0), (2, 0, 1, 10),
+     (2, 3, 1, 1), (2, 2, 4, 0), (0, 2, 5, 0), (2, 3, 1, 2), (0, 3, 5, 0), (2, 3, 1, 3)]),
+  (3, (false, 0, 10, #[10, 10, 10]),
+    [(0, 0, 10, 0), (1, 0, 10, 0), (2, 0, 10, 0), (0, 1, 10, 0), (1, 1, 10, 0), (2, 1, 10, 0)]),
+  (6, (true, 5, 11, #[4, 5, 4]),
+    [(0, 0, 10, 0), (1, 0, 10, 0), (2, 0, 10, 0), (0, 1, 4, 0), (0, 0, 1, 10), (1, 3, 1, 4),
+     (1, 2, 4, 0), (1, 1, 5, 0), (1, 0, 1, 10), (1, 3, 4, 0), (2, 1, 4, 0), (2, 0, 1, 10),
+     (2, 3, 1, 1), (2, 2, 4, 0), (0, 2, 4, 0), (2, 3, 1, 0), (2, 3, 1, 2), (0, 3, 4, 0),
+     (1, 2, 1, 4), (2, 3, 1, 3)]),
+  (7, (true, 0, 11, #[9, 9, 9]),
+    [(0, 0, 10, 0), (1, 0, 10, 0), (2, 0, 10, 0), (0, 1, 9, 0), (0, 0, 1, 10), (1, 1, 9, 0),
+     (1, 0, 1, 10), (2, 1, 9, 0), (2, 0, 1, 10)]),
+  (10, (true, 5, 11, #[4, 4, 5]),
+    [(0, 0, 10, 0), (1, 0, 10, 0), (2, 0, 10, 0), (0, 1, 4, 0), (0, 0, 1, 10), (2, 2, 1, 4),
+     (1, 2, 4, 0), (1, 1, 4, 0), (1, 0, 1, 10), (2, 3, 1, 0), (1, 3, 4, 0), (2, 1, 5, 0),
+     (2, 0, 1, 10), (2, 2, 4, 0), (0, 2, 4, 0), (2, 3, 1, 1), (2, 3, 1, 2), (0, 3, 4, 0),
+     (2, 3, 1, 4), (2, 3, 1, 3)]),
+  (11, (true, 0, 12, #[8, 8, 8]),
+    [(0, 0, 10, 0), (1, 0, 10, 0), (2, 0, 10, 0), (0, 1, 8, 0), (0, 0, 1, 11), (0, 0, 1, 10),
+     (1, 1, 8, 0), (1, 0, 1, 11), (1, 0, 1, 10), (2, 1, 8, 0), (2, 0, 1, 11), (2, 0, 1, 10)]),
+  (14, (true, 5, 9, #[5, 5, 5]),
+    [(0, 0, 9, 0), (2, 2, 1, 4), (1, 0, 9, 0), (1, 2, 1, 4), (2, 0, 9, 0), (2, 3, 1, 4),
+     (0, 1, 5, 0), (1, 3, 1, 4), (1, 2, 4, 0), (1, 1, 5, 0), (2, 3, 1, 0), (1, 3, 4, 0),
+     (2, 1, 5, 0), (2, 3, 1, 1), (2, 2, 4, 0), (0, 2, 5, 0), (2, 3, 1, 2), (0, 3, 5, 0),
+     (2, 3, 1, 3)]),
+  (15, (true, 0, 16, #[4, 4, 4]),
+    [(0, 0, 10, 0), (1, 0, 10, 0), (2, 0, 10, 0), (0, 1, 4, 0), (0, 0, 1, 15), (0, 0, 1, 14),
+     (0, 0, 1, 13), (0, 0, 1, 12), (0, 0, 1, 11), (0, 0, 1, 10), (1, 1, 4, 0), (1, 0, 1, 15),
+     (1, 0, 1, 14), (1, 0, 1, 13), (1, 0, 1, 12), (1, 0, 1, 11), (1, 0, 1, 10), (2, 1, 4, 0),
+     (2, 0, 1, 15), (2, 0, 1, 14), (2, 0, 1, 13), (2, 0, 1, 12), (2, 0, 1, 11), (2, 0, 1, 10)]),
+  (18, (true, 5, 8, #[6, 5, 5]),
+    [(0, 0, 8, 0), (1, 3, 1, 4), (2, 2, 1, 4), (1, 0, 8, 0), (2, 3, 1, 2), (1, 2, 1, 4),
+     (2, 0, 8, 0), (2, 3, 1, 3), (2, 3, 1, 4), (0, 1, 6, 0), (1, 2, 4, 0), (1, 1, 5, 0),
+     (2, 3, 1, 0), (1, 3, 4, 0), (2, 1, 5, 0), (2, 3, 1, 1), (2, 2, 4, 0), (0, 2, 6, 0),
+     (0, 3, 6, 0)]),
+  (22, (true, 5, 8, #[5, 6, 5]),
+    [(0, 0, 8, 0), (2, 3, 1, 0), (2, 2, 1, 4), (1, 0, 8, 0), (1, 2, 1, 5), (1, 2, 1, 4),
+     (2, 0, 8, 0), (1, 3, 1, 5), (2, 3, 1, 4), (0, 1, 5, 0), (1, 3, 1, 4), (1, 2, 4, 0),
+     (1, 1, 6, 0), (1, 3, 4, 0), (2, 1, 5, 0), (2, 3, 1, 1), (2, 2, 4, 0), (0, 2, 5, 0),
+     (2, 3, 1, 2), (0, 3, 5, 0), (2, 3, 1, 3)]),
+  (26, (true, 5, 8, #[5, 5, 6]),
+    [(0, 0, 8, 0), (2, 3, 1, 1), (2, 2, 1, 4), (1, 0, 8, 0), (2, 2, 1, 5), (1, 2, 1, 4),
+     (2, 0, 8, 0), (2, 3, 1, 5), (2, 3, 1, 4), (0, 1, 5, 0), (1, 3, 1, 4), (1, 2, 4, 0),
+     (1, 1, 5, 0), (2, 3, 1, 0), (1, 3, 4, 0), (2, 1, 6, 0), (2, 2, 4, 0), (0, 2, 5, 0),
+     (2, 3, 1, 2), (0, 3, 5, 0), (2, 3, 1, 3)]),
+  (30, (false, 5, 6, #[6, 6, 6]),
+    [(0, 0, 6, 0), (1, 3, 1, 4), (2, 3, 1, 0), (2, 3, 1, 1), (2, 2, 1, 4), (1, 0, 6, 0),
+     (1, 2, 1, 5), (2, 2, 1, 5), (2, 3, 1, 2), (1, 2, 1, 4), (2, 0, 6, 0), (1, 3, 1, 5),
+     (2, 3, 1, 3), (2, 3, 1, 5), (2, 3, 1, 4), (0, 1, 6, 0), (1, 2, 4, 0), (1, 1, 6, 0),
+     (1, 3, 4, 0), (2, 1, 6, 0), (2, 2, 4, 0), (0, 2, 6, 0), (0, 3, 6, 0)])]
+
+/-- A BC6H block's (`blk`, its 128 bits) texel at `sub` as red, green and blue binary16 bits, as
+the format defines it, which an A100 and a GH200 match on every texel of random blocks, unsigned
+and signed (`signed`): the mode, its endpoints (a delta mode's later ones added to the first),
+each widened to 16 bits (`unq`), the partition and the texel's index blending its subset's
+endpoints, `((64 − w)·e0 + w·e1 + 32) / 64` rounded down, then scaled to binary16's range
+(`·31/64`, signed `·31/32` of the magnitude); a block of a reserved mode reads zero. -/
+def bc6hTexel (blk sub : Nat) (signed : Bool) : Array Nat := Id.run do
+  let bit (pos n : Nat) : Nat := blk / 2 ^ pos % 2 ^ n
+  let mode := if bit 0 2 < 2 then bit 0 2 else bit 0 5
+  let some (_, (delta, pbits, eb, db), steps) := bc6hModes.find? (·.1 == mode) | return #[0, 0, 0]
+  let mut pos := if bit 0 2 < 2 then 2 else 5
+  let mut ep : Array (Array Int) := Array.replicate 3 (Array.replicate 4 0)
+  for (c, i, n, s) in steps do
+    ep := ep.modify c (·.modify i (· + (bit pos n * 2 ^ s : Nat)))
+    pos := pos + n
+  -- `v`'s low `n` bits (two's complement) as a signed number.
+  let sx (v : Int) (n : Nat) : Int := let u := (v % (2 ^ n : Nat)).toNat; if u ≥ 2 ^ (n - 1) then u - 2 ^ n else u
+  let subsets := if pbits > 0 then 2 else 1
+  let unq (v : Int) : Int :=
+    if signed then
+      if eb ≥ 16 then v else
+      let a := v.natAbs
+      let u : Nat := if a == 0 then 0 else if a ≥ 2 ^ (eb - 1) - 1 then 0x7fff
+        else (a * 2 ^ 15 + 0x4000) / 2 ^ (eb - 1)
+      if v < 0 then -(u : Int) else u
+    else if eb ≥ 15 then v
+    else if v == 0 then 0 else if v == 2 ^ eb - 1 then 0xffff
+    else (v.toNat * 2 ^ 16 + 0x8000) / 2 ^ eb
+  for c in [0:3] do
+    let mut e := ep[c]!
+    if signed then e := e.set! 0 (sx e[0]! eb)
+    for i in [1:2 * subsets] do
+      if signed || delta then e := e.set! i (sx e[i]! db[c]!)
+      if delta then
+        e := e.set! i ((e[i]! + e[0]!) % (2 ^ eb : Nat))
+        if signed then e := e.set! i (sx e[i]! eb)
+    ep := ep.set! c (e.map unq)
+  let part := if pbits > 0 then bit pos 5 else 0
+  if pbits > 0 then pos := pos + 5
+  let ib := if pbits > 0 then 3 else 4
+  let subsetOf (i : Nat) : Nat := if pbits > 0 then bc7Two[part]! / 2 ^ i % 2 else 0
+  let width (i : Nat) : Nat :=
+    if i == (if subsetOf i == 0 then 0 else bc7TwoAnchor[part]!) then ib - 1 else ib
+  let off := (List.range sub).foldl (fun o i => o + width i) 0
+  let f := bc7Weights[ib - 2]![bit (pos + off) (width sub)]!
+  let s := subsetOf sub
+  let finish (v : Int) : Nat :=
+    if signed then
+      if v < 0 then 0x8000 + v.natAbs * 31 / 32 else v.toNat * 31 / 32
+    else v.toNat * 31 / 64
+  return (Array.range 3).map fun c =>
+    finish (Int.fdiv (ep[c]![2 * s]! * (64 - f : Nat) + ep[c]![2 * s + 1]! * (f : Nat) + 32) 64)
+
+/-- A binary16's value as `numerator / denominator` (finite: BC6H's are). -/
+def halfValue (h : Nat) : Int × Nat :=
+  let e := h / 1024 % 32
+  let m := h % 1024
+  let mag : Nat × Nat :=
+    if e == 0 then (m, 2 ^ 24) else if e ≥ 25 then ((1024 + m) * 2 ^ (e - 25), 1) else (1024 + m, 2 ^ (25 - e))
+  (if h ≥ 0x8000 then -(mag.1 : Int) else mag.1, mag.2)
+
+/-- A block-compressed texel's channels (red, green, blue, alpha) as `numerator / denominator`, from
+its block's words `ws` and its place `sub`: BC1's colour, alpha one or (transparent) zero; BC2's
+colour from its second half and alpha from its first, 4 bits a texel; BC3's colour from its second
+half and alpha (8-bit) from its first; BC6H's binary16 as `bc6hTexel` (alpha one); BC7's as
+`bc7Texel`; BC4 red (green and blue zero, alpha one), BC5 red and green from its two halves (blue
+zero, alpha one). The colour and BC3's alpha match an A100 and a GH200 on every texel of random
+blocks, the colour on every pair of endpoints per channel. -/
 def bcTexel (t : Texture) (ws : Array UInt32) (sub : Nat) : Array (Int × Nat) :=
   let half (k : Nat) : Nat := ws[2 * k]!.toNat + ws[2 * k + 1]!.toNat * 2 ^ 32
   let rgb (c : Array Nat) : List (Int × Nat) := c.toList.map (fun (v : Nat) => (Int.ofNat v, 255))
@@ -597,6 +726,7 @@ def bcTexel (t : Texture) (ws : Array UInt32) (sub : Nat) : Array (Int × Nat) :
     let (c, _) := bcColour (half 1) sub true
     (rgb c ++ [bc4Value (half 0) sub true]).toArray
   | 7 => (rgb (bc7Texel (half 0 + half 1 * 2 ^ 64) sub)).toArray
+  | 6 => (bc6hTexel (half 0 + half 1 * 2 ^ 64) sub (t.bcFormat == 0x9c)).map halfValue |>.push (1, 1)
   | 4 => #[bc4Value (half 0) sub, (0, 1), (0, 1), (1, 1)]
   | 5 => #[bc4Value (half 0) sub, bc4Value (half 1) sub, (0, 1), (1, 1)]
   | _ => #[(0, 1), (0, 1), (0, 1), (1, 1)]
@@ -663,7 +793,7 @@ def combine (t : Texture) (fp : List (Option Texel × Nat)) (resp : Array UInt32
     else
       let wsum := fp.foldl (· + ·.2) 0
       -- Point sampling of a float returns the texel unchanged (NaN included).
-      if t.kind == .float && fp.length == 1 then
+      if t.kind == .float && t.bc == 0 && fp.length == 1 then
         match fp with
         | [(some _, _)] =>
           let v := channel t (texel 0) c
