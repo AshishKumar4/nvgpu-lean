@@ -1582,6 +1582,12 @@ private def pass (kit : Kit) (focus : Nat) (stop : Nat) (st : St) :
         interval := interval + b / den
       s := { s with readyAt := max s.readyAt (t + hold), sb, live := s.live && !s.w.done,
                     interlock := ins.ctrl.stall == 0 && p.frontEnd.stallZeroInterlocks.value }
+      -- An `HGMMA` behind more queued tensor-core work than the core holds returns once it has
+      -- drained to that (`TensorParams.wgmmaQueueCycles`).
+      let queue := p.tensor.wgmmaQueueCycles.value
+      if queue > 0 && !l.functional && tm.pipe == .gmma then
+        let free := (asyncU.gmma[si * p.smsps.value + q]?.map (·.free)).getD 0
+        if free > t + queue then s := { s with readyAt := max s.readyAt (free - queue), why := .pipe }
       -- `NANOSLEEP t` suspends the warp for about `t` ns, at most 1 ms (PTX `nanosleep`: between 0
       -- and twice `t`; the model takes `t`). `NANOSLEEP.SYNCS`, a barrier wait's backoff, wakes on
       -- the barrier and is not held here.

@@ -268,6 +268,10 @@ structure TensorParams where
   MMA (spread evenly); 0 on a part without warpgroup MMA. -/
   wgmmaIssueSharePermille : Fact Nat :=
     { value := 0, kind := .documented, source := { ref := "ptx-isa-9.5", loc := "§9.7.15: wgmma needs sm_90a" } }
+  /-- Cycles of earlier warpgroup MMAs a sub-partition's tensor core holds queued past an issuing
+  `HGMMA`: the warp's next instruction waits until no more remain; 0 for no limit. -/
+  wgmmaQueueCycles : Fact Nat :=
+    { value := 0, kind := .documented, source := { ref := "ptx-isa-9.5", loc := "§9.7.15: wgmma needs sm_90a" } }
   /-- Per mille of the sub-partition's pipes' time it takes meanwhile: an instruction's pipe
   occupancy stretches by `1000 / (1000 - it)`; 0 on a part without warpgroup MMA. -/
   wgmmaPipeSharePermille : Fact Nat :=

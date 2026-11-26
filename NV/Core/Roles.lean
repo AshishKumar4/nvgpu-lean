@@ -64,6 +64,7 @@ def roles : List (String × Role) := [
   ("tensor.wgmmaLatencyRS", .engine), ("tensor.fmaPerCycleF64", .derivation),
   ("tensor.mmaSyncLatency", .observed),
   ("tensor.wgmmaOperandDataPermille", .engine), ("tensor.wgmmaIssueSharePermille", .engine),
+  ("tensor.wgmmaQueueCycles", .engine),
   ("tensor.wgmmaPipeSharePermille", .engine), ("tensor.tcgen05Latency", .engine), ("tensor.tmemLatency", .engine),
   ("sync.mbarrierLatency", .observed), ("sync.clusterMbarrierLatency", .observed),
   ("sync.namedBarrierLatency", .observed), ("sync.barArriveCycles", .engine), ("sync.tryWaitLimit", .engine),
