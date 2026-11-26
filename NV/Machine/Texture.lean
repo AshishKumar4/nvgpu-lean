@@ -88,6 +88,11 @@ structure Texture where
   /-- A block-compressed array's format (`CUarray_format`, `CU_AD_FORMAT_BC1_UNORM` 0x91 to
   `BC7_UNORM_SRGB` 0x9e), 0 for any other object: its texels in 4×4 blocks of 8 or 16 bytes. -/
   bcFormat : Nat := 0
+  /-- sRGB texels (`cudaTextureDesc::sRGB`): red, green and blue read through `srgbTable`. -/
+  srgb : Bool := false
+  /-- The border colour (`cudaTextureDesc::borderColor`, binary32 bits), which texels past the edge
+  read under border addressing. -/
+  border : Array UInt32 := #[0, 0, 0, 0]
   deriving Repr, Inhabited
 
 namespace Texture
@@ -111,8 +116,18 @@ def invalid? (t : Texture) : Option String :=
   else if !(t.texelBytes ∈ [1, 2, 4, 8, 16]) then some s!"{t.texelBytes}-byte texels"
   else if t.bc != 0 && (t.dims != 2 || t.layers != 0 || t.levels != 1 || t.surface) then
     some "a block-compressed object other than a 2D array"
-  else if t.bc ∈ [6, 7] || t.bcFormat ∈ [0x92, 0x94, 0x96, 0x98, 0x9a] then
-    some s!"block-compressed format {t.bcFormat} (BC6H, BC7, sRGB and signed are not modelled)"
+  else if t.bc ∈ [6, 7] || t.bcFormat ∈ [0x98, 0x9a] then
+    some s!"block-compressed format {t.bcFormat} (BC6H, BC7 and signed are not modelled)"
+  else if (t.bcFormat ∈ [0x92, 0x94, 0x96]) != t.srgb && t.bc != 0 then
+    some "an sRGB block-compressed format read without sRGB, or the reverse"
+  else if t.srgb && t.bc == 0 && (t.kind != .unsigned || t.chans[0]! != 8 || !t.readNormalized) then
+    some "sRGB texels other than 8-bit unsigned read normalized"
+  else if t.srgb && (t.filter == .linear || t.mipLinear) then
+    some "linear filtering of sRGB texels (its precision is the GPU's own, not modelled)"
+  else if t.kind == .signed && t.readNormalized && (t.filter == .linear || t.mipLinear) then
+    some "linear filtering of signed normalized texels (its rounding is the GPU's own, not modelled)"
+  else if t.border.any (· != 0) && (t.srgb || t.bc != 0 || (t.kind != .float && !t.readNormalized)) then
+    some "a border colour for sRGB, block-compressed or integer-read texels"
   else if t.bc != 0 && !t.readNormalized then some "block-compressed texels read as integers"
   else if t.kind == .float && !(t.chans[0]! ∈ [16, 32]) then some "float channels of 16 or 32 bits"
   else if t.filter == .linear && t.kind != .float && !t.readNormalized then
@@ -301,7 +316,7 @@ def taps (t : Texture) (d : Nat) (c : Dy) (off : Int := 0) : List (Option Nat ×
 /-- The footprint of a fetch at coordinates `cs` (one per dimension), each moved by `offs` texels
 (PTX's offset operand, §9.7.12.3: "applied to coordinates before doing texture lookup", from -8
 to 7; taken in texel units, after normalized coordinates are scaled and wrapped: inferred): each
-texel's address (`none`: a border texel, zero) and its weight, for a fetch whose share of the result
+texel's address (`none`: a border texel, the border colour) and its weight, for a fetch whose share of the result
 is `share` out of 256 (a mipmap level's, `Texture.mipFootprint`). Linear filtering splits the share
 along each dimension in turn by its weight (`taps`), each part rounded to 1/256: in three
 dimensions first along the third, the upper part rounded half down; then along the first, the
@@ -356,6 +371,24 @@ def channelVal (t : Texture) (v : Nat) : Option (Int × Nat × Int) :=
   | .signed =>
     let s : Int := if v ≥ 2 ^ (w - 1) then (v : Int) - 2 ^ w else v
     some (max s (-(2 ^ (w - 1) - 1 : Int)), 2 ^ (w - 1) - 1, 0)
+
+/-- Channel `c` of the border colour as a texel of the object would read it (`channelVal`'s form):
+a float exactly; for normalized integers clamped to the format's range and rounded half up to its
+steps (a GH200 and an A100 for 8-bit unsigned; the rest inferred). `none` for NaN and infinities. -/
+def borderVal (t : Texture) (c : Nat) : Option (Int × Nat × Int) :=
+  match Format.f32.decode (t.border[c]?.getD 0).toNat with
+  | .fin neg m e =>
+    let x : Int := if neg then -(m : Int) else m
+    if t.kind == .float then some (x, 1, e) else
+    let w := t.chans[0]!
+    let top : Nat := if t.kind == .signed then 2 ^ (w - 1) - 1 else 2 ^ w - 1
+    -- x · 2^e · top, rounded half up and clamped to the format's range.
+    let scaled : Int := if e ≥ 0 then x * top * 2 ^ e.toNat * 2 + 1 else x * top * 2 + 2 ^ (-e).toNat
+    let den : Nat := if e ≥ 0 then 2 else 2 * 2 ^ (-e).toNat
+    let q : Int := Int.fdiv scaled den
+    let lo : Int := if t.kind == .signed then -(top : Int) else 0
+    some (max lo (min top q), top, 0)
+  | _ => none
 
 /-! ## Block-compressed texels
 
@@ -437,6 +470,27 @@ def bcTexel (t : Texture) (ws : Array UInt32) (sub : Nat) : Array (Int × Nat) :
   | 5 => #[bc4Value (half 0) sub, bc4Value (half 1) sub, (0, 1), (1, 1)]
   | _ => #[(0, 1), (0, 1), (0, 1), (1, 1)]
 
+/-- An sRGB texel's 8-bit colour value read as linear (binary32's upper 16 bits): an A100's and a
+GH200's own table, which rounds to 8 significant bits and departs from IEC 61966-2-1's curve by
+up to 0.004 (`srgb.cu`). -/
+def srgbTable : Array UInt16 := #[
+  0x0000, 0x39a0, 0x3a20, 0x3a70, 0x3aa0, 0x3ac8, 0x3af0, 0x3b0c, 0x3b20, 0x3b34, 0x3b48, 0x3b5c, 0x3b70, 0x3b84, 0x3b90, 0x3b9c,
+  0x3baa, 0x3bb8, 0x3bc6, 0x3bd6, 0x3be6, 0x3bf6, 0x3c03, 0x3c0c, 0x3c16, 0x3c1f, 0x3c29, 0x3c34, 0x3c3e, 0x3c49, 0x3c55, 0x3c60,
+  0x3c6c, 0x3c7a, 0x3c83, 0x3c8a, 0x3c91, 0x3c98, 0x3c9f, 0x3ca6, 0x3cae, 0x3cb6, 0x3cbe, 0x3cc6, 0x3cce, 0x3cd7, 0x3ce0, 0x3ce9,
+  0x3cf2, 0x3cfc, 0x3d03, 0x3d08, 0x3d0d, 0x3d12, 0x3d17, 0x3d1c, 0x3d22, 0x3d28, 0x3d2d, 0x3d33, 0x3d39, 0x3d3f, 0x3d45, 0x3d4c,
+  0x3d52, 0x3d58, 0x3d60, 0x3d66, 0x3d6c, 0x3d74, 0x3d7a, 0x3d81, 0x3d85, 0x3d88, 0x3d8c, 0x3d90, 0x3d94, 0x3d98, 0x3d9c, 0x3da0,
+  0x3da4, 0x3da9, 0x3dad, 0x3db1, 0x3db6, 0x3dba, 0x3dbf, 0x3dc3, 0x3dc8, 0x3dcd, 0x3dd1, 0x3dd6, 0x3ddb, 0x3de0, 0x3de5, 0x3dea,
+  0x3df0, 0x3df4, 0x3dfa, 0x3e00, 0x3e02, 0x3e05, 0x3e08, 0x3e0b, 0x3e0e, 0x3e11, 0x3e14, 0x3e17, 0x3e1a, 0x3e1d, 0x3e20, 0x3e23,
+  0x3e26, 0x3e29, 0x3e2c, 0x3e30, 0x3e33, 0x3e36, 0x3e3a, 0x3e3d, 0x3e40, 0x3e44, 0x3e47, 0x3e4b, 0x3e4e, 0x3e52, 0x3e56, 0x3e59,
+  0x3e5d, 0x3e61, 0x3e65, 0x3e68, 0x3e6c, 0x3e70, 0x3e74, 0x3e78, 0x3e7c, 0x3e80, 0x3e82, 0x3e84, 0x3e86, 0x3e88, 0x3e8a, 0x3e8d,
+  0x3e8f, 0x3e91, 0x3e93, 0x3e95, 0x3e98, 0x3e9a, 0x3e9c, 0x3e9e, 0x3ea1, 0x3ea3, 0x3ea5, 0x3ea8, 0x3eaa, 0x3ead, 0x3eaf, 0x3eb2,
+  0x3eb4, 0x3eb6, 0x3eb9, 0x3ebc, 0x3ebe, 0x3ec1, 0x3ec3, 0x3ec6, 0x3ec8, 0x3ecb, 0x3ece, 0x3ed1, 0x3ed3, 0x3ed6, 0x3ed9, 0x3edb,
+  0x3ede, 0x3ee1, 0x3ee4, 0x3ee7, 0x3eea, 0x3eed, 0x3ef0, 0x3ef2, 0x3ef6, 0x3ef8, 0x3efc, 0x3efe, 0x3f01, 0x3f02, 0x3f04, 0x3f05,
+  0x3f07, 0x3f09, 0x3f0a, 0x3f0c, 0x3f0d, 0x3f0f, 0x3f11, 0x3f12, 0x3f14, 0x3f16, 0x3f17, 0x3f19, 0x3f1b, 0x3f1c, 0x3f1e, 0x3f20,
+  0x3f21, 0x3f23, 0x3f25, 0x3f27, 0x3f29, 0x3f2a, 0x3f2c, 0x3f2e, 0x3f30, 0x3f32, 0x3f33, 0x3f35, 0x3f37, 0x3f39, 0x3f3b, 0x3f3d,
+  0x3f3f, 0x3f41, 0x3f43, 0x3f45, 0x3f47, 0x3f49, 0x3f4b, 0x3f4d, 0x3f4f, 0x3f51, 0x3f53, 0x3f55, 0x3f57, 0x3f59, 0x3f5b, 0x3f5d,
+  0x3f5f, 0x3f61, 0x3f63, 0x3f65, 0x3f68, 0x3f6a, 0x3f6c, 0x3f6e, 0x3f70, 0x3f72, 0x3f74, 0x3f76, 0x3f7a, 0x3f7c, 0x3f7e, 0x3f80]
+
 /-- `num / den · 2^e` rounded to nearest binary32, ties away from zero. -/
 def toF32 (num : Int) (den : Nat) (e : Int) : UInt32 :=
   if num == 0 || den == 0 then 0 else
@@ -450,10 +504,12 @@ def toF32 (num : Int) (den : Nat) (e : Int) : UInt32 :=
 /-- The four result words of a fetch from the texels of its footprint (`resp`: each texel's
 words, `texelBytes` rounded up to words, in footprint order) and their weights. Floats and
 normalized integers: each channel the weighted sum computed exactly and rounded once to binary32,
-ties away from zero (a GH200's linear filtering in one and two dimensions and between levels of
-linearly filtered mipmaps, and its and an A100's blends of point-sampled levels). Integers read as
-they are (point sampling only): the texel's channels, sign-extended. A texel's missing
-channels read as zero (inferred). -/
+ties away from zero, an unsigned normalized sum first rounded half up to 16-bit unsigned
+normalized (an A100 and a GH200 on every one of 4,096 fetches of 8- and 16-bit texels and of
+blends of levels) (a GH200's linear filtering in one and two dimensions and between levels of
+linearly filtered mipmaps, and its and an A100's blends of point-sampled levels); a border texel
+reads the border colour (`borderVal`). Integers read as they are (point sampling only): the texel's
+channels, sign-extended. A texel's missing channels read as zero (inferred). -/
 def combine (t : Texture) (fp : List (Option Texel × Nat)) (resp : Array UInt32) : Array UInt32 :=
   let wpt := (t.texelBytes + 3) / 4
   let texel (k : Nat) : Array UInt32 := resp.extract (k * wpt) (k * wpt + wpt)
@@ -466,6 +522,13 @@ def combine (t : Texture) (fp : List (Option Texel × Nat)) (resp : Array UInt32
         let v := channel t (texel k) c
         if t.kind == .signed && v ≥ 2 ^ (w - 1) then (v + 2 ^ 32 - 2 ^ w).toUInt32 else v.toUInt32
       | none => 0
+    else if t.srgb && c < 3 then
+      -- sRGB (point sampling only, `invalid?`): the texel's 8-bit value through the table.
+      match fp.zipIdx.find? (·.1.1.isSome) with
+      | some ((some x, _), k) =>
+        let v : Nat := if t.bc != 0 then (bcTexel t (texel k) x.sub)[c]!.1.toNat else channel t (texel k) c
+        (srgbTable[v]?.getD 0).toUInt32 <<< 16
+      | _ => 0
     else
       let wsum := fp.foldl (· + ·.2) 0
       -- Point sampling of a float returns the texel unchanged (NaN included).
@@ -474,12 +537,13 @@ def combine (t : Texture) (fp : List (Option Texel × Nat)) (resp : Array UInt32
         | [(some _, _)] =>
           let v := channel t (texel 0) c
           if w == 16 then (cvt Format.f16 Format.f32 .rn {} v).toUInt32 else v.toUInt32
-        | _ => 0
+        -- A border texel reads the border colour as given.
+        | _ => t.border[c]?.getD 0
       else
         -- Σ weight_k · v_k over a common denominator.
         let terms := fp.zipIdx.filterMap fun ((a, wt), k) =>
           match a with
-          | none => none
+          | none => if wt == 0 then none else borderVal t c |>.map (wt, ·)
           | some x =>
             if wt == 0 then none
             else if t.bc != 0 then
@@ -488,9 +552,14 @@ def combine (t : Texture) (fp : List (Option Texel × Nat)) (resp : Array UInt32
             else channelVal t (channel t (texel k) c) |>.map (wt, ·)
         let emin := terms.foldl (fun m (_, _, _, e) => min m e) 0
         let den := terms.foldl (fun d (_, _, dn, _) => Nat.lcm d dn) 1
-        let num := terms.foldl (fun s (wt, n, dn, e) =>
+        let num : Int := terms.foldl (fun s (wt, n, dn, e) =>
           s + (wt : Int) * n * (den / dn : Nat) * (2 ^ (e - emin).toNat : Nat)) 0
-        toF32 num (den * wsum) emin
+        -- Unsigned normalized: the sum rounded half up to 16-bit unsigned normalized first.
+        if t.kind == .unsigned then
+          let all : Int := (den * wsum : Nat)
+          let q := Int.fdiv (2 * num * 65535 + all) (2 * all)
+          toF32 q 65535 0
+        else toF32 num (den * wsum) emin
 
 /-- The result of a `tld4` (gather) of component `c`: that component of the four texels of the
 bilinear footprint at `(x, y)`, in the order (i, j+1), (i+1, j+1), (i+1, j), (i, j) (inferred). -/

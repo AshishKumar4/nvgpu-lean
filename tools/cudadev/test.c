@@ -657,6 +657,174 @@ static void textureChecks(void) {
       CK(cuArrayDestroy(ba));
     }
     check("BC1, BC3 and BC5 arrays' texels decode as an A100 decodes them", bok);
+
+    // sRGB: an 8 by 1 RGBA8 array, texel (v, 255 - v, v ^ 0x55, v), point-fetched with sRGB reads
+    // (the colour through the GPU's table, alpha linear), against an A100's.
+    static const uint8_t srgbVals[8] = {1, 3, 40, 80, 120, 160, 200, 251};
+    static const uint32_t srgbWant[32] = {
+      0x39a00000, 0x3f7e0000, 0x3db60000, 0x3b808081, 0x3a700000, 0x3f7a0000, 0x3dbf0000, 0x3c40c0c1,
+      0x3cae0000, 0x3f2e0000, 0x3e520000, 0x3e20a0a1, 0x3da40000, 0x3edb0000, 0x3ac80000, 0x3ea0a0a1,
+      0x3e400000, 0x3e780000, 0x3cd70000, 0x3ef0f0f1, 0x3eb40000, 0x3dea0000, 0x3f6a0000, 0x3f20a0a1,
+      0x3f140000, 0x3d1c0000, 0x3ead0000, 0x3f48c8c9, 0x3f760000, 0x3aa00000, 0x3ed90000, 0x3f7bfbfc};
+    uint8_t srgbTexels[32];
+    for (int e = 0; e < 8; e++) {
+      srgbTexels[4 * e] = srgbVals[e]; srgbTexels[4 * e + 1] = 255 - srgbVals[e];
+      srgbTexels[4 * e + 2] = srgbVals[e] ^ 0x55; srgbTexels[4 * e + 3] = srgbVals[e];
+    }
+    CUDA_ARRAY3D_DESCRIPTOR sd = {8, 1, 0, CU_AD_FORMAT_UNSIGNED_INT8, 4, 0};
+    CUarray sa;
+    CK(cuArray3DCreate(&sa, &sd));
+    CUDA_MEMCPY2D scp;
+    memset(&scp, 0, sizeof scp);
+    scp.srcMemoryType = CU_MEMORYTYPE_HOST; scp.srcHost = srgbTexels; scp.srcPitch = 32;
+    scp.dstMemoryType = CU_MEMORYTYPE_ARRAY; scp.dstArray = sa;
+    scp.WidthInBytes = 32; scp.Height = 1;
+    CK(cuMemcpy2D(&scp));
+    CUDA_RESOURCE_DESC sr;
+    memset(&sr, 0, sizeof sr);
+    sr.resType = CU_RESOURCE_TYPE_ARRAY; sr.res.array.hArray = sa;
+    CUDA_TEXTURE_DESC std_;
+    memset(&std_, 0, sizeof std_);
+    std_.filterMode = CU_TR_FILTER_MODE_POINT;
+    std_.addressMode[0] = std_.addressMode[1] = CU_TR_ADDRESS_MODE_CLAMP;
+    std_.flags = CU_TRSF_SRGB;
+    CUtexObject stex;
+    CK(cuTexObjectCreate(&stex, &sr, &std_, NULL));
+    CUdeviceptr sout;
+    CK(cuMemAlloc(&sout, 32 * 16));
+    void *sargs[] = {&stex, &sout};
+    CK(cuLaunchKernel(bk, 1, 1, 1, 8, 1, 1, 0, NULL, sargs, NULL));
+    CK(cuCtxSynchronize());
+    uint32_t sgot[32];
+    CK(cuMemcpyDtoH(sgot, sout, sizeof sgot));
+    int sok = 1;
+    for (int e = 0; e < 32; e++)
+      if (sgot[e] != srgbWant[e]) {
+        sok = 0;
+        printf("sRGB texel %d channel %d: %08x, an A100 %08x\n", e / 4, e % 4, sgot[e], srgbWant[e]);
+      }
+    check("an sRGB texture reads colour through the GPU's table", sok);
+
+    // A border colour: an 8 by 8 float4 array, texel (x, y) = (x + 8y, -x, y, 1), border addressing
+    // with colour (0.25, -1.5, 3, 0.75), fetched point and linear at (c, c / 2 + 1), c = -2 + 3k/8,
+    // in and past the texels, against an A100's.
+    static const char *borderPtx =
+      ".version 8.0\n.target sm_80\n.address_size 64\n"
+      ".visible .entry bord(.param .u64 tex_, .param .u64 in_, .param .u64 out_) {\n"
+      "  .reg .b64 t, p, o, a; .reg .b32 i, k; .reg .f32 x, y, r0, r1, r2, r3;\n"
+      "  ld.param.u64 t, [tex_]; ld.param.u64 p, [in_]; ld.param.u64 o, [out_];\n"
+      "  mov.u32 i, %tid.x; mul.wide.u32 a, i, 4; add.s64 p, p, a; ld.global.u32 k, [p];\n"
+      "  cvt.rn.f32.u32 x, k; mul.f32 x, x, 0f3EC00000; add.f32 x, x, 0fC0000000;\n"
+      "  mul.f32 y, x, 0f3F000000; add.f32 y, y, 0f3F800000;\n"
+      "  tex.2d.v4.f32.f32 {r0, r1, r2, r3}, [t, {x, y}];\n"
+      "  mul.wide.u32 a, i, 16; add.s64 o, o, a; st.global.v4.f32 [o], {r0, r1, r2, r3};\n"
+      "  ret;\n}\n";
+    static const uint32_t borderIdx[8] = {0, 5, 6, 20, 28, 30, 31, 32};
+    static const uint32_t borderWant[2][32] = {{
+      0x3e800000, 0xbfc00000, 0x40400000, 0x3f400000, 0x3e800000, 0xbfc00000, 0x40400000, 0x3f400000,
+      0x41000000, 0x00000000, 0x3f800000, 0x3f800000, 0x41e80000, 0xc0a00000, 0x40400000, 0x3f800000,
+      0x3e800000, 0xbfc00000, 0x40400000, 0x3f400000, 0x3e800000, 0xbfc00000, 0x40400000, 0x3f400000,
+      0x3e800000, 0xbfc00000, 0x40400000, 0x3f400000, 0x3e800000, 0xbfc00000, 0x40400000, 0x3f400000}, {
+      0x3e800000, 0xbfc00000, 0x40400000, 0x3f400000, 0x3fbc0000, 0xbf700000, 0x40028000, 0x3f580000,
+      0x40740000, 0xbec00000, 0x3f9c0000, 0x3f700000, 0x41f80000, 0xc0a00000, 0x40500000, 0x3f800000,
+      0x3e800000, 0xbfc00000, 0x40400000, 0x3f400000, 0x3e800000, 0xbfc00000, 0x40400000, 0x3f400000,
+      0x3e800000, 0xbfc00000, 0x40400000, 0x3f400000, 0x3e800000, 0xbfc00000, 0x40400000, 0x3f400000}};
+    float bt[64][4];
+    for (int e = 0; e < 64; e++) { bt[e][0] = e; bt[e][1] = (float)-(e % 8); bt[e][2] = e / 8; bt[e][3] = 1; }
+    CUDA_ARRAY3D_DESCRIPTOR fd4 = {8, 8, 0, CU_AD_FORMAT_FLOAT, 4, 0};
+    CUarray fa;
+    CK(cuArray3DCreate(&fa, &fd4));
+    CUDA_MEMCPY2D fcp;
+    memset(&fcp, 0, sizeof fcp);
+    fcp.srcMemoryType = CU_MEMORYTYPE_HOST; fcp.srcHost = bt; fcp.srcPitch = 128;
+    fcp.dstMemoryType = CU_MEMORYTYPE_ARRAY; fcp.dstArray = fa;
+    fcp.WidthInBytes = 128; fcp.Height = 8;
+    CK(cuMemcpy2D(&fcp));
+    CUmodule bom;
+    CK(cuModuleLoadData(&bom, borderPtx));
+    CUfunction bok_;
+    CK(cuModuleGetFunction(&bok_, bom, "bord"));
+    CUdeviceptr bin, bou;
+    CK(cuMemAlloc(&bin, sizeof borderIdx));
+    CK(cuMemAlloc(&bou, 8 * 16));
+    CK(cuMemcpyHtoD(bin, borderIdx, sizeof borderIdx));
+    int brd = 1;
+    for (int lin = 0; lin < 2; lin++) {
+      CUDA_RESOURCE_DESC fr;
+      memset(&fr, 0, sizeof fr);
+      fr.resType = CU_RESOURCE_TYPE_ARRAY; fr.res.array.hArray = fa;
+      CUDA_TEXTURE_DESC ftd;
+      memset(&ftd, 0, sizeof ftd);
+      ftd.filterMode = lin ? CU_TR_FILTER_MODE_LINEAR : CU_TR_FILTER_MODE_POINT;
+      ftd.addressMode[0] = ftd.addressMode[1] = CU_TR_ADDRESS_MODE_BORDER;
+      ftd.borderColor[0] = 0.25f; ftd.borderColor[1] = -1.5f; ftd.borderColor[2] = 3.0f; ftd.borderColor[3] = 0.75f;
+      CUtexObject ftex;
+      CK(cuTexObjectCreate(&ftex, &fr, &ftd, NULL));
+      void *fargs[] = {&ftex, &bin, &bou};
+      CK(cuLaunchKernel(bok_, 1, 1, 1, 8, 1, 1, 0, NULL, fargs, NULL));
+      CK(cuCtxSynchronize());
+      uint32_t got[32];
+      CK(cuMemcpyDtoH(got, bou, sizeof got));
+      for (int e = 0; e < 32; e++)
+        if (got[e] != borderWant[lin][e]) {
+          brd = 0;
+          printf("border %s fetch %d channel %d: %08x, an A100 %08x\n", lin ? "linear" : "point", e / 4, e % 4, got[e], borderWant[lin][e]);
+        }
+      CK(cuTexObjectDestroy(ftex));
+    }
+    check("texels past the edge read the border colour, point and linear", brd);
+    // The same over an RGBA8 array read normalized, texel (x, y) = (4k, 255 - 3k, k, 200) for
+    // k = x + 8y: the border colour taken to the texel's format, and a linear sum rounded to 16-bit
+    // unsigned normalized.
+    static const uint32_t border8Want[2][32] = {{
+      0x3e808081, 0x00000000, 0x3f800000, 0x3f3fbfc0, 0x3e808081, 0x00000000, 0x3f800000, 0x3f3fbfc0,
+      0x3e008081, 0x3f67e7e8, 0x3d008081, 0x3f48c8c9, 0x3ee8e8e9, 0x3f28a8a9, 0x3de8e8e9, 0x3f48c8c9,
+      0x3e808081, 0x00000000, 0x3f800000, 0x3f3fbfc0, 0x3e808081, 0x00000000, 0x3f800000, 0x3f3fbfc0,
+      0x3e808081, 0x00000000, 0x3f800000, 0x3f3fbfc0, 0x3e808081, 0x00000000, 0x3f800000, 0x3f3fbfc0}, {
+      0x3e808081, 0x00000000, 0x3f800000, 0x3f3fbfc0, 0x3e35b4b6, 0x3eb818b8, 0x3f2151a1, 0x3f4322c3,
+      0x3df8f8f9, 0x3f34b4b5, 0x3e878888, 0x3f4686c7, 0x3ef8f8f9, 0x3f22a2a3, 0x3df8f8f9, 0x3f48c8c9,
+      0x3e808081, 0x00000000, 0x3f800000, 0x3f3fbfc0, 0x3e808081, 0x00000000, 0x3f800000, 0x3f3fbfc0,
+      0x3e808081, 0x00000000, 0x3f800000, 0x3f3fbfc0, 0x3e808081, 0x00000000, 0x3f800000, 0x3f3fbfc0}};
+    uint8_t b8[64][4];
+    for (int e = 0; e < 64; e++) { b8[e][0] = 4 * e; b8[e][1] = 255 - 3 * e; b8[e][2] = e; b8[e][3] = 200; }
+    CUDA_ARRAY3D_DESCRIPTOR b8d = {8, 8, 0, CU_AD_FORMAT_UNSIGNED_INT8, 4, 0};
+    CUarray b8a;
+    CK(cuArray3DCreate(&b8a, &b8d));
+    fcp.srcHost = b8; fcp.srcPitch = 32; fcp.dstArray = b8a; fcp.WidthInBytes = 32;
+    CK(cuMemcpy2D(&fcp));
+    int brd8 = 1;
+    for (int lin = 0; lin < 2; lin++) {
+      CUDA_RESOURCE_DESC fr;
+      memset(&fr, 0, sizeof fr);
+      fr.resType = CU_RESOURCE_TYPE_ARRAY; fr.res.array.hArray = b8a;
+      CUDA_TEXTURE_DESC ftd;
+      memset(&ftd, 0, sizeof ftd);
+      ftd.filterMode = lin ? CU_TR_FILTER_MODE_LINEAR : CU_TR_FILTER_MODE_POINT;
+      ftd.addressMode[0] = ftd.addressMode[1] = CU_TR_ADDRESS_MODE_BORDER;
+      ftd.borderColor[0] = 0.25f; ftd.borderColor[1] = -1.5f; ftd.borderColor[2] = 3.0f; ftd.borderColor[3] = 0.75f;
+      CUtexObject ftex;
+      CK(cuTexObjectCreate(&ftex, &fr, &ftd, NULL));
+      void *fargs[] = {&ftex, &bin, &bou};
+      CK(cuLaunchKernel(bok_, 1, 1, 1, 8, 1, 1, 0, NULL, fargs, NULL));
+      CK(cuCtxSynchronize());
+      uint32_t got[32];
+      CK(cuMemcpyDtoH(got, bou, sizeof got));
+      for (int e = 0; e < 32; e++)
+        if (got[e] != border8Want[lin][e]) {
+          brd8 = 0;
+          printf("RGBA8 %s fetch %d channel %d: %08x, an A100 %08x\n", lin ? "linear" : "point", e / 4, e % 4, got[e], border8Want[lin][e]);
+        }
+      CK(cuTexObjectDestroy(ftex));
+    }
+    check("normalized 8-bit texels filter to 16-bit steps, and read the border colour in their format", brd8);
+    CK(cuArrayDestroy(b8a));
+    CK(cuModuleUnload(bom));
+    CK(cuMemFree(bin));
+    CK(cuMemFree(bou));
+    CK(cuArrayDestroy(fa));
+    CK(cuTexObjectDestroy(stex));
+    CK(cuMemFree(sout));
+    CK(cuArrayDestroy(sa));
     CK(cuModuleUnload(bm));
     CK(cuMemFree(bout));
     CK(cuTexObjectDestroy(ltex));

@@ -199,7 +199,7 @@ CUresult CUDAAPI cuMipmappedArrayDestroy(CUmipmappedArray m) {
 }
 
 // The objects: 28 words each (`Device.setTextures`), per device; a destroyed one's words zero.
-#define TEX_WORDS 28
+#define TEX_WORDS 33
 static uint64_t *texTable[MAX_GPUS];
 static size_t texCount[MAX_GPUS];
 
@@ -419,6 +419,19 @@ CUresult CUDAAPI cuTexObjectCreate(CUtexObject *out, const CUDA_RESOURCE_DESC *r
   }
   // Integer texels of 8 and 16 bits read as normalized floats unless read as integers.
   w[13] = !(td->flags & CU_TRSF_READ_AS_INTEGER) && w[12] != 2 && w[8] < 32;
+  // sRGB texels (word 28; `NV.Tex.Texture.srgb`). Disabling the trilinear optimization changes
+  // nothing a GH200 shows; seamless cubemap filtering is not modelled.
+  w[28] = (td->flags & CU_TRSF_SRGB) != 0;
+  // The border colour (words 29 to 32, binary32 bits), which texels past the edge read under
+  // border addressing.
+  memcpy(&w[29], &td->borderColor[0], 4);
+  memcpy(&w[30], &td->borderColor[1], 4);
+  memcpy(&w[31], &td->borderColor[2], 4);
+  memcpy(&w[32], &td->borderColor[3], 4);
+  if (td->flags & CU_TRSF_SEAMLESS_CUBEMAP) {
+    note("seamless cubemap filtering is not modelled");
+    return CUDA_ERROR_NOT_SUPPORTED;
+  }
   w[14] = (td->flags & CU_TRSF_NORMALIZED_COORDINATES) != 0;
   w[15] = td->filterMode == CU_TR_FILTER_MODE_LINEAR;
   // A coordinate the texture does not have is clamped (its mode, often left zero, is wrap).
