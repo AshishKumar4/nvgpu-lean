@@ -271,17 +271,18 @@ def mapOfResp (r : Resp) : X TensorMap :=
   | some m => .ok m
   | none => .error "no tensor map at the operand's address"
 
-/-- `cp.async.bulk.tensor` (§9.7.10.28.5.3), tiled mode, and `.tile::gather4` (§5.5.3.4: the
-coordinates `{col, row0, row1, row2, row3}`, four one-row boxes as one tile, `TensorMap.gather4`). -/
+/-- `cp.async.bulk.tensor` (§9.7.10.28.5.3), tiled mode, and `.tile::gather4` and, storing,
+`.tile::scatter4` (§5.5.3.4: the coordinates `{col, row0, row1, row2, row3}`, four one-row boxes
+as one tile, `TensorMap.gather4`). -/
 def cpAsyncBulkTensor : X (Effect Thread) := do
   let i := pi.i
-  if i.has .tileScatter4 || i.has .im2colW || i.has .im2colW128 then
-    throw "this load mode is not modelled yet"
+  if i.has .im2colW || i.has .im2colW128 then throw "this load mode is not modelled yet"
   if let some q := unmodelledCopyQual i then throw s!".{q} is not modelled"
   let gather := i.has .tileGather4
   let im2col := i.has .im2col
   match i.spaces with
   | dst :: .global :: _ =>
+    if i.has .tileScatter4 then throw ".tile::scatter4 is a store mode"
     let (ds, da) ← target e t pi 0 (some dst)
     let (off, at_) ← sharedBase e t ds da
     let (desc, coords) ← tensorOperand e t pi 1
@@ -313,14 +314,17 @@ def cpAsyncBulkTensor : X (Effect Thread) := do
     let (ss, sa) ← target e t pi 1 (some src)
     let (off, at_) ← sharedBase e t ss sa
     let build (r : Resp) : X Copy := do
-      let ps ← (← mapOfResp r).tile coords off.toNat
+      let m ← mapOfResp r
+      let ps ← if i.has .tileScatter4 then m.gather4 coords[0]! (coords.extract 1 5) off.toNat
+        else m.tile coords off.toNat
       return storeCopy ps (at_ 0).1 fun o => (at_ o).2
     return issue t (NV.Async.Op.tensor { desc, build, group := some .bulk })
   | _ => throw "cp.async.bulk.tensor between these spaces is not modelled yet"
 
 /-- `cp.reduce.async.bulk.tensor.dim.global.shared::cta.redOp.tile.bulk_group [tensorMap,
 coords], [srcMem]` (§9.7.10.28.5.4): each element of the shared box reduced into the tensor in
-global memory, the element type the tensor map's, in the bulk group. -/
+global memory, the element type the tensor map's, in the bulk group; `.tile::scatter4`, the four
+rows of the box into the four rows its coordinates name, as `cpAsyncBulkTensor` stores them. -/
 def cpReduceAsyncBulkTensor : X (Effect Thread) := do
   let i := pi.i
   if i.has .im2colNoOffs || i.has .im2colNoOffsW then throw "this load mode is not modelled yet"
@@ -335,7 +339,8 @@ def cpReduceAsyncBulkTensor : X (Effect Thread) := do
       let some aty := tensorRedType m.dtype (atomOp o)
         | throw s!".{repr o} on a {repr m.dtype} tensor is not one the ISA allows"
       let some eb := m.dtype.bytes? | throw "packed tensor types do not reduce"
-      let ps ← m.tile coords off.toNat
+      let ps ← if i.has .tileScatter4 then m.gather4 coords[0]! (coords.extract 1 5) off.toNat
+        else m.tile coords off.toNat
       return storeCopy (elementPieces eb ps) (at_ 0).1 (fun o => (at_ o).2) (.red (atomOp o) aty)
     return issue t (NV.Async.Op.tensor { desc, build, group := some .bulk })
   | _ => throw "cp.reduce.async.bulk.tensor goes from shared::cta to global"

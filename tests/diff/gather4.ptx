@@ -2,7 +2,10 @@
 // (buffer 1, map parameter 2: a box of 16 columns by one row, 128-byte swizzled), rows 9, 2, 14 and
 // 5 from column 0, as one tile (four rows 128 bytes apart, the swizzle's span), compared between
 // the PTX interpreter and the SASS simulator (Tests/SassDiff.lean); then thread t writes the
-// tile's words t, t + 32, t + 64 and t + 96 to the same places of out.
+// tile's words t, t + 32, t + 64 and t + 96 to the same places of out. `scatter4`, the store in
+// .tile::scatter4 mode (UTMASTG.2D.SCATTER4): thread t writes in's words t, t + 32, t + 64 and
+// t + 96 to the same places of the tile, which goes to rows 9, 2, 14 and 5 of the tensor (out, the
+// map's global address); the other rows keep out's words.
 .version 9.0
 .target sm_100a
 .address_size 64
@@ -47,5 +50,45 @@ wait:
   st.global.u32 [rd+256], x;
   ld.shared.u32 x, [o+384];
   st.global.u32 [rd+384], x;
+  ret;
+}
+
+.visible .entry scatter4(.param .u64 out, .param .u64 in, .param .align 64 .b8 map[128])
+{
+  .shared .align 1024 .b32 tile[128];
+  .reg .pred p;
+  .reg .b32 t, ta, o, x, c, r0, r1, r2, r3;
+  .reg .b64 d, rd, ib, mp;
+  ld.param.u64 ib, [in];
+  cvta.to.global.u64 ib, ib;
+  mov.u64 mp, map;
+  cvta.param.u64 mp, mp;
+  mov.u32 t, %tid.x;
+  mov.u32 ta, tile;
+  shl.b32 o, t, 2;
+  add.u32 o, ta, o;
+  mul.wide.u32 d, t, 4;
+  add.s64 rd, ib, d;
+  ld.global.u32 x, [rd];
+  st.shared.u32 [o], x;
+  ld.global.u32 x, [rd+128];
+  st.shared.u32 [o+128], x;
+  ld.global.u32 x, [rd+256];
+  st.shared.u32 [o+256], x;
+  ld.global.u32 x, [rd+384];
+  st.shared.u32 [o+384], x;
+  fence.proxy.async.shared::cta;
+  bar.sync 0;
+  setp.eq.u32 p, t, 0;
+  @!p bra done;
+  mov.u32 c, 0;
+  mov.u32 r0, 9;
+  mov.u32 r1, 2;
+  mov.u32 r2, 14;
+  mov.u32 r3, 5;
+  cp.async.bulk.tensor.2d.global.shared::cta.tile::scatter4.bulk_group [mp, {c, r0, r1, r2, r3}], [ta];
+  cp.async.bulk.commit_group;
+  cp.async.bulk.wait_group 0;
+done:
   ret;
 }

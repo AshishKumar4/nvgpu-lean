@@ -312,17 +312,17 @@ def utma (k : Kernel) (env : Env) (w : View) (i : Instr) : Except String Op := d
   if load && i.hasMod "MULTICAST" && ranks.isNone then throw "MULTICAST without a CTA mask operand"
   let smem := (w.getUR a).toUInt64
   let c0 := if load then a + 2 else a + 1
-  -- `.GATHER4` (PTX `.tile::gather4`): five coordinates, the
-  -- column then the four rows (§9.7.10.28.5.3).
-  let gather := load && i.hasMod "GATHER4"
-  let coords := (Array.range (if gather then 5 else n)).map fun j => (w.getUR (c0 + j)).toInt32.toInt
+  -- `.GATHER4` (PTX `.tile::gather4`) and the store's `.SCATTER4` (`.tile::scatter4`): five
+  -- coordinates, the column then the four rows (§9.7.10.28.5.3).
+  let fourRows := if load then i.hasMod "GATHER4" else i.hasMod "SCATTER4"
+  let coords := (Array.range (if fourRows then 5 else n)).map fun j => (w.getUR (c0 + j)).toInt32.toInt
   let mapAddr := ur64 w b
   let mk (m : TensorMap) : Except String Copy := do
     if im2col != m.im2col.isSome then throw "the copy's mode is not the tensor map's"
     let ps ← if im2col then m.im2colTile coords offsets (smem % (1 <<< 24)).toNat
-      else if gather then m.gather4 coords[0]! (coords.extract 1 5) (smem % (1 <<< 24)).toNat
+      else if fourRows then m.gather4 coords[0]! (coords.extract 1 5) (smem % (1 <<< 24)).toNat
       else m.tile coords (smem % (1 <<< 24)).toNat
-    let bytes := if gather then 4 * m.boxBytes else m.boxBytes
+    let bytes := if fourRows then 4 * m.boxBytes else m.boxBytes
     if load then
       match ranks with
       | some rs =>

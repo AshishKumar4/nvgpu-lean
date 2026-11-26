@@ -225,6 +225,15 @@ def cases : List Case := [
     forms := ["UTMALDG.2D.GATHER4"], formTargets := ["sm_100a"],
     skipOn := [("sm_80", "no TMA before sm_90"), ("sm_90a", ".tile::gather4 requires sm_100a"),
                ("sm_120a", ".tile::gather4 requires sm_100a")] },
+  { file := "tests/diff/gather4.ptx", kernel := "scatter4", threads := 32,
+    bufs := [words 17 256, words 13 128],
+    extra := [(NV.Async.TensorMap.encode
+      { dtype := .f32, rank := 2, globalAddress := Tests.base, globalDim := #v[16, 16, 1, 1, 1],
+        globalStrides := #v[64, 0, 0, 0], boxDim := #v[16, 1, 1, 1, 1],
+        elementStrides := #v[1, 1, 1, 1, 1], swizzle := .b128 }).data.toList],
+    forms := ["UTMASTG.2D.SCATTER4"], formTargets := ["sm_100a"],
+    skipOn := [("sm_80", "no TMA before sm_90"), ("sm_90a", ".tile::scatter4 requires sm_100a"),
+               ("sm_120a", ".tile::scatter4 requires sm_100a")] },
   { file := "tests/diff/tmamc.ptx", kernel := "tmamc", grid := 2, cluster := 2, threads := 32,
     bufs := [Array.replicate 512 0, words 11 256],
     extra := [(NV.Async.TensorMap.encode

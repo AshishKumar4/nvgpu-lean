@@ -394,10 +394,11 @@ def formFootprint (i : Instr) : Footprint :=
       -- mbarrier and n coordinates from URa, `UTMASTG`/`UTMAREDG` the shared address and the
       -- coordinates, the tensor map's address pair from URb; `UBLKCP`/`UBLKRED [URa], [URb], URc`
       -- pairs and a size. A further operand (im2col offsets, a multicast mask) is one register.
-      -- `UTMALDG.2D.GATHER4` reads five coordinates, the column and four rows.
+      -- `UTMALDG.2D.GATHER4` and `UTMASTG.2D.SCATTER4` read five coordinates, the column and
+      -- four rows.
       let first : Nat := match op, AsyncSem.dims i with
         | "TMALDG", some n => 2 + (if has "GATHER4" then 5 else n)
-        | "TMASTG", some n | "TMAREDG", some n => 1 + n
+        | "TMASTG", some n | "TMAREDG", some n => 1 + (if has "SCATTER4" then 5 else n)
         | "TMALDG", none | "TMASTG", none | "TMAREDG", none => 7
         | _, _ => 2
       { reads := (List.range nOps).foldl (fun acc n => acc ++ match o n with
