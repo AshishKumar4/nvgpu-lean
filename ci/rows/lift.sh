@@ -11,9 +11,9 @@ export_on() { # gpu spec...
   gpu=$1; shift
   for n in "$@"; do lake exe sim "examples/specs/$n.json" --gpu "$gpu" --functional --export "$out/$gpu/$n"; done
 }
-export_on h100 axpy reduce reduce_grid gemm_tma_wgmma wgmma_kinds cluster_dsmem tma_multicast special rounding mma_sync control welford
+export_on h100 axpy reduce reduce_grid gemm_tma_wgmma wgmma_kinds cluster_dsmem tma_multicast special rounding mma_sync control welford intminmax
 export_on a100-40 axpy reduce reduce_grid special rounding mma_sync control welford
-export_on b200 axpy reduce tcgen05_gemm tcgen05_pair tcgen05_pair128 tcgen05_ws tcgen05_sp tcgen05_kinds special rounding mma_sync control welford
+export_on b200 axpy reduce tcgen05_gemm tcgen05_pair tcgen05_pair128 tcgen05_ws tcgen05_sp tcgen05_kinds special rounding mma_sync control welford intminmax
 sh tools/lift/check.sh --objects --arch sm_80,sm_90a "$out"
 if [ -n "${ARMADA_ARTIFACTS:-}" ]; then
   find "$out" -name '*.o' -delete

@@ -1,0 +1,5 @@
+{ "code": "intminmax.cu", "function": "intminmax", "grid": [16], "block": [256],
+  "buffers": [
+    { "name": "x", "bytes": 32768, "init": { "gen": "iota", "dtype": "u32", "start": 2147483000, "step": 2654435761 } },
+    { "name": "y", "bytes": 163840 } ],
+  "params": [ { "ordinal": 0, "ptr": "x" }, { "ordinal": 1, "ptr": "y" }, { "ordinal": 2, "s32": 4096 } ] }

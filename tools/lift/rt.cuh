@@ -662,7 +662,8 @@ __device__ __forceinline__ uint32_t descAddr(uint64_t desc, bool kMajor, int mn,
   uint32_t start = (uint32_t)(desc & 0x3fff) << 4;
   uint32_t lbo = (uint32_t)((desc >> 16) & 0x3fff) << 4;
   uint32_t sbo = (uint32_t)((desc >> 32) & 0x3fff) << 4;
-  if ((desc >> 49) & 7) atomicOr(fault, 2u);  // a non-zero matrix base offset is not modelled
+  // A base offset b counts the swizzle's lines from b lines before the address (`Desc.addr`).
+  const uint32_t shift = 128u * ((8u - (uint32_t)((desc >> 49) & 7)) % 8u);
   int mode = (int)((desc >> 62) & 3);
   uint32_t W = mode == 0 ? 0 : mode == 1 ? 128 : mode == 2 ? 64 : 32;
   const uint32_t T = 16 / esz;
@@ -677,7 +678,7 @@ __device__ __forceinline__ uint32_t descAddr(uint64_t desc, bool kMajor, int mn,
       off = (mn % T) * esz + ((mn / T) % w) * 16 + (mn / (T * w)) * lbo + (k % 8) * W + (k / 8) * sbo;
     }
   }
-  return descSwizzle(mode, start + off);
+  return descSwizzle(mode, start + off + shift) - shift;
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -610,7 +610,13 @@ def f_imad(i):
 
 @form("VIADD")
 def f_viadd(i):
-    ops = i["ops"]
+    # `VIADD.S32.ISAT` (`NV.SASS.Sem`): the signed sum clamped to the 32-bit range.
+    ops, mods = i["ops"], i["mods"]
+    if mods == ["S32", "ISAT"]:
+        s = f"(int64_t)(int32_t){val(ops[1])} + (int64_t)(int32_t){val(ops[2])}"
+        return wr(ops[0], f"(uint32_t)(int32_t)max((int64_t)INT32_MIN, min((int64_t)INT32_MAX, {s}))")
+    if mods:
+        raise Lift(f"VIADD {mods}")
     return wr(ops[0], f"{val(ops[1])} + {val(ops[2])}")
 
 
@@ -1260,15 +1266,36 @@ def f_viaddmnmx(i):
 def f_vimnmx(i):
     # `[V]IMNMX[.U32] Rd, a, b, P` (`IMNMX` before sm_90) and sm_100a's `VIMNMX[.U32] Rd, PT, PT,
     # a, b, P` (`NV.SASS.Sem`): the minimum when P holds, else the maximum.
+    # Packed forms (`.U16x2`, `.S16x2`, `.U8x4`, `.S8x4`) lane by lane; `.RELU` clamps each lane's
+    # result, or the word, at zero.
     ops, mods = i["ops"], i["mods"]
-    if [m for m in mods if m not in ("U32", "S32")]:
+    packed = {"U16x2": (16, False), "S16x2": (16, True), "U8x4": (8, False), "S8x4": (8, True)}
+    if [m for m in mods if m not in ("U32", "S32", "RELU") and m not in packed]:
         raise Lift(f"{i['op']} {mods}")
     k = 2 if len(ops) == 6 else 0
     if k and not (all(ops[j]["k"] == "reg" and ops[j]["r"]["f"] == "p" and ops[j]["r"]["i"] == 7 and not ops[j]["not"] for j in (1, 2))):
         raise Lift("VIMNMX leading predicates other than PT")
+    relu = "RELU" in mods
+    lane = next((packed[m] for m in mods if m in packed), None)
+    if lane:
+        w, sgn = lane
+        t = ("int16_t" if w == 16 else "int8_t") if sgn else ("uint16_t" if w == 16 else "uint8_t")
+        lanes = 32 // w
+        parts = []
+        for j in range(lanes):
+            x, y = f"({t})(_a >> {w * j})", f"({t})(_b >> {w * j})"
+            m = f"(_p ? min((int32_t){x}, (int32_t){y}) : max((int32_t){x}, (int32_t){y}))"
+            if relu:
+                m = f"max(0, {m})"
+            parts.append(f"(((uint32_t){m} & {(1 << w) - 1}u) << {w * j})")
+        return (f"{{ const uint32_t _a = {val(ops[1 + k])}, _b = {val(ops[2 + k])}; const bool _p = {pred(ops[3 + k])}; "
+                f"{wr(ops[0], ' | '.join(parts))} }}")
     t = "uint32_t" if "U32" in mods else "int32_t"
     a, b = f"({t}){val(ops[1 + k])}", f"({t}){val(ops[2 + k])}"
-    return wr(ops[0], f"(uint32_t)({pred(ops[3 + k])} ? min({a}, {b}) : max({a}, {b}))")
+    r = f"({pred(ops[3 + k])} ? min({a}, {b}) : max({a}, {b}))"
+    if relu:
+        r = f"max((int32_t)0, (int32_t){r})"
+    return wr(ops[0], f"(uint32_t){r}")
 
 
 @form("IABS")
