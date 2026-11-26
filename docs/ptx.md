@@ -46,7 +46,7 @@ operand. `Thread.step : Env → Thread → Effect Thread` executes one instructi
 | `cvt.pack.sat`; `createpolicy` (a constant: caches are not thread state) | `next` |
 | `alloca`, `stacksave`, `stackrestore`: a stack pointer per frame over a 1 KB stack above the `.local` variables (the runtime's default `cudaLimitStackSize`), freed on return; overflow faults | `next` |
 | `st.bulk` (sm_100+; `sm_120a`): shared memory zeroed 256 bytes a step | `mem` steps |
-| `tex.{1d,2d,3d,a1d,a2d,cube,acube}`, `tld4`, `txq`, `istypep`, `suld.b`, `sust.b`, `sured.b` (with `.a1d`, `.a2d`), `suq` on the launch's texture and surface objects (`NV.Tex`, `Launch.textures`: handle `i + 1` names entry `i`): one load of every texel a fetch combines, then the CUDA Programming Guide's addressing and filtering (9-bit fixed-point weights, combined as a GH200 combines them; what it leaves open is marked inferred in `NV/Machine/Texture.lean`), and `tex.level` from mipmapped textures | `mem` |
+| `tex.{1d,2d,3d,a1d,a2d,cube,acube}`, `tld4`, `txq`, `istypep`, `suld.b`, `sust.b`, `sured.b` (with `.a1d`, `.a2d`), `suq` on the launch's texture and surface objects (`NV.Tex`, `Launch.textures`: handle `i + 1` names entry `i`): one load of every texel a fetch combines, then the CUDA Programming Guide's addressing and filtering (9-bit fixed-point weights, combined as a GH200 combines them; what it leaves open is marked inferred in `NV/Machine/Texture.lean`, among it the rounding of floats filtered across many binades and of binary16 sums), and `tex.level` from mipmapped textures | `mem` |
 
 Undefined behaviour (integer division by zero, misaligned or unmapped accesses, `fns` base above
 31, a shuffle reading a non-participating lane) is a `fault`, never a chosen value.

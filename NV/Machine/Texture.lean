@@ -762,14 +762,26 @@ def toF32 (num : Int) (den : Nat) (e : Int) : UInt32 :=
   let sticky := a % den != 0
   (Format.f32.round .rna .ieee neg q (e - 60) sticky).toUInt32
 
+/-- `num / den · 2^e` rounded to nearest binary16, ties to even, as binary32 bits. -/
+def toF16F32 (num : Int) (den : Nat) (e : Int) : UInt32 :=
+  if num == 0 || den == 0 then 0 else
+  let neg := num < 0
+  let a := num.natAbs * 2 ^ 60
+  let h := Format.f16.round .rn .ieee neg (a / den) (e - 60) (a % den != 0)
+  (cvt Format.f16 Format.f32 .rn {} h).toUInt32
+
 /-- The four result words of a fetch from the texels of its footprint (`resp`: each texel's
 words, `texelBytes` rounded up to words, in footprint order) and their weights. Floats and
 normalized integers: each channel the weighted sum computed exactly and rounded once to binary32,
-ties away from zero, an unsigned normalized sum first rounded half up to 16-bit unsigned
-normalized (an A100 and a GH200 on every one of 4,096 fetches of 8- and 16-bit texels and of
-blends of levels) (a GH200's linear filtering in one and two dimensions and between levels of
-linearly filtered mipmaps, and its and an A100's blends of point-sampled levels); a border texel
-reads the border colour (`borderVal`). Integers read as they are (point sampling only): the texel's
+ties away from zero (a GH200's linear filtering in one and two dimensions and between levels of
+linearly filtered mipmaps, and its and an A100's blends of point-sampled levels, of texels within a
+few binades); an unsigned normalized sum first rounded half up to 16-bit unsigned normalized (an
+A100 and a GH200 on every one of 4,096 fetches of 8- and 16-bit texels, block-compressed ones and
+blends of levels); a binary16 texture's sum rounded to binary16, which an A100's and a GH200's
+always are (inferred: 88% of channels of random halves across their range agree, 92% of BC6H's;
+the rest differ by an ulp). Binary32 texels spread over many binades agree on 94% of channels,
+those that do not by 1 to 4 ulps, more under cancellation: the GPUs' accumulator is not modelled.
+A border texel reads the border colour (`borderVal`). Integers read as they are (point sampling only): the texel's
 channels, sign-extended. A texel's missing channels read as zero (inferred). -/
 def combine (t : Texture) (fp : List (Option Texel × Nat)) (resp : Array UInt32) : Array UInt32 :=
   let wpt := (t.texelBytes + 3) / 4
@@ -821,6 +833,9 @@ def combine (t : Texture) (fp : List (Option Texel × Nat)) (resp : Array UInt32
           let all : Int := (den * wsum : Nat)
           let q := Int.fdiv (2 * num * 65535 + all) (2 * all)
           toF32 q 65535 0
+        -- Binary16 texels (and BC6H's): the sum rounded to binary16 (inferred, `combine`).
+        else if t.kind == .float && (w == 16 || t.bc == 6) then
+          toF16F32 num (den * wsum) emin
         else toF32 num (den * wsum) emin
 
 /-- The result of a `tld4` (gather) of component `c`: that component of the four texels of the
