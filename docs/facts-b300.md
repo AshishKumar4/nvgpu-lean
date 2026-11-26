@@ -95,16 +95,16 @@ The role column says who reads a fact (`NV/Core/Roles.lean`): only `engine` fact
 | `HMUL2` | fp16, every 2, latency 5 | encoded | engine | `fixtures`  |  |
 | `HADD2` | fp16, every 2, latency 5 | encoded | engine | `fixtures`  |  |
 | `DFMA` | fp64, every 2, latency 7 | documented | engine | `cuda-guide-12.6` §5.4.1 Table 4: 64 results per clock per SM |  |
-| `F2I` | xu, every 8, latency 13 | inferred | engine | `cuda-guide-12.6` §5.4.1 Table 4: 16 results per clock per SM |  |
-| `I2F` | xu, every 8, latency 13 | inferred | engine | `cuda-guide-12.6` §5.4.1 Table 4: 16 results per clock per SM |  |
-| `F2F` | xu, every 8, latency 13 | inferred | engine | `cuda-guide-12.6` §5.4.1 Table 4: 16 results per clock per SM |  |
-| `FRND` | xu, every 8, latency 13 | inferred | engine | `cuda-guide-12.6` §5.4.1 Table 4: 16 results per clock per SM |  |
-| `I2I` | alu, every 2, latency 4 | inferred | engine | `cuda-guide-12.6` §5.4.1 Table 4: 64 results per clock per SM |  |
+| `F2I` | xu, every 8, latency 17 | inferred (GH200) | engine | `meas-gh200`  |  |
+| `I2F` | xu, every 8, latency 17 | inferred (GH200) | engine | `meas-gh200`  |  |
+| `F2F` | xu, every 8, latency 17 | inferred (GH200) | engine | `meas-gh200`  |  |
+| `FRND` | xu, every 8, latency 17 | inferred (GH200) | engine | `meas-gh200`  |  |
+| `I2I` | alu, every 2, latency 4 | inferred (GH200) | engine | `meas-gh200`  |  |
 | `HSETP2` | fp16, every 2, latency 5 | inferred | engine | `cuda-guide-12.6` §5.4.1 Table 4: 256 results per clock per SM |  |
 | `HSET2` | fp16, every 2, latency 5 | inferred | engine | `cuda-guide-12.6` §5.4.1 Table 4: 256 results per clock per SM |  |
-| `I2IP` | alu, every 2, latency 4 | inferred | engine | `cuda-guide-12.6` §5.4.1 Table 4: 64 results per clock per SM |  |
+| `I2IP` | alu, every 2, latency 4 | inferred (GH200) | engine | `meas-gh200`  |  |
 | `F2IP` | alu, every 2, latency 4 | inferred | engine | `cuda-guide-12.6` §5.4.1 Table 4: 64 results per clock per SM |  |
-| `IDP` | fmaheavy, every 2, latency 4 | inferred | engine | `analogy`  |  |
+| `IDP` | fmaheavy, every 2, latency 4 | inferred (GH200) | engine | `meas-gh200`  |  |
 | `VABSDIFF4` | alu, every 2, latency 4 | documented | engine | `cuda-guide-12.6` §5.4.1 Table 4: 64 results per clock per SM |  |
 | `VABSDIFF` | alu, every 2, latency 4 | documented | engine | `cuda-guide-12.6` §5.4.1 Table 4: 64 results per clock per SM |  |
 | `DADD` | fp64, every 2, latency 6 | encoded | engine | `fixtures`  |  |
@@ -155,7 +155,7 @@ The role column says who reads a fact (`NV/Core/Roles.lean`): only `engine` fact
 | `STS.128` | lsu, every 1, reads released at 18 | inferred (Ampere) | engine | `huerta2025` Table 2: 128-bit shared store, WAR 18 |  |
 | `STS.64` | lsu, every 1, reads released at 14 | inferred (Ampere) | engine | `huerta2025` Table 2: 64-bit shared store, WAR 14 |  |
 | `STS` | lsu, every 1, reads released at 12 | inferred (Ampere) | engine | `huerta2025` Table 2: 32-bit shared store, WAR 12 |  |
-| `VIADDMNMX` | alu, every 2, latency 4 | inferred | engine | `cuda-guide-12.6` §5.4.1 Table 4: 64 results per clock per SM |  |
+| `VIADDMNMX` | alu, every 2, latency 4 | inferred (GH200) | engine | `meas-gh200`  |  |
 | `PLOP3` | alu, every 2, latency 2 | inferred | engine | `cuda-guide-12.6` §5.4.1 Table 4: 64 results per clock per SM |  |
 | `VOTE` | alu, every 2, latency 4 | documented | engine | `cuda-guide-12.6` §5.4.1 Table 4: 64 results per clock per SM |  |
 | `VOTEU` | uniform, every 2, latency 1 | inferred | engine | `cuda-guide-12.6` §5.4.1 Table 4: 64 results per clock per SM |  |
@@ -184,10 +184,10 @@ The role column says who reads a fact (`NV/Core/Roles.lean`): only `engine` fact
 | `SEL` | alu, every 2, latency 4 | encoded | engine | `fixtures`  |  |
 | `IMNMX` | alu, every 2, latency 4 | documented | engine | `cuda-guide-12.6` §5.4.1 Table 4: 64 results per clock per SM |  |
 | `VIMNMX` | alu, every 2, latency 4 | documented | engine | `cuda-guide-12.6` §5.4.1 Table 4: 64 results per clock per SM |  |
-| `VIMNMX3` | alu, every 2, latency 4 | inferred | engine | `cuda-guide-12.6` §5.4.1 Table 4: 64 results per clock per SM |  |
-| `SGXT` | alu, every 2, latency 4 | inferred | engine | `analogy`  |  |
+| `VIMNMX3` | alu, every 2, latency 4 | inferred (GH200) | engine | `meas-gh200`  |  |
+| `SGXT` | alu, every 2, latency 4 | inferred (GH200) | engine | `meas-gh200`  |  |
 | `USGXT` | uniform, every 2, latency 4 | inferred | engine | `analogy`  |  |
-| `BMSK` | alu, every 2, latency 4 | inferred | engine | `analogy`  |  |
+| `BMSK` | alu, every 2, latency 4 | inferred (GH200) | engine | `meas-gh200`  |  |
 | `IABS` | alu, every 2, latency 4 | inferred | engine | `cuda-guide-12.6` §5.4.1 Table 4: 64 results per clock per SM |  |
 | `I2FP` | alu, every 2, latency 4 | encoded | engine | `fixtures`  |  |
 | `P2R` | alu, every 2, latency 4 | inferred | engine | `analogy`  |  |
@@ -222,6 +222,7 @@ The role column says who reads a fact (`NV/Core/Roles.lean`): only `engine` fact
 | `BSSY` | cbu, every 1 | inferred | engine | `analogy`  |  |
 | `BSYNC` | cbu, every 1 | inferred | engine | `analogy`  |  |
 | `WARPSYNC` | cbu, every 1 | inferred | engine | `analogy`  |  |
+| `ENDCOLLECTIVE` | cbu, every 1 | inferred | engine | `analogy`  |  |
 | `MEMBAR` | cbu, every 1 | inferred | engine | `analogy`  |  |
 | `ERRBAR` | cbu, every 1 | inferred | engine | `analogy`  |  |
 | `CGAERRBAR` | cbu, every 1 | inferred | engine | `analogy`  |  |
@@ -259,7 +260,7 @@ The role column says who reads a fact (`NV/Core/Roles.lean`): only `engine` fact
 | `ST` | lsu, every 1, reads released at 14 | inferred (Ampere) | engine | `huerta2025` Table 2: 32-bit global store, WAR 14 |  |
 | `LDCU` | lsu, every 2, latency 26, reads released at 10 | inferred (Ampere) | engine | `huerta2025` Table 2: 32-bit constant load, immediate address: RAW 26, WAR 10 |  |
 | `CS2UR` | cbu, every 1, latency 36 | inferred | engine | `meas-gh200`  |  |
-| `UI2F` | xu, every 8, latency 13 | inferred | engine | `cuda-guide-12.6` §5.4.1 Table 4: 16 results per clock per SM |  |
+| `UI2F` | xu, every 8, latency 17 | inferred (GH200) | engine | `meas-gh200`  |  |
 | `IADD` | alu, every 2, latency 4 | inferred | engine | `cuda-guide-12.6` §5.4.1 Table 4: 64 results per clock per SM |  |
 | `UFMUL` | fmalite, every 1, latency 4 | inferred | engine | `cuda-guide-12.6` §5.4.1 Table 4: 128 results per clock per SM |  |
 | `UFSEL` | uniform, every 2, latency 4 | inferred | engine | `fixtures`  |  |
@@ -267,7 +268,6 @@ The role column says who reads a fact (`NV/Core/Roles.lean`): only `engine` fact
 | `QMMA` | tensor, every 6, latency 16 | inferred | engine | `fixtures`  |  |
 | `OMMA` | tensor, every 6, latency 16 | inferred | engine | `fixtures`  |  |
 | `UVIMNMX` | uniform, every 2, latency 4 | inferred | engine | `analogy`  |  |
-| `ENDCOLLECTIVE` | cbu, every 1 | inferred | engine | `fixtures`  |  |
 | `UP2UR` | uniform, every 2, latency 4 | inferred (H200) | engine | `meas-h200`  |  |
 | `FADD2` | fmalite, every 1, latency 4 | inferred | engine | `cuda-guide-12.6` §5.4.1 Table 4: 128 results per clock per SM |  |
 | `FMUL2` | fmalite, every 1, latency 4 | inferred | engine | `cuda-guide-12.6` §5.4.1 Table 4: 128 results per clock per SM |  |

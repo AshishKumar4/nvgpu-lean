@@ -112,12 +112,11 @@ private def retime (r : OpRule) : OpRule :=
 
 /-- Opcodes Blackwell (`sm_100a`, `sm_120a`) has and `sm_90a` does not, each in the class of its
 `sm_90a` counterpart (the uniform datapath's forms of vector instructions; LDCU, a constant load
-into a uniform register, as LDC; QMMA and OMMA, the FP8/FP6 and FP4 warp MMAs, as HMMA), and
-issue-only control. -/
+into a uniform register, as LDC; QMMA and OMMA, the FP8/FP6 and FP4 warp MMAs, as HMMA). -/
 private def analogues : List (String × String) :=
   [("LDCU", "LDC"), ("CS2UR", "S2UR"), ("UI2F", "I2F"), ("IADD", "IADD3"), ("UFMUL", "FMUL"),
    ("UFSEL", "USEL"), ("UFSETP", "UISETP"), ("QMMA", "HMMA"), ("OMMA", "HMMA"),
-   ("UVIMNMX", "UIMNMX"), ("ENDCOLLECTIVE", "NOP"), ("UP2UR", "ULOP3"),
+   ("UVIMNMX", "UIMNMX"), ("UP2UR", "ULOP3"),
    ("FADD2", "FADD"), ("FMUL2", "FMUL"), ("FFMA2", "FFMA")]
 
 def added : Array OpRule :=

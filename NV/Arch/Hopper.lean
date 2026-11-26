@@ -197,21 +197,32 @@ def ops : Array OpRule := #[
   op "HADD2" #[] (encoded (tm .fp16 2 5) ""),
   op "DFMA" #[] (doc (tm .fp64 2 7) "cuda-guide-12.6" (thr 64)
     ""),
-  op "F2I" #[] (inferred (tm .xu 8 13) "cuda-guide-12.6" (thr 16)
-    ""),
-  op "I2F" #[] (inferred (tm .xu 8 13) "cuda-guide-12.6" (thr 16) ""),
-  op "F2F" #[] (inferred (tm .xu 8 13) "cuda-guide-12.6" (thr 16) ""),
-  op "FRND" #[] (inferred (tm .xu 8 13) "cuda-guide-12.6" (thr 16) ""),
-  op "I2I" #[] (inferred (tm .alu 2 4) "cuda-guide-12.6" (thr 64)
-    ""),
+  op "F2I" #[] (inferred (tm .xu 8 17) "meas-gh200" ""
+    ""
+    (some "GH200")),
+  op "I2F" #[] (inferred (tm .xu 8 17) "meas-gh200" ""
+    ""
+    (some "GH200")),
+  op "F2F" #[] (inferred (tm .xu 8 17) "meas-gh200" ""
+    ""
+    (some "GH200")),
+  op "FRND" #[] (inferred (tm .xu 8 17) "meas-gh200" ""
+    ""
+    (some "GH200")),
+  op "I2I" #[] (inferred (tm .alu 2 4) "meas-gh200" ""
+    ""
+    (some "GH200")),
   op "HSETP2" #[] (inferred (tm .fp16 2 5) "cuda-guide-12.6" (thr 256) ""),
   op "HSET2" #[] (inferred (tm .fp16 2 5) "cuda-guide-12.6" (thr 256)
     ""),
-  op "I2IP" #[] (inferred (tm .alu 2 4) "cuda-guide-12.6" (thr 64) ""),
+  op "I2IP" #[] (inferred (tm .alu 2 4) "meas-gh200" ""
+    ""
+    (some "GH200")),
   op "F2IP" #[] (inferred (tm .alu 2 4) "cuda-guide-12.6" (thr 64)
     ""),
-  op "IDP" #[] (inferred (tm .fmaHeavy 2 4) "analogy" ""
-    ""),
+  op "IDP" #[] (inferred (tm .fmaHeavy 2 4) "meas-gh200" ""
+    ""
+    (some "GH200")),
   op "VABSDIFF4" #[] (doc (tm .alu 2 4) "cuda-guide-12.6" (thr 64) ""),
   op "VABSDIFF" #[] (doc (tm .alu 2 4) "cuda-guide-12.6" (thr 64) ""),
   op "DADD" #[] (encoded (tm .fp64 2 6) ""
@@ -302,8 +313,9 @@ def ops : Array OpRule := #[
     "" (some "Ampere")),
   op "STS" #[] (inferred (tmMem 0 12) "huerta2025" "Table 2: 32-bit shared store, WAR 12"
     "" (some "Ampere")),
-  op "VIADDMNMX" #[] (inferred (tm .alu 2 4) "cuda-guide-12.6" (thr 64)
-    ""),
+  op "VIADDMNMX" #[] (inferred (tm .alu 2 4) "meas-gh200" ""
+    ""
+    (some "GH200")),
   op "PLOP3" #[] (inferred (tm .alu 2 2) "cuda-guide-12.6" (thr 64)
     ""),
   op "VOTE" #[] (doc (tm .alu 2 4) "cuda-guide-12.6" (thr 64)
@@ -342,13 +354,16 @@ def ops : Array OpRule := #[
   op "IMNMX" #[] (doc (tm .alu 2 4) "cuda-guide-12.6" (thr 64) ""),
   op "VIMNMX" #[] (doc (tm .alu 2 4) "cuda-guide-12.6" (thr 64)
     ""),
-  op "VIMNMX3" #[] (inferred (tm .alu 2 4) "cuda-guide-12.6" (thr 64)
-    ""),
-  op "SGXT" #[] (inferred (tm .alu 2 4) "analogy" ""
-    ""),
+  op "VIMNMX3" #[] (inferred (tm .alu 2 4) "meas-gh200" ""
+    ""
+    (some "GH200")),
+  op "SGXT" #[] (inferred (tm .alu 2 4) "meas-gh200" ""
+    ""
+    (some "GH200")),
   op "USGXT" #[] (inferred (tm .uniform 2 4) "analogy" "" ""),
-  op "BMSK" #[] (inferred (tm .alu 2 4) "analogy" ""
-    ""),
+  op "BMSK" #[] (inferred (tm .alu 2 4) "meas-gh200" ""
+    ""
+    (some "GH200")),
   op "IABS" #[] (inferred (tm .alu 2 4) "cuda-guide-12.6" (thr 64)
     ""),
   op "I2FP" #[] (encoded (tm .alu 2 4) ""
@@ -391,7 +406,7 @@ def ops : Array OpRule := #[
   op "BRX" #[] (encoded (tm .cbu 1 0) "" ""),
   op "BRXU" #[] (inferred (tm .cbu 1 0) "analogy" ""
     ""),
-  issueOnly "BSSY", issueOnly "BSYNC", issueOnly "WARPSYNC", issueOnly "MEMBAR",
+  issueOnly "BSSY", issueOnly "BSYNC", issueOnly "WARPSYNC", issueOnly "ENDCOLLECTIVE", issueOnly "MEMBAR",
   issueOnly "ERRBAR", issueOnly "CGAERRBAR", issueOnly "CCTL",
   op "BRA" #[] (encoded (tm .cbu 1 0) ""),
   op "EXIT" #[] (encoded (tm .cbu 1 0) ""),

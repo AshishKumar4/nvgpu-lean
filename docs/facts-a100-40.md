@@ -94,16 +94,16 @@ The role column says who reads a fact (`NV/Core/Roles.lean`): only `engine` fact
 | `HMUL2` | fp16, every 1, latency 5 | encoded | engine | `cuda-best-practices` §12.1.1 Table 5, compute capability 8.0: 16-bit floating-point add, multiply, multiply-add (2-way SIMD), 128 results per clock per SM |  |
 | `HADD2` | fp16, every 1, latency 5 | encoded | engine | `cuda-best-practices` §12.1.1 Table 5, compute capability 8.0: 16-bit floating-point add, multiply, multiply-add (2-way SIMD), 128 results per clock per SM |  |
 | `DFMA` | fp64, every 4, latency 7 | inferred | engine | `cuda-best-practices` §12.1.1 Table 5, compute capability 8.0: 64-bit floating-point add, multiply, multiply-add, 32 results per clock per SM |  |
-| `F2I` | xu, every 8, latency 13 | inferred | engine | `cuda-best-practices` §12.1.1 Table 5, compute capability 8.0: type conversions between 32-bit integer and 32-bit floating-point, 16 results per clock per SM |  |
-| `I2F` | xu, every 8, latency 13 | inferred | engine | `cuda-best-practices` §12.1.1 Table 5, compute capability 8.0: type conversions between 32-bit integer and 32-bit floating-point, 16 results per clock per SM |  |
-| `F2F` | xu, every 8, latency 13 | inferred | engine | `cuda-guide-12.6` §5.4.1 Table 4: 16 results per clock per SM |  |
-| `FRND` | xu, every 8, latency 13 | inferred | engine | `cuda-guide-12.6` §5.4.1 Table 4: 16 results per clock per SM |  |
-| `I2I` | alu, every 2, latency 4 | inferred | engine | `cuda-guide-12.6` §5.4.1 Table 4: 64 results per clock per SM |  |
+| `F2I` | xu, every 8, latency 17 | inferred (GH200) | engine | `cuda-best-practices` §12.1.1 Table 5, compute capability 8.0: type conversions between 32-bit integer and 32-bit floating-point, 16 results per clock per SM |  |
+| `I2F` | xu, every 8, latency 17 | inferred (GH200) | engine | `cuda-best-practices` §12.1.1 Table 5, compute capability 8.0: type conversions between 32-bit integer and 32-bit floating-point, 16 results per clock per SM |  |
+| `F2F` | xu, every 8, latency 17 | inferred (GH200) | engine | `meas-gh200`  |  |
+| `FRND` | xu, every 8, latency 17 | inferred (GH200) | engine | `meas-gh200`  |  |
+| `I2I` | alu, every 2, latency 4 | inferred (GH200) | engine | `meas-gh200`  |  |
 | `HSETP2` | fp16, every 2, latency 5 | inferred | engine | `cuda-guide-12.6` §5.4.1 Table 4: 256 results per clock per SM |  |
 | `HSET2` | fp16, every 2, latency 5 | inferred | engine | `cuda-guide-12.6` §5.4.1 Table 4: 256 results per clock per SM |  |
-| `I2IP` | alu, every 2, latency 4 | inferred | engine | `cuda-guide-12.6` §5.4.1 Table 4: 64 results per clock per SM |  |
+| `I2IP` | alu, every 2, latency 4 | inferred (GH200) | engine | `meas-gh200`  |  |
 | `F2IP` | alu, every 2, latency 4 | inferred | engine | `cuda-guide-12.6` §5.4.1 Table 4: 64 results per clock per SM |  |
-| `IDP` | fmaheavy, every 2, latency 4 | inferred | engine | `analogy`  |  |
+| `IDP` | fmaheavy, every 2, latency 4 | inferred (GH200) | engine | `meas-gh200`  |  |
 | `VABSDIFF4` | alu, every 2, latency 4 | inferred | engine | `cuda-guide-12.6` §5.4.1 Table 4: 64 results per clock per SM |  |
 | `VABSDIFF` | alu, every 2, latency 4 | inferred | engine | `cuda-guide-12.6` §5.4.1 Table 4: 64 results per clock per SM |  |
 | `DADD` | fp64, every 4, latency 6 | encoded | engine | `cuda-best-practices` §12.1.1 Table 5, compute capability 8.0: 64-bit floating-point add, multiply, multiply-add, 32 results per clock per SM |  |
@@ -165,9 +165,9 @@ The role column says who reads a fact (`NV/Core/Roles.lean`): only `engine` fact
 | `SEL` | alu, every 2, latency 4 | encoded | engine | `fixtures`  |  |
 | `IMNMX` | alu, every 2, latency 4 | inferred | engine | `cuda-best-practices` §12.1.1 Table 5, compute capability 8.0: 32-bit integer minimum, maximum, 64 results per clock per SM |  |
 | `VIMNMX` | alu, every 2, latency 4 | inferred | engine | `cuda-best-practices` §12.1.1 Table 5, compute capability 8.0: 32-bit integer minimum, maximum, 64 results per clock per SM |  |
-| `SGXT` | alu, every 2, latency 4 | inferred | engine | `analogy`  |  |
+| `SGXT` | alu, every 2, latency 4 | inferred (GH200) | engine | `meas-gh200`  |  |
 | `USGXT` | uniform, every 2, latency 4 | inferred | engine | `analogy`  |  |
-| `BMSK` | alu, every 2, latency 4 | inferred | engine | `analogy`  |  |
+| `BMSK` | alu, every 2, latency 4 | inferred (GH200) | engine | `meas-gh200`  |  |
 | `IABS` | alu, every 2, latency 4 | inferred | engine | `cuda-guide-12.6` §5.4.1 Table 4: 64 results per clock per SM |  |
 | `I2FP` | alu, every 8, latency 4 | encoded | engine | `cuda-best-practices` §12.1.1 Table 5, compute capability 8.0: type conversions between 32-bit integer and 32-bit floating-point, 16 results per clock per SM |  |
 | `P2R` | alu, every 2, latency 4 | inferred | engine | `analogy`  |  |

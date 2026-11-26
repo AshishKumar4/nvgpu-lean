@@ -123,7 +123,7 @@ private def encoded : List (String × Nat) := [
 private def hopperOnly (opcode : String) : Bool :=
   ["HGMMA", "QGMMA", "IGMMA", "BGMMA", "WARPGROUP", "UTMALDG", "UTMASTG", "UBLKCP", "UBLKRED", "UTMAPF",
    "UBLKPF", "UTMAREDG", "LDGMC", "UTMACMDFLUSH", "UCGABAR_ARV", "UCGABAR_WAIT", "SYNCS", "ELECT", "VIADDMNMX", "VIMNMX3",
-   "USETMAXREG", "ACQBULK", "FENCE"].contains opcode
+   "USETMAXREG", "ACQBULK", "FENCE", "ENDCOLLECTIVE"].contains opcode
 
 /-- A Hopper class on Ampere: the documented interval where compute capability 8.0 differs, and
 the Hopper latency, capped by `encoded`. -/

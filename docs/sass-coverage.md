@@ -368,7 +368,7 @@ the first form seen (or the bare opcode). Texture and surface opcodes beyond the
 | `CALL` | control | ✓ | ✓ | Call Function |
 | `CGAERRBAR` | control | ✓ | ✓ | CGA Error Barrier |
 | `ELECT` | control | ✓ | ✓ | Elect a Leader Thread |
-| `ENDCOLLECTIVE` | control | ✓ | — | Reset the MCOLLECTIVE mask |
+| `ENDCOLLECTIVE` | control | ✓ | ✓ | Reset the MCOLLECTIVE mask |
 | `EXIT` | control | ✓ | ✓ | Exit Program |
 | `JMP` | control | · | — | Absolute Jump |
 | `JMX` | control | · | — | Absolute Jump Indirect |
