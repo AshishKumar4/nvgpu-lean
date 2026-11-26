@@ -1,0 +1,40 @@
+// Masked bulk stores (sm_100a, `.cp_mask`), compared between the PTX interpreter and the SASS
+// simulator (Tests/SassDiff.lean): 64 threads fill 256 bytes of shared memory from in[], then
+// thread 0 stores them to out[0..64) with byte mask 0xa5c3, and their first 64 bytes, with an L2
+// cache hint, to out[64..80) with mask 0x0ff1. Bytes a mask leaves out keep out's 0xdeadbeef.
+.version 8.7
+.target sm_100a
+.address_size 64
+
+.visible .entry cpmask(.param .u64 out, .param .u64 in) {
+  .shared .align 128 .b32 buf[64];
+  .reg .pred p;
+  .reg .b16 m;
+  .reg .b32 t, x, sa;
+  .reg .b64 o, a, rd, pol;
+  ld.param.u64 o, [out]; ld.param.u64 a, [in];
+  cvta.to.global.u64 o, o; cvta.to.global.u64 a, a;
+  mov.u32 t, %tid.x;
+  mul.wide.u32 rd, t, 4;
+  add.s64 rd, a, rd;
+  mov.u32 sa, buf;
+  shl.b32 x, t, 2;
+  add.u32 sa, sa, x;
+  ld.global.u32 x, [rd];
+  st.shared.u32 [sa], x;
+  fence.proxy.async.shared::cta;
+  bar.sync 0;
+  setp.eq.u32 p, t, 0;
+  @!p bra done;
+  mov.u32 sa, buf;
+  mov.b16 m, 0xa5c3;
+  cp.async.bulk.global.shared::cta.bulk_group.cp_mask [o], [sa], 256, m;
+  createpolicy.fractional.L2::evict_last.b64 pol, 1.0;
+  mov.b16 m, 0x0ff1;
+  add.s64 o, o, 256;
+  cp.async.bulk.global.shared::cta.bulk_group.L2::cache_hint.cp_mask [o], [sa], 64, pol, m;
+  cp.async.bulk.commit_group;
+  cp.async.bulk.wait_group 0;
+done:
+  ret;
+}

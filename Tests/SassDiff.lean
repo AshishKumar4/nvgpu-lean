@@ -263,6 +263,10 @@ def cases : List Case := [
   { file := "tests/diff/v8.ptx", kernel := "v8", threads := 64, per := 16,
     bufs := [Array.replicate (64 * 16) 0, inputs edges32 (64 * 16)],
     forms := ["LDG.E.ENL2.256.CONSTANT", "LDG.E.ENL2.256", "STG.E.ENL2.256"], formTargets := ["sm_100a"] },
+  -- Masked bulk stores (sm_100a): only the bytes each mask selects, as one 16-byte pattern.
+  { file := "tests/diff/cpmask.ptx", kernel := "cpmask", threads := 64,
+    bufs := [Array.replicate 80 0xdeadbeef, inputs edges32 64],
+    forms := ["UBLKCP.G.S.DST_G_BYTE_MASK"], formTargets := ["sm_100a"] },
   -- The cluster's special registers, clusters of 3 CTAs (sm_100a: %clusterid through a table of
   -- reciprocals in constant bank 0).
   { file := "tests/diff/clusterid.ptx", kernel := "clusterid", grid := 12, cluster := 3, threads := 32,

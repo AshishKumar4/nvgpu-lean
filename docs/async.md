@@ -53,7 +53,7 @@ issued before its predecessor completed starts from the predecessor's result.
   | `cp.async.commit_group`, `wait_group n` | `LDGDEPBAR` (write counter SB0), `DEPBAR.LE SB0, n` |
   | `cp.async.mbarrier.arrive[.noinc]` | `[SYNCS.ARRIVE.TRANS64.RED.A0T1;] ARRIVES.LDGSTSBAR.64.TRANSCNT\|ARVCNT` (per thread) |
   | `cp.async.bulk.tensor` load / store | `UTMALDG.nD [dst, mbar, coords…], [map]` / `UTMASTG.nD [src, coords…], [map]` |
-  | `cp.async.bulk` load / store | `UBLKCP.S.G` / `UBLKCP.G.S` (size in 16-byte units) |
+  | `cp.async.bulk` load / store | `UBLKCP.S.G` / `UBLKCP.G.S` (size in 16-byte units; `.cp_mask`: `.DST_G_BYTE_MASK`, the mask in the register's high half) |
   | `cp.async.bulk.commit_group`, `wait_group` | `UTMACMDFLUSH` (read counter SB0), `DEPBAR.LE SB0, n` |
   | `wgmma.mma_async`, `commit_group`, `wait_group n`, `fence` | `HGMMA`/`QGMMA`/`IGMMA` (`gsb0` commits), `WARPGROUP.DEPBAR.LE gsb0, n`, `WARPGROUP.ARRIVE` |
 
@@ -91,9 +91,8 @@ operands are in and forced only when written.
 
 ## Not modelled yet
 
-TMA multicast and `.cta_group::2`, im2col and gather/scatter modes, interleaved maps, the OOB-NaN
-fill, packed sub-byte types, reductions (`cp.reduce.async.bulk*`, `UTMASTG.RED`),
-`tensormap.replace`, prefetch traffic; a wgmma descriptor with a non-zero base offset, sparse
-wgmma, A in registers at PTX thread level; `cp.async.mbarrier.arrive` without `.noinc` in PTX;
-`try_wait`'s suspension (it answers at once, so waits spin); the tensor map's descriptor fetch
-latency (no source); tensor-map proxy semantics on map loads.
+The `.tile::scatter4` and `.im2col::w` load modes and the no-offset im2col reductions,
+interleaved maps, the OOB-NaN fill, packed sub-byte types, prefetch traffic; a bulk copy's
+`.ignore_oob`, mbarrier validity reports and tensor-map field overrides (each refused); a wgmma
+descriptor with a non-zero base offset, sparse wgmma; the tensor map's descriptor fetch latency
+(no source); tensor-map proxy semantics on map loads.

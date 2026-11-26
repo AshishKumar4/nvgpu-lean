@@ -62,14 +62,28 @@ def sharedBase (s : NV.Space) (a : UInt64) : X (UInt64 × (Nat → NV.Space × U
     | (some r, off) => return (off, fun o => (.sharedCluster, e.windows.clusterAddr t.ctx.clusterRank r o.toUInt64))
   | _ => throw s!"{repr s}: not shared memory"
 
-/-- The CTA ranks a `.multicast::cluster` copy's 16-bit mask at operand `k` names, each with the
-place of shared offset `o` in its CTA, seen from the executing one (§9.7.10.28.4.1: each
-destination CTA gets the data at the same offset, and its mbarrier at the same offset the
-complete-tx). -/
+/-- A qualifier of a bulk copy the interpreter does not model: out-of-bound bytes allowed at the
+ends (`.ignore_oob`), a validity report into the copied data, or the tensor map's fields
+overridden by operands. -/
+def unmodelledCopyQual (i : Instr) : Option String :=
+  ([Flag.ignoreOob, .mbarrierReportValidityPer16bytes80000000, .mbarrierReportValidityPer16bytes8000,
+    .mbarrierReportValidityPer16bytes80, .mbarrierReportValidityPer16bytes8,
+    .mbarrierReportValidityPerElementFf, .overrideGlobalAddress, .overrideGlobalDim,
+    .overrideGlobalDimStride].find? i.has).map Keyword.name
+
+/-- Whether a copy is `.multicast::cluster`, with or without the mask width (`::16b`, `::32b`). -/
+def multicast (i : Instr) : Bool :=
+  i.has .multicastCluster || i.has .multicastCluster16b || i.has .multicastCluster32b
+
+/-- The CTA ranks a `.multicast::cluster` copy's mask at operand `k` names (16 bits, or 32 with
+`::32b`), each with the place of shared offset `o` in its CTA, seen from the executing one
+(§9.7.10.28.4.1: each destination CTA gets the data at the same offset, and its mbarrier at the
+same offset the complete-tx). -/
 def multicastTargets (k : Nat) : X (Array (Nat → NV.Space × UInt64)) := do
-  let mask := (← rd e t pi k .b16).toNat
+  let wide := pi.i.has .multicastCluster32b
+  let mask := (← rd e t pi k (if wide then .b32 else .b16)).toNat
   let own := t.ctx.clusterRank
-  return ((Array.range 16).filter fun r => (mask >>> r) % 2 == 1).map fun r o =>
+  return ((Array.range (if wide then 32 else 16)).filter fun r => (mask >>> r) % 2 == 1).map fun r o =>
     if r == own then (.shared, o.toUInt64) else (.sharedCluster, e.windows.clusterAddr own r o.toUInt64)
 
 /-- An mbarrier read-modify-write on the 8-byte object at operand `k`. -/
@@ -158,9 +172,12 @@ def cpAsync : X (Effect Thread) := do
   return issue t (NV.Async.Op.copy { moves := #[move], group := some .cpAsync })
 
 /-- `cp.async.bulk` (§9.7.10.28.4.1): global to shared with complete-tx, shared to global in
-the bulk group, or shared to a cluster CTA's shared memory with complete-tx. -/
+the bulk group (with `.cp_mask`, only the bytes of each 16 whose bits are set in the 16-bit
+`byteMask`, the operand after `cache_policy`), or shared to a cluster CTA's shared memory with
+complete-tx. -/
 def cpAsyncBulk : X (Effect Thread) := do
   let i := pi.i
+  if let some q := unmodelledCopyQual i then throw s!".{q} is not modelled"
   match i.spaces with
   | dst :: .global :: _ =>
     let (ds, da) ← target e t pi 0 (some dst)
@@ -172,7 +189,7 @@ def cpAsyncBulk : X (Effect Thread) := do
     let sig (s : NV.Space) (a : UInt64) : Req :=
       { space := s, op := .mbar (.completeTx size), bytes := 8, sem := .release,
         scope := .cluster, addrs := #[some a] }
-    if i.has .multicastCluster then
+    if multicast i then
       let dsts ← multicastTargets e t pi 4
       let (_, moff) := e.windows.sharedTarget ma
       return issue t (NV.Async.Op.copy (loadCopy ps dsts (dsts.map fun d =>
@@ -184,6 +201,10 @@ def cpAsyncBulk : X (Effect Thread) := do
     let size := (← rd e t pi 2 .u32).toNat
     let (off, at_) ← sharedBase e t ss sa
     let ps ← bulkPieces dst off.toNat size
+    let ps ← if i.has .cpMask then do
+        let mask := (← rd e t pi (if i.has .l2CacheHint then 4 else 3) .b16).toNat
+        pure ((elementPieces 1 ps).filter fun p => mask.testBit (p.smem % 16))
+      else pure ps
     return issue t (NV.Async.Op.copy (storeCopy ps (at_ 0).1 fun o => (at_ o).2))
   | .sharedCluster :: src :: _ =>
     -- `….shared::cluster.shared::cta.mbarrier::complete_tx::bytes [dstMem], [srcMem], size,
@@ -254,7 +275,9 @@ def mapOfResp (r : Resp) : X TensorMap :=
 coordinates `{col, row0, row1, row2, row3}`, four one-row boxes as one tile, `TensorMap.gather4`). -/
 def cpAsyncBulkTensor : X (Effect Thread) := do
   let i := pi.i
-  if i.has .tileScatter4 then throw "this load mode is not modelled yet"
+  if i.has .tileScatter4 || i.has .im2colW || i.has .im2colW128 then
+    throw "this load mode is not modelled yet"
+  if let some q := unmodelledCopyQual i then throw s!".{q} is not modelled"
   let gather := i.has .tileGather4
   let im2col := i.has .im2col
   match i.spaces with
@@ -268,7 +291,7 @@ def cpAsyncBulkTensor : X (Effect Thread) := do
       match arg pi 3 with
       | .vec xs => xs.mapM fun x => do pure (← t.read e x .u16).toNat
       | x => do pure #[(← t.read e x .u16).toNat]
-    let dsts ← if i.has .multicastCluster then multicastTargets e t pi (if im2col then 4 else 3)
+    let dsts ← if multicast i then multicastTargets e t pi (if im2col then 4 else 3)
       else pure #[at_]
     let (_, moff) := e.windows.sharedTarget ma
     let build (r : Resp) : X Copy := do
@@ -281,7 +304,7 @@ def cpAsyncBulkTensor : X (Effect Thread) := do
       let sig (s : NV.Space) (a : UInt64) : Req :=
         { space := s, op := .mbar (.completeTx bytes), bytes := 8, sem := .release,
           scope := .cluster, addrs := #[some a] }
-      return loadCopy ps dsts (if i.has .multicastCluster then
+      return loadCopy ps dsts (if multicast i then
         dsts.map fun d => let (s, a) := d moff.toNat; sig s a else #[sig ms ma])
     return issue t (NV.Async.Op.tensor { desc, build })
   | .global :: src :: _ =>
@@ -708,9 +731,8 @@ def exec? : Option (Effect Thread) :=
     | .cpReduceAsyncBulk => some (cpReduceAsyncBulk e t pi)
     -- A one-device multicast object (`multimem`, see `NV.PTX.Sem.Step`): the bulk copy or
     -- reduction into the device's own global memory.
-    | .multimemCpAsyncBulk => some do
-      if pi.i.has .cpMask then throw ".cp_mask is not modelled"
-      cpAsyncBulk e t { pi with i := { pi.i with op := .cpAsyncBulk } }
+    | .multimemCpAsyncBulk =>
+      some (cpAsyncBulk e t { pi with i := { pi.i with op := .cpAsyncBulk } })
     | .multimemCpReduceAsyncBulk =>
       some (cpReduceAsyncBulk e t { pi with i := { pi.i with op := .cpReduceAsyncBulk } })
     | .cpAsyncBulkTensor => some (cpAsyncBulkTensor e t pi)

@@ -8,6 +8,7 @@ sem-warp
 diff-clc
 diff-clusterid
 diff-cparrive
+diff-cpmask
 diff-f32x2
 diff-gaps
 diff-gather4

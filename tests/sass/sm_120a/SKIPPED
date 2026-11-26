@@ -1,6 +1,7 @@
 recurrence_states
 wgmma
 diff-clc
+diff-cpmask
 diff-f32x2
 diff-gather4
 diff-tc5cp

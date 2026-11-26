@@ -352,13 +352,17 @@ def utma (k : Kernel) (env : Env) (w : View) (i : Instr) : Except String Op := d
                      build := fun r => (do mk (← mapOfResp r)).mapError (s!"{·} {at_}"),
                      group := if load then none else some .bulk }
 
-/-- `UBLKCP.S.G` (global to shared, mbarrier) and `UBLKCP.G.S` (shared to global, bulk group). -/
+/-- `UBLKCP.S.G` (global to shared, mbarrier) and `UBLKCP.G.S` (shared to global, bulk group);
+`UBLKCP.G.S.DST_G_BYTE_MASK` (`.cp_mask`) packs the size in `URc`'s low half and the byte mask
+in its high half. -/
 def ublkcp (env : Env) (w : View) (i : Instr) : Except String Op := do
   let some (a, _) := (i.operands[0]?.bind urMem) | throw "operand 0"
   let some (b, _) := (i.operands[1]?.bind urMem) | throw "operand 1"
   let some c := (i.operands[2]?.bind urIdx) | throw "operand 2"
   -- The size register counts 16-byte units (a 4096-byte copy is 0x100).
-  let size := 16 * (w.getUR c).toNat
+  let masked := i.hasMod "DST_G_BYTE_MASK"
+  let units := (w.getUR c).toNat
+  let size := 16 * (if masked then units % 65536 else units)
   -- `UBLKCP.S.S [URa], [URb], URc` (`cp.async.bulk.shared::cluster.shared::cta`): into the cluster CTA's shared memory at `URa`, its mbarrier at `URa+1`.
   if i.mods.toList == ["S", "S"] then
     let dst := (w.getUR a).toUInt64
@@ -371,6 +375,8 @@ def ublkcp (env : Env) (w : View) (i : Instr) : Except String Op := do
   else
     let smem := (w.getUR b).toUInt64
     let ps ← bulkPieces (ur64 w a) (smem % (1 <<< 24)).toNat size
+    let ps := if masked then (elementPieces 1 ps).filter fun p => (units / 65536).testBit (p.smem % 16)
+      else ps
     let hi := smem >>> 24 <<< 24
     return .copy (storeCopy ps (sharedAt env smem).1 fun off => (sharedAt env (hi ||| off.toUInt64)).2)
 
