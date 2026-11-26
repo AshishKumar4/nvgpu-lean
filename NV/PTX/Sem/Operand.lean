@@ -120,7 +120,7 @@ def setSlot (t : Thread) (i : Nat) (v : UInt64) : Thread :=
 def symAddr (l : Loc) (off : Int) : Except String UInt64 :=
   match l with
   | .mem _ a => pure (a + UInt64.ofInt off)
-  | .frame _ => throw "the address of a function parameter is not modelled"
+  | .frame _ => throw "the address of a function parameter is taken by `mov` alone"
 
 /-- Read `a` as a value of type `ty` (at most 64 bits; predicates read as 0 or 1). -/
 def read (e : Env) (t : Thread) (a : Arg) (ty : Ty) : Except String UInt64 :=
@@ -226,8 +226,13 @@ def Thread.target (e : Env) (t : Thread) (sp : Option Space) (a : Arg) : Except 
     | .loc (.frame o) => pure (Sum.inr (Int.toNat (o + off)))
     | .loc (.mem s x) => pure (Sum.inl (if sp.isNone then e.windows.toGeneric s x + UInt64.ofInt off
                                         else x + UInt64.ofInt off))
+  -- A parameter copied onto the stack (`Frame.copies`) is accessed there.
+  let frame (o : Nat) : Target :=
+    match t.frame.copies.find? fun (off, n, _) => off ≤ o && o < off + n with
+    | some (off, _, a) => .mem .local (a + (o - off).toUInt64)
+    | none => .frame o
   match raw with
-  | .inr o => return .frame o
+  | .inr o => return frame o
   | .inl x =>
     match sp with
     | none => let (s, a) := e.windows.resolve x; return .mem s a
@@ -236,7 +241,7 @@ def Thread.target (e : Env) (t : Thread) (sp : Option Space) (a : Arg) : Except 
       | some .param =>
         -- A function's `.param` operand through a register: the frame's parameter area
         -- holds device-function parameters; a kernel's are in the parameter space.
-        if (e.prog.funcs[t.frame.fn]!).entry then return .mem .param x else return .frame x.toNat
+        if (e.prog.funcs[t.frame.fn]!).entry then return .mem .param x else return frame x.toNat
       | some s => return .mem s x
       | none => throw s!".{Keyword.name sp} is not a memory space"
 

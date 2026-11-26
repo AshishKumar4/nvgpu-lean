@@ -243,10 +243,39 @@ def intOp : X (Effect Thread) := do
     set1 pi t (if toInt true 32 (← r 3 .s32) ≥ 0 then a else b)
   | op => throw s!"{op.spelling} is not an integer instruction"
 
+/-- `mov d, p` of device-function parameter `p` (§9.7.10.3): its address in local memory, where it
+is copied onto the stack the first time (§5.1.6.4: "the parameter will be copied to the stack if
+necessary, and so the address will be in the .local state space"), below the stack pointer and
+aligned as declared; its loads and stores go to the copy from then on (`Frame.copies`). The
+copy's stores take one step each, the thread staying at the `mov` meanwhile. -/
+def paramAddr (o : Nat) (off : Int) : X (Effect Thread) := do
+  let f := t.frame
+  if let some (_, _, a) := f.copies.find? (·.1 == o) then return ← set1 pi t (a + UInt64.ofInt off)
+  let fn := e.prog.funcs[f.fn]!
+  let some formal := (fn.params ++ fn.rets).find? fun p => p.reg.isNone && p.off == o
+    | throw "the address of a call's own .param variable (§5.1.6.4: not allowed)"
+  let n := formal.decl.bytes
+  let al := (max 8 (Prep.declAlign formal.decl)).toUInt64
+  let p := (f.sp - n.toUInt64) &&& ~~~(al - 1)
+  if n.toUInt64 > f.sp || p.toNat < e.prog.localBytes then
+    throw s!"parameter copy: stack overflow (the {stackBytes}-byte stack)"
+  -- The next piece: the largest of 16, 8, 4, 2 and 1 bytes the copy's alignment allows.
+  let k := f.micro
+  if k < n then
+    let size := [16, 8, 4, 2, 1].find? (fun s => s ≤ n - k && (p.toNat + k) % s == 0) |>.getD 1
+    let data := packWords 1 ((List.range size).toArray.map fun j => (f.params.get! (o + k + j)).toUInt64)
+    let req ← request pi.i .local (p + k.toUInt64) size .st data
+    return .mem (fun _ => req) t fun _ s => s.setFrame { s.frame with micro := k + size }
+  let s := t.setFrame { f with micro := 0, sp := p, copies := f.copies.push (o, n, p) }
+  set1 pi s (p + UInt64.ofInt off)
+
 /-- `mov`, including vector pack and unpack (§9.7.10.3, §9.7.10.4). -/
 def mov : X (Effect Thread) := do
   let t0 := ty pi
   match arg pi 0, arg pi 1 with
+  | .reg _, .sym (.frame o) off =>
+    if (e.prog.funcs[t.frame.fn]!).entry then throw "a kernel's parameters are not in a frame"
+    paramAddr e t pi o off
   | .vec ds, a =>
     let n := ds.size
     let w := t0.bits / n
@@ -807,6 +836,8 @@ def ret : X (Effect Thread) := do
   for (formal, k) in f.rets.zipIdx do
     let some dst := callee.retTo[k]? | continue
     let d := formal.decl
+    if callee.copies.any (·.1 == formal.off) then
+      throw "returning a value whose address was taken (its copy on the stack) is not modelled"
     let v := match formal.reg with
       | some r => callee.regs[r.slot]!
       | none => frameRead callee formal.off d.bytes

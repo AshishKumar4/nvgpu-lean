@@ -451,6 +451,9 @@ structure Frame where
   /-- The stack pointer (§9.7.19): a local address; `alloca` lowers it, returning frees what the
   function allocated (a callee starts from its caller's). -/
   sp : UInt64 := 0
+  /-- The parameters whose address was taken, copied onto the stack (§5.1.6.4): each one's offset
+  in the parameter area, its bytes and its local address, where its accesses go from then on. -/
+  copies : Array (Nat × Nat × UInt64) := #[]
   deriving Inhabited
 
 structure Thread where
