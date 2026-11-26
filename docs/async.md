@@ -94,6 +94,5 @@ operands are in and forced only when written.
 
 The `.im2col::w` load modes and the no-offset im2col reductions, interleaved maps, the OOB-NaN fill,
 packed sub-byte types, prefetch traffic; a bulk copy's `.ignore_oob`, mbarrier validity reports and
-tensor-map field overrides (each refused); a wgmma descriptor with a non-zero base offset, sparse
-wgmma; the tensor map's descriptor fetch latency (no source); tensor-map proxy semantics on map
-loads.
+tensor-map field overrides (each refused); sparse wgmma; the tensor map's descriptor fetch latency
+(no source); tensor-map proxy semantics on map loads.

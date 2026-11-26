@@ -70,9 +70,11 @@ def Desc.decode (d : UInt64) : Desc :=
     swizzle := match field d 62 2 with | 0 => .none | 1 => .b128 | 2 => .b64 | _ => .b32 }
 
 /-- The shared address of element `(mn, k)` of an operand: `mn` its row of A or column of B, `k`
-its index along K within the instruction (`k < t.k`). `kMajor` is `imm-trans = 0`. -/
+its index along K within the instruction (`k < t.k`). `kMajor` is `imm-trans = 0`. A non-zero base
+offset `b` names the 128-byte line of the swizzle's pattern the matrix starts at: the swizzle counts
+lines from `b` lines before the address (a GH200 with the 128-byte swizzle: a matrix 128·j bytes
+past a 1024-byte boundary with base offset j reads as one at the boundary with offset 0). -/
 def Desc.addr (d : Desc) (t : InType) (kMajor : Bool) (mn k : Nat) : Except String Nat := do
-  if d.baseOffset != 0 then throw "wgmma: a non-zero matrix base offset is not modelled yet"
   let esz := t.bits / 8
   let T := 16 / esz
   let W := d.swizzle.span
@@ -85,7 +87,9 @@ def Desc.addr (d : Desc) (t : InType) (kMajor : Bool) (mn k : Nat) : Except Stri
       else
         let w := W / 16
         (mn % T) * esz + ((mn / T) % w) * 16 + (mn / (T * w)) * d.lbo + (k % 8) * W + (k / 8) * d.sbo
-  return d.swizzle.apply (d.start + off)
+  -- Shifting the address by whole lines moves only the swizzle's line index.
+  let shift := 128 * ((8 - d.baseOffset % 8) % 8)
+  return d.swizzle.apply (d.start + off + shift) - shift
 
 /-- Row and column of value `v` of the accumulator fragment of lane `l` of warp `w` (0–3) in the
 warpgroup: `d[v]` of an `.f32`/`.s32` accumulator; value `v` of an `.f16` one sits in the
