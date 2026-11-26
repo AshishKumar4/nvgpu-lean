@@ -2,8 +2,9 @@
 //
 // The 128-byte descriptor is the model's own encoding (`NV.Async.TensorMap.encode`), which the
 // TMA model decodes wherever a kernel finds it; the driver's checks are the model's
-// (`TensorMap.invalid?`). The arguments go to the Lean side packed as `Device.tensorMapOf` reads
-// them.
+// (`TensorMap.invalid?`), and a Hopper driver's refusal of the types and swizzles Blackwell added.
+// The arguments go to the Lean side packed as `Device.tensorMapOf` reads them. The driver also
+// writes two words `tensormap.replace` never does (`derived`), which a GH200's driver writes.
 
 #define TMAP_ARGS 184
 
@@ -28,6 +29,29 @@ static CUresult encodeMap(CUtensorMap *map, unsigned char *args) {
   lean_dec(pair);
   pthread_mutex_unlock(&lock);
   return r;
+}
+
+// The words at bytes 64 and 72 a GH200's driver derives (measurements/tensormap/gh200.txt): the
+// bytes one copy moves (a tiled map's box, each dimension's extent over its element stride; an
+// im2col map's channels times pixels), and 16 without a swizzle or eight times the swizzle's span.
+static void derived(CUtensorMap *map, CUtensorMapDataType dt, cuuint32_t rank, const cuuint32_t *box,
+                    const cuuint32_t *estrides, cuuint32_t channels, cuuint32_t pixels, CUtensorMapSwizzle sw) {
+  static const unsigned bytes[] = {1, 2, 4, 4, 8, 8, 2, 4, 8, 2, 4, 4, 4};
+  uint64_t moved = dt < 13 ? bytes[dt] : 0;
+  if (box)
+    for (cuuint32_t i = 0; i < rank; i++) moved *= box[i] / estrides[i];
+  else
+    moved *= (uint64_t)channels * pixels;
+  uint64_t span = sw >= 1 && sw <= 3 ? 8ull * (32u << (sw - 1)) : 16;
+  memcpy((unsigned char *)map + 64, &moved, 8);
+  memcpy((unsigned char *)map + 72, &span, 8);
+}
+
+// A Hopper driver's refusals: the packed sub-byte types and the swizzles Blackwell added.
+static int beforeBlackwell(CUtensorMapDataType dt, CUtensorMapSwizzle sw) {
+  if (G.part->ccMajor >= 10 || ((unsigned)dt < 13 && (unsigned)sw < 4)) return 0;
+  note("tensor map: type %d or swizzle %d needs compute capability 10.0", (int)dt, (int)sw);
+  return 1;
 }
 
 // The arguments both encoders share.
@@ -61,6 +85,7 @@ CUresult CUDAAPI cuTensorMapEncodeTiled(CUtensorMap *map, CUtensorMapDataType dt
     note("tensor map: rank %u must be 1 to 5", rank);
     return CUDA_ERROR_INVALID_VALUE;
   }
+  if (beforeBlackwell(dt, sw)) return CUDA_ERROR_INVALID_VALUE;
   unsigned char b[TMAP_ARGS];
   packCommon(b, 0, dt, rank, addr, dims, strides, estrides, il, sw, l2, oob);
   for (cuuint32_t i = 0; i < rank; i++) put32(b, 112 + 4 * i, box[i]);
@@ -76,7 +101,9 @@ CUresult CUDAAPI cuTensorMapEncodeTiled(CUtensorMap *map, CUtensorMapDataType dt
     for (cuuint32_t i = 0; i < rank; i++) fprintf(stderr, " %u", estrides[i]);
     fprintf(stderr, "\n");
   }
-  return encodeMap(map, b);
+  CUresult r = encodeMap(map, b);
+  if (r == CUDA_SUCCESS) derived(map, dt, rank, box, estrides, 0, 0, sw);
+  return r;
 }
 
 CUresult CUDAAPI cuTensorMapEncodeIm2col(CUtensorMap *map, CUtensorMapDataType dt, cuuint32_t rank,
@@ -90,6 +117,7 @@ CUresult CUDAAPI cuTensorMapEncodeIm2col(CUtensorMap *map, CUtensorMapDataType d
     note("tensor map: an im2col map has rank 3 to 5, not %u", rank);
     return CUDA_ERROR_INVALID_VALUE;
   }
+  if (beforeBlackwell(dt, sw)) return CUDA_ERROR_INVALID_VALUE;
   unsigned char b[TMAP_ARGS];
   packCommon(b, 1, dt, rank, addr, dims, strides, estrides, il, sw, l2, oob);
   for (cuuint32_t i = 0; i + 2 < rank; i++) {
@@ -98,7 +126,9 @@ CUresult CUDAAPI cuTensorMapEncodeIm2col(CUtensorMap *map, CUtensorMapDataType d
   }
   put32(b, 176, channels);
   put32(b, 180, pixels);
-  return encodeMap(map, b);
+  CUresult r = encodeMap(map, b);
+  if (r == CUDA_SUCCESS) derived(map, dt, rank, NULL, estrides, channels, pixels, sw);
+  return r;
 }
 
 CUresult CUDAAPI cuTensorMapReplaceAddress(CUtensorMap *map, void *addr) {

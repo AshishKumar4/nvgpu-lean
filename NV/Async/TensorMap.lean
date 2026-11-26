@@ -140,7 +140,7 @@ def invalid? (m : TensorMap) : Option String := Id.run do
       return some s!"pixelsPerColumn {x.pixelsPerColumn}: must be 1 to 1024"
   for i in [0:r] do
     let d := m.globalDim[i]!
-    if d == 0 || d > 2 ^ 31 then return some s!"globalDim[{i}] = {d}: must be 1 to 2^31"
+    if d == 0 || d > 2 ^ 32 then return some s!"globalDim[{i}] = {d}: must be 1 to 2^32"
     let b := m.boxDim[i]!
     if m.im2col.isNone && (b == 0 || b > 256) then return some s!"boxDim[{i}] = {b}: must be 1 to 256"
     let e := m.elementStrides[i]!
