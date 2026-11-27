@@ -1746,10 +1746,24 @@ def f_utma(i):
     dims = next(int(m[:-1]) for m in mods if m.endswith("D") and m[:-1].isdigit())
     load = i["op"] == "UTMALDG"
     multicast = load and "MULTICAST" in mods
-    extra = [m for m in mods if not (m.endswith("D") and m[:-1].isdigit()) and not (multicast and m == "MULTICAST")]
+    rows4 = "GATHER4" if load else "SCATTER4"
+    four = rows4 in mods
+    extra = [m for m in mods if not (m.endswith("D") and m[:-1].isdigit()) and not (multicast and m == "MULTICAST")
+             and not (four and m == rows4)]
     if extra:
         raise Lift(f"{i['op']} modifiers {extra}")
     c0 = a + 2 if load else a + 1
+    if four:
+        # `.GATHER4` / `.SCATTER4` (`TensorMap.gather4`): the column then four rows, each row a
+        # one-row box at `max(row bytes, the swizzle's span)` past the one before.
+        if multicast:
+            raise Lift("multicast gather4")
+        call = (f"tmaLoad(ctx, _m, _c, _s, UR({a + 1}), 0u, lane, warp)" if load
+                else "tmaStore(ctx, _m, _c, _s, lane, warp)")
+        return (f"if (lane == __ffs(__EXEC__) - 1) {{ TensorMapView _m = mapAt(ctx, U64(UR({b}), UR({b + 1}))); "
+                f"const uint32_t _p = max(boxShape(_m).rowBytes, _m.swizzle ? 16u << _m.swizzle : 0u); "
+                f"for (int _j = 0; _j < 4; ++_j) {{ int32_t _c[5] = {{(int32_t)UR({c0}), (int32_t)UR({c0 + 1} + _j), 0, 0, 0}}; "
+                f"const uint32_t _s = UR({a}) + _j * _p; {call}; }} }}")
     coords = ", ".join(f"(int32_t)UR({c0 + j})" for j in range(dims))
     if multicast:
         # `.MULTICAST`: the box into each cluster CTA the mask (the third operand's high half)
