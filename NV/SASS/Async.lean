@@ -286,6 +286,10 @@ def utma (k : Kernel) (env : Env) (w : View) (i : Instr) : Except String Op := d
   let some (b, _) := (i.operands[1]?.bind urMem) | throw "operand 1"
   let some n := dims i | throw "no dimension modifier"
   let load := i.opcode == "UTMALDG"
+  -- The forms modelled; any other modifier (a mode or option these do not read) is refused.
+  let known := ["1D", "2D", "3D", "4D", "5D"] ++ (if load then ["IM2COL", "MULTICAST", "GATHER4", "2CTA"]
+    else if i.opcode == "UTMASTG" then ["SCATTER4"] else ["ADD", "MIN", "MAX", "INC", "DEC", "AND", "OR", "XOR"])
+  if let some m := i.mods.find? (· ∉ known) then throw s!"{i.opcode}.{m} is not modelled"
   let red : Option AtomOp := if i.opcode != "UTMAREDG" then none else i.mods.findSome? fun
     | "ADD" => some .add | "MIN" => some .min | "MAX" => some .max | "INC" => some .inc
     | "DEC" => some .dec | "AND" => some .and | "OR" => some .or | "XOR" => some .xor | _ => none
@@ -360,6 +364,8 @@ def ublkcp (env : Env) (w : View) (i : Instr) : Except String Op := do
   let some (a, _) := (i.operands[0]?.bind urMem) | throw "operand 0"
   let some (b, _) := (i.operands[1]?.bind urMem) | throw "operand 1"
   let some c := (i.operands[2]?.bind urIdx) | throw "operand 2"
+  unless [["S", "S"], ["S", "G"], ["S", "G", "MULTICAST"], ["G", "S"], ["G", "S", "DST_G_BYTE_MASK"]].contains i.mods.toList do
+    throw s!"UBLKCP.{".".intercalate i.mods.toList} is not modelled"
   -- The size register counts 16-byte units (a 4096-byte copy is 0x100).
   let masked := i.hasMod "DST_G_BYTE_MASK"
   -- `UBLKCP.S.G.MULTICAST` (`.multicast::cluster`): the CTA mask in `URc`'s high half, as with
