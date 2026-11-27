@@ -312,6 +312,12 @@ structure SyncParams where
   /-- `(SASS form, cycles)`: what a fence instruction holds its warp for after the warp's earlier
   requests have performed. -/
   fenceCycles : Fact (List (String × Nat))
+  /-- `(SASS form, after other requests, after atomics)`: for the forms listed, a fence delivers
+  its own cycles (`fenceCycles`) after it issues or, if later, these cycles after the warp's last
+  request delivered (once its earlier requests all have), the second when that was a global
+  atomic; a form not listed delivers its own cycles after its earlier requests. -/
+  fenceDrainCycles : Fact (List (String × Nat × Nat)) :=
+    { value := [], kind := .documented, source := { ref := "ptx-isa-9.5", loc := "§9.7.13.4: membar/fence" } }
   /-- `red.release.gpu`: the cycles it adds to its warp. -/
   redReleaseGpu : Fact Nat
   /-- The operation's round trip on an L2-resident word, its result consumed. -/

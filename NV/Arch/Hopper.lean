@@ -708,6 +708,12 @@ def fenceAcqRelGpu : Fact Nat := meas 274 ""
 def fenceScGpu : Fact Nat := meas 273 ""
 def fenceAcqRelSys : Fact Nat := meas 1155 ""
 
+/-- A GH200's chain of one thread's atomics on one word, each behind a fence.acq_rel.gpu (918
+cycles an iteration against 500 without), and of its loads, each followed by one (580 against
+428): the fence ends 418 cycles after an atomic it waits for, 152 after a load (order.cu). -/
+def fenceDrainCycles : Fact (List (String × Nat × Nat)) :=
+  measOn [("MEMBAR.ALL.GPU", 152, 418), ("MEMBAR.SC.GPU", 152, 418)] "gh200/out/order.txt:3"
+
 def fenceCycles : Fact (List (String × Nat)) :=
   inferred [("MEMBAR.ALL.CTA", 0), ("FENCE.VIEW.ASYNC.S", 17), ("MEMBAR.ALL.GPU", 257),
     ("MEMBAR.SC.GPU", 256), ("MEMBAR.ALL.SYS", 1138)] "meas-h200"

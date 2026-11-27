@@ -5466,6 +5466,16 @@
    "name": "sync.fenceCycles",
    "measuredOn": "A100 SXM4 40GB",
    "kind": "inferred"},
+  {"value":
+   "MEMBAR.ALL.GPU: 105 after other requests, 418 after atomics, MEMBAR.SC.GPU: 105 after other requests, 418 after atomics",
+   "source": {"ref": "meas", "loc": "a100-sxm4-40gb/out/order.txt:3"},
+   "section": "Synchronization (cycles unless the name says otherwise)",
+   "role": "engine",
+   "note":
+   "an A100's chain of one thread's atomics on one word, each behind a fence.acq_rel.gpu, runs 973 cycles an iteration against 555 without, and of its loads, each followed by one, 535 against 430 (order.cu)",
+   "name": "sync.fenceDrainCycles",
+   "measuredOn": null,
+   "kind": "measured"},
   {"value": "426",
    "source": {"ref": "meas-h200", "loc": ""},
    "section": "Synchronization (cycles unless the name says otherwise)",

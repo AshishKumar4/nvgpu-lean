@@ -233,6 +233,9 @@ def sync : SyncParams where
     ("MEMBAR.SC.GPU", 149), ("MEMBAR.ALL.SYS", 3299)] "meas-a100"
     ""
     "" (some "A100 SXM4 40GB")
+  fenceDrainCycles := measOn [("MEMBAR.ALL.GPU", 105, 418), ("MEMBAR.SC.GPU", 105, 418)]
+    "a100-sxm4-40gb/out/order.txt:3"
+    "an A100's chain of one thread's atomics on one word, each behind a fence.acq_rel.gpu, runs 973 cycles an iteration against 555 without, and of its loads, each followed by one, 535 against 430 (order.cu)"
   redReleaseGpu := onH200 Hopper.redReleaseGpu
   atomAcqRelGpu := onH200 Hopper.atomAcqRelGpu
   atomRelaxedGpu := onH200 Hopper.atomRelaxedGpu

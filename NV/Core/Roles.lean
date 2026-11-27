@@ -75,7 +75,7 @@ def roles : List (String × Role) := [
   ("sync.atomAcqRelGpu", .observed), ("sync.atomRelaxedGpu", .observed),
   ("sync.ldAcquireGpu", .observed), ("sync.flagHopPs", .observed),
   ("sync.printfPs", .engine), ("sync.printfLanePs", .engine),
-  ("sync.fenceCycles", .engine), ("sync.clusterBarrierCycles", .engine),
+  ("sync.fenceCycles", .engine), ("sync.fenceDrainCycles", .engine), ("sync.clusterBarrierCycles", .engine),
   ("tma.copyDram", .observed), ("tma.copyL2", .observed), ("tma.issueBytesPerSec", .engine),
   ("launch.emptyGraphPs", .observed), ("launch.kernelGapPs", .engine),
   ("launch.kernelGapPdlPs", .engine), ("launch.ctaDispatchCycles", .engine),

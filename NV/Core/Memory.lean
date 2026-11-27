@@ -181,8 +181,9 @@ the L2: known once it is issued, since a request takes the SM's output port as i
 def departAt (m : MemSys) (sm id : Nat) : Nat :=
   ((m.sms[sm]!).reqs[id / m.sms.size]?.map (·.departAt)).getD 0
 
-def fence (m : MemSys) (t : Nat) (o : Origin) (cost : Nat) : MemSys × Nat :=
-  let (m', id) := m.withSm o.sm (·.fence t o cost)
+def fence (m : MemSys) (t : Nat) (o : Origin) (cost : Nat) (drain : Option (Nat × Nat) := none) :
+    MemSys × Nat :=
+  let (m', id) := m.withSm o.sm (·.fence t o cost drain)
   (m', m.globalId o.sm id)
 
 /-- A code line's refill for SM `o.sm`'s instruction caches (`SmMem.issueCode`). -/

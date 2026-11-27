@@ -355,6 +355,7 @@ The role column says who reads a fact (`NV/Core/Roles.lean`): only `engine` fact
 | `sync.fenceScGpu` | 273 | measured (H200) | observed: bound input, not read by the engine | `meas-h200`  |  |
 | `sync.fenceAcqRelSys` | 1155 | measured (H200) | observed: bound input, not read by the engine | `meas-h200`  |  |
 | `sync.fenceCycles` | MEMBAR.ALL.CTA: 0, FENCE.VIEW.ASYNC.S: 0, MEMBAR.ALL.GPU: 151, MEMBAR.SC.GPU: 149, MEMBAR.ALL.SYS: 3299 | inferred (A100 SXM4 40GB) | engine | `meas-a100`  |  |
+| `sync.fenceDrainCycles` | MEMBAR.ALL.GPU: 105 after other requests, 418 after atomics, MEMBAR.SC.GPU: 105 after other requests, 418 after atomics | measured | engine | `meas` a100-sxm4-40gb/out/order.txt:3 | an A100's chain of one thread's atomics on one word, each behind a fence.acq_rel.gpu, runs 973 cycles an iteration against 555 without, and of its loads, each followed by one, 535 against 430 (order.cu) |
 | `sync.redReleaseGpu` | 426 | measured (H200) | observed: bound input, not read by the engine | `meas-h200`  |  |
 | `sync.atomAcqRelGpu` | 882 | measured (H200) | observed: bound input, not read by the engine | `meas-h200`  |  |
 | `sync.atomRelaxedGpu` | 470 | measured (H200) | observed: bound input, not read by the engine | `meas-h200`  |  |

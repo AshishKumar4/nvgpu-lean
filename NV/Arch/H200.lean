@@ -73,7 +73,8 @@ def h200 : Params := {
   sync := {
     mbarrierLatency, clusterMbarrierLatency, clusterBarrierCycles, namedBarrierLatency, barArriveCycles, barSync,
     fenceProxyAsync,
-    fenceAcqRelCta, fenceAcqRelGpu, fenceScGpu, fenceAcqRelSys, fenceCycles, redReleaseGpu,
+    fenceAcqRelCta, fenceAcqRelGpu, fenceScGpu, fenceAcqRelSys, fenceCycles,
+    fenceDrainCycles := onPart "GH200" fenceDrainCycles, redReleaseGpu,
     atomAcqRelGpu,
     atomRelaxedGpu, ldAcquireGpu, flagHopPs, printfPs, printfLanePs,
     tryWaitLimit := onPart "GH200" tryWaitLimit, tryWaitWake },

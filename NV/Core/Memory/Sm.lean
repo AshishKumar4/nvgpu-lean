@@ -85,6 +85,15 @@ structure Txn where
   waiters : Array (Nat × Array Nat) := #[]
   deriving Inhabited
 
+/-- What a fence waited for last (`SmMem.fence`): loads, a write, or a global atomic. -/
+inductive Drained where
+  | load | write | atomic
+  deriving Inhabited, BEq
+
+/-- What request `r` is to a fence behind it. -/
+def Drained.of (r : Req) : Drained :=
+  if r.space == .global && r.op.isAtom then .atomic else if r.op.writes then .write else .load
+
 /-- A warp's requests on the SM, for fences, release/acquire and barriers. -/
 structure WarpMem where
   /-- Requests not yet past the SM's ordering point (tag stage, data port, network port). -/
@@ -92,8 +101,12 @@ structure WarpMem where
   queued : Nat := 0
   inflight : Nat := 0
   acquiring : Nat := 0
-  /-- Fences waiting for the warp to drain: their ids and own costs. -/
-  fences : Array (Nat × Nat) := #[]
+  /-- Global atomics among them, and other writes. -/
+  writes : Nat := 0
+  stores : Nat := 0
+  /-- Fences waiting for the warp to drain: their ids and the cycle each delivers at given the
+  cycle the warp drained. -/
+  fences : Array (Nat × (Nat → Nat)) := #[]
   deriving Inhabited
 
 /-- The SM's rate-limited resources, each one `Port` of `SmMem.ports`. -/
@@ -203,6 +216,8 @@ structure SmMem where
   behind them, not behind the loads' and the tensor core's backlog there. -/
   storesFree : Nat := 0
   warps : Std.HashMap Nat WarpMem := {}
+  /-- Per warp slot: when its last request delivered, and what it was (`fence`). -/
+  lastDone : Std.HashMap Nat (Nat × Drained) := {}
   ports : Array Port
   l1 : Tags
   /-- Line ↦ the transactions filling it, each with the sectors it fills. -/
@@ -348,16 +363,36 @@ def issue (m : SmMem) (t : Nat) (o : Origin) (r : Req) (issued : Nat := t) : SmM
   let m := if m.reserved[qi]! > 0 then { m with reserved := m.reserved.modify qi (· - 1) }
     else { m with ctaInflight := m.ctaInflight.insert o.cta (m.ctaInflight.getD o.cta 0 + 1) }
   let w := m.warp o.slot
-  let m := m.setWarp o.slot { w with queued := w.queued + 1, unordered := w.unordered + 1 }
+  let kind := Drained.of r
+  let m := m.setWarp o.slot { w with queued := w.queued + 1, unordered := w.unordered + 1,
+                                     writes := w.writes + (if kind == .atomic then 1 else 0),
+                                     stores := w.stores + (if kind == .write then 1 else 0) }
   (m.arm t, id)
 
 /-- A fence from warp `o` at `t` costing `cost` cycles of its own (`SyncParams.fenceCycles`): it
-delivers `cost` cycles after every earlier request of the warp has delivered. -/
-def fence (m : SmMem) (t : Nat) (o : Origin) (cost : Nat) : SmMem × Nat :=
+delivers `cost` cycles after every earlier request of the warp has delivered or, with `drain`
+(`SyncParams.fenceDrainCycles`: after loads, after writes), `cost` cycles after it issues or,
+if later, `drain`'s cycles after the warp's last request delivered, an atomic's or another's (an
+atomic no fence has followed yet and already delivered: from now). -/
+def fence (m : SmMem) (t : Nat) (o : Origin) (cost : Nat) (drain : Option (Nat × Nat) := none) :
+    SmMem × Nat :=
   let (m, id) := m.alloc { origin := o, req := default, resp := #[], fence := true }
   let w := m.warp o.slot
-  if w.queued == 0 && w.inflight == 0 then (m.push (t + cost) (.done id), id)
-  else (m.setWarp o.slot { w with fences := w.fences.push (id, cost) }, id)
+  -- After a write other than an atomic, the fence's own cost follows the drain as without `drain`.
+  let at_ (d : Nat) (kind : Drained) : Nat := match drain, kind with
+    | some (afterLoad, _), .load => max (t + cost) (d + afterLoad)
+    | some (_, afterAtomic), .atomic => max (t + cost) (d + afterAtomic)
+    | _, _ => d + cost
+  if w.queued == 0 && w.inflight == 0 then
+    -- An atomic the warp's last request was, not yet behind a fence, holds this one its cycles
+    -- after an atomic from now: the warp saw it complete only after it was delivered.
+    let (d, kind) := m.lastDone.getD o.slot (0, .load)
+    let m := { m with lastDone := m.lastDone.insert o.slot (d, .load) }
+    let d := if kind == .load then d else t
+    (m.push (if drain.isSome then at_ d kind else t + cost) (.done id), id)
+  else
+    let kind : Drained := if w.writes > 0 then .atomic else if w.stores > 0 then .write else .load
+    (m.setWarp o.slot { w with fences := w.fences.push (id, fun d => at_ d kind) }, id)
 
 /-- One part of request `id` is back, ready at `ready`. -/
 private def complete (m : SmMem) (id ready : Nat) : SmMem :=
@@ -1000,9 +1035,15 @@ private def finish (m : SmMem) (t id : Nat) : SmMem × Delivery := Id.run do
   if r.async then return (m, d)
   let w := m.warp o.slot
   let acq := r.req.sem == .acquire || r.req.sem == .acqRel
-  let mut w := { w with inflight := w.inflight - 1, acquiring := w.acquiring - (if acq then 1 else 0) }
+  let kind := Drained.of r.req
+  let mut w := { w with inflight := w.inflight - 1, acquiring := w.acquiring - (if acq then 1 else 0),
+                        writes := w.writes - (if kind == .atomic then 1 else 0),
+                        stores := w.stores - (if kind == .write then 1 else 0) }
+  -- A fence waiting for this delivery follows it: a later fence is not held for its atomic again.
+  let drained := w.queued == 0 && w.inflight == 0 && !w.fences.isEmpty
+  m := { m with lastDone := m.lastDone.insert o.slot (t, if drained then .load else kind) }
   if w.queued == 0 && w.inflight == 0 then
-    for (f, cost) in w.fences do m := m.push (t + cost) (.done f)
+    for (f, at_) in w.fences do m := m.push (at_ t) (.done f)
     w := { w with fences := #[] }
   m := m.setWarp o.slot w
   return (m.arm t, d)

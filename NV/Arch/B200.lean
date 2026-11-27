@@ -182,6 +182,11 @@ def b200 : Params := {
     fenceCycles := inferred [("MEMBAR.ALL.CTA", 7), ("FENCE.VIEW.ASYNC.S", 15), ("MEMBAR.ALL.GPU", 259),
       ("MEMBAR.SC.GPU", 258), ("MEMBAR.ALL.SYS", 1694)] "meas" ""
       ""
+    -- After an atomic: sync.txt's acq_rel atomic (1662 cycles an iteration) less its relaxed one
+    -- (886) and the acquire half's cache invalidation; after another request, the fence's own cost.
+    fenceDrainCycles := inferred [("MEMBAR.ALL.GPU", 259, 750), ("MEMBAR.SC.GPU", 258, 750)] "meas"
+      "b200/out/sync.txt:18"
+      "" (some "B200")
     redReleaseGpu := measOn 796 "" ""
     atomAcqRelGpu := measOn 1662 ""
     atomRelaxedGpu := measOn 886 ""

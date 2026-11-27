@@ -376,6 +376,7 @@ The role column says who reads a fact (`NV/Core/Roles.lean`): only `engine` fact
 | `sync.fenceScGpu` | 274 | measured | observed: bound input, not read by the engine | `meas`  |  |
 | `sync.fenceAcqRelSys` | 1710 | measured | observed: bound input, not read by the engine | `meas`  |  |
 | `sync.fenceCycles` | MEMBAR.ALL.CTA: 7, FENCE.VIEW.ASYNC.S: 15, MEMBAR.ALL.GPU: 259, MEMBAR.SC.GPU: 258, MEMBAR.ALL.SYS: 1694 | inferred | engine | `meas`  |  |
+| `sync.fenceDrainCycles` | MEMBAR.ALL.GPU: 259 after other requests, 750 after atomics, MEMBAR.SC.GPU: 258 after other requests, 750 after atomics | inferred (B200) | engine | `meas` b200/out/sync.txt:18 |  |
 | `sync.redReleaseGpu` | 796 | measured | observed: bound input, not read by the engine | `meas`  |  |
 | `sync.atomAcqRelGpu` | 1662 | measured | observed: bound input, not read by the engine | `meas`  |  |
 | `sync.atomRelaxedGpu` | 886 | measured | observed: bound input, not read by the engine | `meas`  |  |

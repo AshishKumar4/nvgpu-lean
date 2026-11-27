@@ -107,6 +107,11 @@ def MemOp.writes : MemOp → Bool
   | .ld => false
   | _ => true
 
+/-- An atomic: it writes and returns the old value. -/
+def MemOp.isAtom : MemOp → Bool
+  | .atom .. => true
+  | _ => false
+
 /-- Cache operators and eviction hints (PTX ISA §9.7.9.1), as the instruction states them;
 only the timing core reads them. -/
 structure CacheHint where

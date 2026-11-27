@@ -249,7 +249,7 @@ private inductive Ev where
   | mem (req : Warp → Req) (wb : Resp → Warp → Warp) (bar : Option (Fin 6)) (issued : Nat) (pc : Nat)
     (readsPending : Bool) (tix land : Nat) (load : Nat) (after : Array Nat)
   /-- A fence reaching the memory system behind the warp's earlier requests. -/
-  | fence (cost : Nat)
+  | fence (cost : Nat) (drain : Option (Nat × Nat))
   /-- An asynchronous instruction reading its sources: its operation is built from the warp and
   handed to the async units (`NV.Core.Async`). -/
   | async (op : Warp → NV.Async.Op) (wb : Resp → Warp → Warp) (pc : Nat) (tix land : Nat)
@@ -508,8 +508,8 @@ private def toMemory (fps : Array NV.SASS.Footprint) (t si slot : Nat) (s : Slot
       | .shared, false => { c with sharedStores := c.sharedStores + 1 }
       | _, _ => c
     (s, mem, memWbs, c)
-  | .fence cost =>
-    let (mem, _) := mem.fence t { sm := si, smsp := s.smsp, cta := s.cta, slot } cost
+  | .fence cost drain =>
+    let (mem, _) := mem.fence t { sm := si, smsp := s.smsp, cta := s.cta, slot } cost drain
     (s, mem, memWbs, c)
   | _ => (s, mem, memWbs, c)
 
@@ -1447,7 +1447,8 @@ private def pass (kit : Kit) (focus : Nat) (stop : Nat) (st : St) :
       | .sync (.fence ..) w | .sync (.proxyFence _) w | .sync .aliasFence w =>
         let form := ".".intercalate (ins.opcode :: ins.mods.toList)
         let own := ((p.sync.fenceCycles.value.find? (·.1 == form)).map (·.2)).getD 0
-        wbs := wbs.push (max t s.lastMem) { sm := si, slot := pick, ev := .fence own }
+        let drain := (p.sync.fenceDrainCycles.value.find? (·.1 == form)).map (·.2)
+        wbs := wbs.push (max t s.lastMem) { sm := si, slot := pick, ev := .fence own drain }
         s := { s with w, atFence := true, why := .fence }
       -- A commit's group releases the instruction's dependence counter when it completes.
       -- An async instruction issued before the commit may not have reached the async units yet

@@ -78,6 +78,7 @@ def h100 : Params := {
     fenceScGpu := onH200 fenceScGpu
     fenceAcqRelSys := onH200 fenceAcqRelSys
     fenceCycles := onH200 fenceCycles
+    fenceDrainCycles := onH200 fenceDrainCycles
     redReleaseGpu := onH200 redReleaseGpu
     atomAcqRelGpu := onH200 atomAcqRelGpu
     atomRelaxedGpu := onH200 atomRelaxedGpu

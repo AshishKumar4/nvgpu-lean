@@ -380,7 +380,7 @@ static CUresult texView(const CUDA_RESOURCE_DESC *rd, const CUDA_RESOURCE_VIEW_D
   if (bcFormat) {
     // A block-compressed view: of a 2D array of two uint32 channels (BC1, BC4) or four (the
     // others), each element one block, four times its width and height.
-    unsigned kind, bb, bits, chans, bc = bcOf(bcFormat, &bb);
+    unsigned kind, bb = 0, bits, chans, bc = bcOf(bcFormat, &bb);
     if (mip || layered || a->depth) {
       note("block-compressed views of mipmapped, layered and 3D arrays are not modelled");
       return CUDA_ERROR_NOT_SUPPORTED;

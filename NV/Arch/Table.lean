@@ -121,7 +121,7 @@ def sections (p : Params) : List (String × List Row) :=
     tcgen05Latency, tmemLatency⟩ := tensor
   let ⟨mbarrierLatency, clusterMbarrierLatency, clusterBarrierCycles, namedBarrierLatency, barArriveCycles, barSync,
     fenceProxyAsync,
-    fenceAcqRelCta, fenceAcqRelGpu, fenceScGpu, fenceAcqRelSys, fenceCycles, redReleaseGpu,
+    fenceAcqRelCta, fenceAcqRelGpu, fenceScGpu, fenceAcqRelSys, fenceCycles, fenceDrainCycles, redReleaseGpu,
     atomAcqRelGpu,
     atomRelaxedGpu, ldAcquireGpu, flagHopPs, printfPs, printfLanePs, tryWaitLimit, tryWaitWake⟩ := sync
   let ⟨copyDram, copyL2, issueBytesPerSec, storeCreditBytes⟩ := tma
@@ -219,6 +219,8 @@ def sections (p : Params) : List (String × List Row) :=
      rowN "sync.fenceAcqRelSys" fenceAcqRelSys,
      row "sync.fenceCycles" fenceCycles
        (fun fs => ", ".intercalate (fs.map fun (f, c) => s!"{f}: {c}")),
+     row "sync.fenceDrainCycles" fenceDrainCycles
+       (fun fs => ", ".intercalate (fs.map fun (f, l, w) => s!"{f}: {l} after other requests, {w} after atomics")),
      rowN "sync.redReleaseGpu" redReleaseGpu,
      rowN "sync.atomAcqRelGpu" atomAcqRelGpu, rowN "sync.atomRelaxedGpu" atomRelaxedGpu,
      rowN "sync.ldAcquireGpu" ldAcquireGpu, rowN "sync.flagHopPs" flagHopPs,
