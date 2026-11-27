@@ -36,6 +36,9 @@ def a100_40 : Params := {
     l2LatencyRefMHz := inferred 1410 "a100-whitepaper" "Table 4: boost clock 1410 MHz"
       ""
     dramTurnaroundPs := onPart "H100 SXM5" Hopper.dramTurnaroundPs
+    -- One thread's chain of atomic adds on a far L2 word, each address from the last result:
+    -- 364 cycles a step against 317 for the same chain of strong loads (ldlat.cu).
+    l2AtomicCycles := measOn 47 "a100-sxm4-40gb/out/ldlat.txt:9"
     sectorBytes := Hopper.sectorBytes
     lineBytes := Hopper.lineBytes
     l1SmemBytes, smemCarveoutsKB
@@ -64,8 +67,9 @@ def a100_40 : Params := {
     dsmemBytesPerCycle := doc 0 "cuda-guide" "§5.1 Table 32: no distributed shared memory before 9.0"
     l2Partitions, l2NearHitLatency, l2FarHitLatency, l2SliceBytesPerCycle
     l2SliceWriteBytesPerCycle := onPart "GH200" Hopper.l2SliceWriteBytesPerCycle
-    l2FarCopiesNear := doc true "a100-whitepaper" "p. 35: each L2 partition localizes and caches
-      data for memory accesses from SMs in the GPCs directly connected to the partition"
+    -- The far half of an L2-resident chase stays at the far hit's latency on its third pass
+    -- (l2hist.cu), against the whitepaper's localized copies (p. 35).
+    l2FarCopiesNear := measOn false "a100-sxm4-40gb/out/l2hist.txt:1"
     l2Ways := Hopper.l2Ways
     l2FarBytesPerCycle := inferred 1280 "a100-whitepaper" "p. 35: L2 read bandwidth 5120 bytes/clk"
       "" none

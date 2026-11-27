@@ -177,14 +177,13 @@ def l1HitLatency : Fact Nat :=
   pub 33 "abdelkhalik2022" "Table IV: L1 hit 33 cycles" "A100"
     ""
 
-def l2NearHitLatency : Fact Nat :=
-  pub 262 "luo2024" "Table IV: L2 261.5 cycles" "A100 PCIe"
-    ""
+/-- One thread timing each .cg load of a pointer chase through 4 MB, L2-resident, on an A100 SXM4:
+two groups, half the lines at 196-247 cycles (mode 220) and half at 336-400 (mode 366), with the
+probe's own 52 cycles around each (the model's figure for the same probe at a 262-cycle hit), and
+a dependent chain on one far word at 317 (l2hist.cu, ldlat.cu). -/
+def l2NearHitLatency : Fact Nat := measOn 168 "a100-sxm4-40gb/out/l2hist.txt:1"
 
-def l2FarHitLatency : Fact Nat :=
-  inferred 420 "luo2025" "Table 4: L2 near hit 258.0, far hit 414.1 (H800 PCIe)"
-    ""
-    (some "H800 PCIe")
+def l2FarHitLatency : Fact Nat := measOn 314 "a100-sxm4-40gb/out/l2hist.txt:1"
 
 def l2Partitions : Fact Nat :=
   doc 2 "a100-whitepaper" "p. 35: the L2 cache is divided into two partitions"
@@ -233,9 +232,9 @@ def sync : SyncParams where
     ("MEMBAR.SC.GPU", 149), ("MEMBAR.ALL.SYS", 3299)] "meas-a100"
     ""
     "" (some "A100 SXM4 40GB")
-  fenceDrainCycles := measOn [("MEMBAR.ALL.GPU", 105, 418), ("MEMBAR.SC.GPU", 105, 418)]
+  fenceDrainCycles := measOn [("MEMBAR.ALL.GPU", 77, 418), ("MEMBAR.SC.GPU", 77, 418)]
     "a100-sxm4-40gb/out/order.txt:3"
-    "an A100's chain of one thread's atomics on one word, each behind a fence.acq_rel.gpu, runs 973 cycles an iteration against 555 without, and of its loads, each followed by one, 535 against 430 (order.cu)"
+    "an A100's chain of one thread's atomics on one word, each behind a fence.acq_rel.gpu, runs 973 cycles an iteration against 555 without, and of its loads, each followed by one, 535 against 430, the fence ending 77 cycles after the load's delivery in the model's terms (order.cu)"
   redReleaseGpu := onH200 Hopper.redReleaseGpu
   atomAcqRelGpu := onH200 Hopper.atomAcqRelGpu
   atomRelaxedGpu := onH200 Hopper.atomRelaxedGpu

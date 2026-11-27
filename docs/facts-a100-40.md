@@ -250,8 +250,8 @@ The role column says who reads a fact (`NV/Core/Roles.lean`): only `engine` fact
 | `mem.l2Bytes` | 41943040 | measured | engine | `meas`  |  |
 | `mem.l2Slices` | 80 | measured | engine | `meas`  |  |
 | `mem.l2Partitions` | 2 | documented | engine | `a100-whitepaper` p. 35: the L2 cache is divided into two partitions |  |
-| `mem.l2NearHitLatency` | 262 | published (A100 PCIe) | engine | `luo2024` Table IV: L2 261.5 cycles |  |
-| `mem.l2FarHitLatency` | 420 | inferred (H800 PCIe) | engine | `luo2025` Table 4: L2 near hit 258.0, far hit 414.1 (H800 PCIe) |  |
+| `mem.l2NearHitLatency` | 168 | measured | engine | `meas` a100-sxm4-40gb/out/l2hist.txt:1 |  |
+| `mem.l2FarHitLatency` | 314 | measured | engine | `meas` a100-sxm4-40gb/out/l2hist.txt:1 |  |
 | `mem.dramLatency` | 466 | published (A100 PCIe) | engine | `luo2024` Table IV: global memory 466.3 cycles |  |
 | `mem.dramBusBits` | 5120 | measured | derivation input | `meas`  |  |
 | `mem.dramClockMHz` | 1215 | measured | derivation input | `meas`  |  |
@@ -275,12 +275,12 @@ The role column says who reads a fact (`NV/Core/Roles.lean`): only `engine` fact
 | `mem.xbarWriteBytesPerCycle` | 32 | inferred (GH200) | engine | `meas-gh200`  |  |
 | `mem.xbarRedBytesPerCycle` | 25 | inferred (GH200) | engine | `meas-gh200`  |  |
 | `mem.l2RedF32BytesPerSec` | 2309000000000 | inferred (H200) | engine | `meas-h200`  |  |
-| `mem.l2AtomicCycles` | 0 | inferred | engine | `meas-h200` benchA.txt: atom_relaxed_gpu |  |
+| `mem.l2AtomicCycles` | 47 | measured | engine | `meas` a100-sxm4-40gb/out/ldlat.txt:9 |  |
 | `mem.dsmemBytesPerCycle` | 0 | documented | engine | `cuda-guide` §5.1 Table 32: no distributed shared memory before 9.0 |  |
 | `mem.smemCarveoutsKB` | 0, 8, 16, 32, 64, 100, 132, 164 | documented | engine | `ampere-tuning` §1.4.2.3: shared memory capacity 0, 8, 16, 32, 64, 100, 132 or 164 KB |  |
 | `mem.l2FarBytesPerCycle` | 1280 | inferred | engine | `a100-whitepaper` p. 35: L2 read bandwidth 5120 bytes/clk |  |
 | `mem.smemAtomicInterval` | 2 | inferred (H100 PCIe) | engine | `chipsandcheese-mi300x` Local Memory Atomics Latency: 36.32 ns (H100 PCIe) |  |
-| `mem.l2FarCopiesNear` | true | documented | engine | `a100-whitepaper` p. 35: each L2 partition localizes and caches data for memory accesses from SMs in the GPCs directly connected to the partition |  |
+| `mem.l2FarCopiesNear` | false | measured | engine | `meas` a100-sxm4-40gb/out/l2hist.txt:1 |  |
 | `mem.l2ClockRefMHz` | 1410 | inferred | engine | `a100-whitepaper` Table 4: boost clock 1410 MHz |  |
 | `mem.l2LatencyFixedPermille` | 0 | inferred | engine | `meas-gh200`  |  |
 | `mem.l2LatencyRefMHz` | 1410 | inferred | engine | `a100-whitepaper` Table 4: boost clock 1410 MHz |  |
@@ -323,7 +323,7 @@ The role column says who reads a fact (`NV/Core/Roles.lean`): only `engine` fact
 | `sync.fenceScGpu` | 273 | measured (H200) | observed: bound input, not read by the engine | `meas-h200`  |  |
 | `sync.fenceAcqRelSys` | 1155 | measured (H200) | observed: bound input, not read by the engine | `meas-h200`  |  |
 | `sync.fenceCycles` | MEMBAR.ALL.CTA: 0, FENCE.VIEW.ASYNC.S: 0, MEMBAR.ALL.GPU: 151, MEMBAR.SC.GPU: 149, MEMBAR.ALL.SYS: 3299 | inferred (A100 SXM4 40GB) | engine | `meas-a100`  |  |
-| `sync.fenceDrainCycles` | MEMBAR.ALL.GPU: 105 after other requests, 418 after atomics, MEMBAR.SC.GPU: 105 after other requests, 418 after atomics | measured | engine | `meas` a100-sxm4-40gb/out/order.txt:3 | an A100's chain of one thread's atomics on one word, each behind a fence.acq_rel.gpu, runs 973 cycles an iteration against 555 without, and of its loads, each followed by one, 535 against 430 (order.cu) |
+| `sync.fenceDrainCycles` | MEMBAR.ALL.GPU: 77 after other requests, 418 after atomics, MEMBAR.SC.GPU: 77 after other requests, 418 after atomics | measured | engine | `meas` a100-sxm4-40gb/out/order.txt:3 | an A100's chain of one thread's atomics on one word, each behind a fence.acq_rel.gpu, runs 973 cycles an iteration against 555 without, and of its loads, each followed by one, 535 against 430, the fence ending 77 cycles after the load's delivery in the model's terms (order.cu) |
 | `sync.redReleaseGpu` | 426 | measured (H200) | observed: bound input, not read by the engine | `meas-h200`  |  |
 | `sync.atomAcqRelGpu` | 882 | measured (H200) | observed: bound input, not read by the engine | `meas-h200`  |  |
 | `sync.atomRelaxedGpu` | 470 | measured (H200) | observed: bound input, not read by the engine | `meas-h200`  |  |
