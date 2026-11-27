@@ -452,6 +452,8 @@ private structure Sm where
   each line being filled arrives. -/
   constLines : Std.HashMap (Nat × Nat) Nat := {}
   constReady : Std.HashMap (Nat × Nat) Nat := {}
+  /-- Per sub-partition, the constant line (bank and line) its last indexed constant load read. -/
+  constIndexedLast : Std.HashMap Nat (Nat × Nat) := {}
   /-- Per sub-partition: the cycle its scheduler may issue again after holding on a constant
   miss. -/
   smspHold : Array Nat := #[]
@@ -1228,6 +1230,17 @@ private def pass (kit : Kit) (focus : Nat) (stop : Nat) (st : St) :
       let some ins := k.code[pc]? | return .error s!"pc {pc} outside the code"
       let some tm := timings[pc]?.join
         | return .error s!"{ins.opcode}{ins.mods.toList} at pc {ins.pc}: no timing class"
+      -- An indexed constant load of the line the sub-partition's last one read does not hold its
+      -- warp, its result there within the stall count ptxas encodes (an A100's loop of one at a
+      -- fixed index, or chained through one 64-byte table, runs at the speed of the work beside
+      -- it: uldc.cu); another line's does (`tm.holds`).
+      let tm ← match constIndexed[pc]! with
+        | some (b, r, off) =>
+          let key := (b, ((s.w.getUR r).toNat + off).toNat / constLine)
+          let same := sm.constIndexedLast[q]? == some key
+          sm := { sm with constIndexedLast := sm.constIndexedLast.insert q key }
+          pure (if same then { tm with holds := false, latency := max 1 ins.ctrl.stall } else tm)
+        | none => pure tm
       let env := { s.env with clock := t, timeNs := t * 1000 / p.clockMHz.value }
       s := match l.dumpAt with
         | some at_ =>
